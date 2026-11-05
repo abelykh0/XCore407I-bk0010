@@ -1,0 +1,38 @@
+[package]
+name = "xcore407i_blinker"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+cc = "1.11.0"
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+stm32f4 = { version = "0.16.0", default-features = false, features = ["stm32f407", "rt"] }
+stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f407"] }
+panic-halt = "1.0.0"
+libm = "0.2"
+littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"] }
+usb-device = { version = "0.3.2", features = ["control-buffer-512"] }
+
+synopsys-usb-otg = { path = "vendor/synopsys-usb-otg", version = "0.5.0", features = ["hs", "internal-dma"] }
+usbd-uac2 = { path = "vendor/usbd-uac2", version = "0.1.2" }
+tinyusb-sys = { path = "vendor/tinyusb-sys", default-features = false, features = ["host", "hid", "stm32f4"] }
+
+[features]
+# Keep a one-packet-per-microframe UVC mode available for host compatibility.
+uvc-single-transaction = []
+
+[patch.crates-io]
+usb-device = { path = "vendor/usb-device" }
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = true
+opt-level = "s"
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

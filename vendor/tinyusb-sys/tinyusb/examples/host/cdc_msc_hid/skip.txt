@@ -1,0 +1,5 @@
+board:lpcxpresso54114
+board:atsaml21_xpro
+board:saml22_feather
+board:sensorwatch_m0
+board:ra2a1_ek

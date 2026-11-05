@@ -1,0 +1,40 @@
+
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo build (color)",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "build",
+        "--target",
+        "thumbv7em-none-eabihf",
+        "--bin",
+        "xcore407i_blinker"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "cargo build (BW)",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "build",
+        "--target",
+        "thumbv7em-none-eabihf",
+        "--bin",
+        "xcore407i_blinker",
+        "--features",
+        "camera-bw"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}

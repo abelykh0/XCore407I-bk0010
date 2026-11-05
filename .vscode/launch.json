@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "XCore407I (Color)",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "stlink",
+      "interface": "swd",
+      "device": "STM32F407IGTx",
+      "serialNumber": "53FF67064965525334102387",
+      "gdbPath": "C:/ST/STM32CubeIDE_1.7.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin/arm-none-eabi-gdb.exe",
+      "serverpath": "C:/ST/STM32CubeIDE_1.7.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.stlink-gdb-server.win32_2.2.500.202604010938/tools/bin/ST-LINK_gdbserver.exe",
+      "executable": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/xcore407i_blinker",
+      "preLaunchTask": "cargo build (color)",
+      "showDevDebugOutput": "none"
+    },
+    {
+      "name": "XCore407I (BW)",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "stlink",
+      "interface": "swd",
+      "device": "STM32F407IGTx",
+      "serialNumber": "53FF67064965525334102387",
+      "gdbPath": "C:/ST/STM32CubeIDE_1.7.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin/arm-none-eabi-gdb.exe",
+      "serverpath": "C:/ST/STM32CubeIDE_1.7.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.stlink-gdb-server.win32_2.2.500.202604010938/tools/bin/ST-LINK_gdbserver.exe",
+      "executable": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/xcore407i_blinker",
+      "preLaunchTask": "cargo build (BW)",
+      "showDevDebugOutput": "none"
+    }
+  ]
+}
