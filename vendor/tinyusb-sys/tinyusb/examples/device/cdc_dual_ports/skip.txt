@@ -1,3 +1,0 @@
-board:stm32f407disco
-board:stm32f411disco
-mcu:APM32F107
