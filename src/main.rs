@@ -941,7 +941,6 @@ fn TIM2() {
     let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
     let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
     let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
-    let mtp_ptr = MTP_PTR.load(Ordering::Acquire);
     if !usb_ptr.is_null()
         && !camera_ptr.is_null()
         && !audio_ptr.is_null()
