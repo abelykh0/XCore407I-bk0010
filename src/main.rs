@@ -20,7 +20,7 @@ use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
 };
 use xcore407i_blinker::usb_audio::BkEmulatorAudio;
-use xcore407i_blinker::mtp::MtpUsbClass;
+use xcore407i_blinker::mtp::{MtpObject, MtpUsbClass};
 
 // USB polling timer runs at 16 kHz (62.5 us between polls).
 const USB_POLL_TIMER_HZ: u32 = 16_000;
@@ -105,6 +105,10 @@ static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut(
 static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
 static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
 static MTP_PTR: AtomicPtr<BoardMtpClass> = AtomicPtr::new(ptr::null_mut());
+const MTP_ROOT_CAPACITY: usize = 25;
+static MTP_OBJECT_COUNT: AtomicU8 = AtomicU8::new(0);
+static mut MTP_OBJECTS: [MtpObject; MTP_ROOT_CAPACITY] = [MtpObject::EMPTY; MTP_ROOT_CAPACITY];
+static mut MTP_READ_BUFFER: [u8; 4084] = [0; 4084];
 
 #[entry]
 fn main() -> ! {
@@ -278,6 +282,7 @@ fn main() -> ! {
 
     CAMERA_PTR.store(camera_ptr, Ordering::Release);
     AUDIO_PTR.store(audio_ptr, Ordering::Release);
+    populate_mtp_root(unsafe { &mut *mtp_ptr });
     MTP_PTR.store(mtp_ptr, Ordering::Release);
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
 
@@ -318,6 +323,10 @@ fn main() -> ! {
             show_file_browser_line(22, &line, false);
         }
         */
+
+        // Service deferred MTP storage requests in thread context. NAND and
+        // LittleFS are never accessed by the USB polling interrupt.
+        service_mtp_get_object();
 
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
