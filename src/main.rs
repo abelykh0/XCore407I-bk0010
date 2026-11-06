@@ -960,6 +960,156 @@ fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     }
 }
 
+/// Build the initial MTP root-directory snapshot. This is a bounded
+/// root-only view; file data remains in NAND and is read on demand.
+fn populate_mtp_root(mtp: &mut BoardMtpClass) {
+    let objects = unsafe { &mut *ptr::addr_of_mut!(MTP_OBJECTS) };
+    objects.fill(MtpObject::EMPTY);
+    let mut count = 0usize;
+    let mut capacity = 0u64;
+    let mut free = 0u64;
+
+    let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        capacity = fs.total_space() as u64;
+        free = fs.available_space().unwrap_or(0) as u64;
+        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
+            for item in directory {
+                let entry = item?;
+                if !entry.file_type().is_file() || count == MTP_ROOT_CAPACITY {
+                    continue;
+                }
+                let path_bytes = entry.path().as_str_ref_with_trailing_nul().as_bytes();
+                if path_bytes.len() < 3 || path_bytes[0] != b'/' {
+                    continue;
+                }
+                let name = &path_bytes[1..path_bytes.len() - 1];
+                if name.is_empty() || name.len() > 64 || core::str::from_utf8(name).is_err() {
+                    continue;
+                }
+
+                let object = &mut objects[count];
+                object.name[..name.len()].copy_from_slice(name);
+                object.name_len = name.len() as u8;
+                object.handle = count as u32 + 1;
+                object.size = entry.metadata().len().min(u32::MAX as usize) as u32;
+                object.is_dir = false;
+
+                // Generate a nonzero, deterministic 128-bit identifier from
+                // the root filename and handle. Persistent IDs can be added
+                // later using LittleFS user attributes.
+                let mut hash = 0x811c_9dc5u32;
+                for byte in name {
+                    hash = (hash ^ *byte as u32).wrapping_mul(0x0100_0193);
+                }
+                object.puid[..4].copy_from_slice(&object.handle.to_le_bytes());
+                for word in 0..3 {
+                    let value = hash.rotate_left((word * 7 + 3) as u32)
+                        ^ object.handle.wrapping_mul(0x9e37_79b9 ^ word as u32);
+                    object.puid[4 + word * 4..8 + word * 4].copy_from_slice(&value.to_le_bytes());
+                }
+                count += 1;
+            }
+            Ok(())
+        })
+    });
+
+    if result.is_ok() {
+        mtp.set_objects(&objects[..count]);
+        mtp.set_storage_stats(capacity, free);
+        MTP_OBJECT_COUNT.store(count as u8, Ordering::Release);
+    } else {
+        mtp.set_objects(&[]);
+        MTP_OBJECT_COUNT.store(0, Ordering::Release);
+    }
+}
+
+/// Service one deferred GetObject request in thread context. The USB ISR
+/// continues polling while NAND/LittleFS reads are in progress.
+fn service_mtp_get_object() {
+    let mtp_ptr = MTP_PTR.load(Ordering::Acquire);
+    if mtp_ptr.is_null() {
+        return;
+    }
+
+    NVIC::mask(interrupt::TIM2);
+    let request = unsafe { (&mut *mtp_ptr).take_get_object_request() };
+    NVIC::unmask(interrupt::TIM2);
+    let Some((handle, transaction_id)) = request else {
+        return;
+    };
+
+    let count = MTP_OBJECT_COUNT.load(Ordering::Acquire) as usize;
+    let objects = unsafe { &*ptr::addr_of!(MTP_OBJECTS) };
+    let Some(object) = objects[..count].iter().find(|object| object.handle == handle).copied() else {
+        NVIC::mask(interrupt::TIM2);
+        unsafe {
+            (&mut *mtp_ptr).queue_main_response(
+                xcore407i_blinker::mtp::response::INVALID_OBJECT_HANDLE,
+                transaction_id,
+            );
+        }
+        NVIC::unmask(interrupt::TIM2);
+        return;
+    };
+
+    if object.size as usize > 4084 {
+        NVIC::mask(interrupt::TIM2);
+        unsafe {
+            (&mut *mtp_ptr).queue_main_response(
+                xcore407i_blinker::mtp::response::OPERATION_NOT_SUPPORTED,
+                transaction_id,
+            );
+        }
+        NVIC::unmask(interrupt::TIM2);
+        return;
+    }
+
+    let name = core::str::from_utf8(&object.name[..object.name_len as usize]).unwrap_or("");
+    let Ok(relative_path) = littlefs2::path::PathBuf::try_from(name) else {
+        NVIC::mask(interrupt::TIM2);
+        unsafe {
+            (&mut *mtp_ptr).queue_main_response(
+                xcore407i_blinker::mtp::response::GENERAL_ERROR,
+                transaction_id,
+            );
+        }
+        NVIC::unmask(interrupt::TIM2);
+        return;
+    };
+    let full_path = littlefs2::path!("/").join(relative_path.as_path());
+    let buffer = unsafe { &mut *ptr::addr_of_mut!(MTP_READ_BUFFER) };
+    let mut total = 0usize;
+    let read_result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        fs.open_file_and_then(&full_path, |file| {
+            while total < object.size as usize {
+                let read = file.read(&mut buffer[total..object.size as usize])?;
+                if read == 0 {
+                    return Err(littlefs2::io::Error::IO);
+                }
+                total += read;
+            }
+            Ok(())
+        })
+    });
+
+    NVIC::mask(interrupt::TIM2);
+    let mtp = unsafe { &mut *mtp_ptr };
+    if read_result.is_ok() && total == object.size as usize {
+        if !mtp.queue_object_data(transaction_id, &buffer[..total]) {
+            let _ = mtp.queue_main_response(
+                xcore407i_blinker::mtp::response::GENERAL_ERROR,
+                transaction_id,
+            );
+        }
+    } else {
+        let _ = mtp.queue_main_response(
+            xcore407i_blinker::mtp::response::INCOMPLETE_TRANSFER,
+            transaction_id,
+        );
+    }
+    NVIC::unmask(interrupt::TIM2);
+}
+
 /// TIM2 services the USB HS device at 10 kHz (100 us between polls).
 /// Video rendering is performed by the main-loop producer, not by callbacks.
 #[interrupt]
