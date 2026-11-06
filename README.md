@@ -26,7 +26,7 @@ The XCore407I board provides the hardware required for the emulator:
 
 - **RAM constraints:** The STM32F407 has only 192 KB of SRAM, insufficient to store a complete 512×512 NV12 video frame. Video must therefore be generated and streamed on the fly, without a full-frame buffer.
 - **USB complexity:** Coordinating UVC video streaming and USB Line In audio over the High-Speed USB device connection, while handling keyboard input through a separate Full-Speed USB Host connection.
-- **Performance:** Maintaining stable 25 FPS video alongside continuous audio requires careful interrupt prioritization, synchronization, and CPU-load management.
+- **Performance:** Maintaining stable 25 fps video alongside continuous audio requires careful interrupt prioritization, synchronization, and CPU-load management.
 - **NAND Flash integration:** Implementing reliable LittleFS access on raw NAND Flash, including handling its block-oriented storage characteristics.
 
 ## Emulator RTC I/O
