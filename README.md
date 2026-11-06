@@ -1,8 +1,8 @@
-# [БК-0010](https://en.wikipedia.org/wiki/Elektronika_BK) Emulator
+# БК-0010 Emulator
 
 ## Project Description
 
-A **БК-0010 (Elektronika BK) emulator** running on the [XCore407I](https://www.waveshare.com/wiki/XCore407I) development board, based on the STM32F407IGT6 microcontroller. The project explores how far a resource-constrained microcontroller can be pushed to emulate a vintage computer while interfacing with a modern PC through standard multimedia and USB interfaces.
+A **[БК-0010](https://en.wikipedia.org/wiki/Elektronika_BK) (Elektronika BK) emulator** running on the [XCore407I](https://www.waveshare.com/wiki/XCore407I) development board, based on the STM32F407IGT6 microcontroller. The project explores how far a resource-constrained microcontroller can be pushed to emulate a vintage computer while interfacing with a modern PC through standard multimedia and USB interfaces.
 
 The project uses an unusual approach to multimedia I/O:
 
