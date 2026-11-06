@@ -20,6 +20,7 @@ use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
 };
 use xcore407i_blinker::usb_audio::BkEmulatorAudio;
+use xcore407i_blinker::mtp_descriptors::MtpDescriptors;
 
 // USB polling timer runs at 16 kHz (62.5 us between polls).
 const USB_POLL_TIMER_HZ: u32 = 16_000;
@@ -96,12 +97,14 @@ type BoardUsbDevice = UsbDevice<'static, BoardUsbBus>;
 type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
 type BoardAudioHandler = BkEmulatorAudio;
 type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
+type BoardMtpClass = MtpDescriptors<'static, BoardUsbBus>;
 
 // These pointers are published once, before TIM2 is enabled. After that,
 // TIM2 is the sole owner of both mutable objects. main() must not access them.
 static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut());
 static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
 static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
+static MTP_PTR: AtomicPtr<BoardMtpClass> = AtomicPtr::new(ptr::null_mut());
 
 #[entry]
 fn main() -> ! {
@@ -177,6 +180,7 @@ fn main() -> ! {
     static mut CAMERA: MaybeUninit<BoardUvcClass> = MaybeUninit::uninit();
     static mut AUDIO_IMPL: MaybeUninit<BoardAudioHandler> = MaybeUninit::uninit();
     static mut AUDIO: MaybeUninit<BoardAudioClass> = MaybeUninit::uninit();
+    static mut MTP: MaybeUninit<BoardMtpClass> = MaybeUninit::uninit();
 
     #[unsafe(link_section = ".ccmram.usb_device")]
     static mut USB_DEVICE: MaybeUninit<BoardUsbDevice> = MaybeUninit::uninit();
@@ -234,6 +238,15 @@ fn main() -> ! {
         audio_ptr.write(audio_class);
     }
 
+    // Register the descriptor-only Still Image/PTP interface. MTP protocol
+    // requests and data transfers are intentionally not implemented yet.
+    let mtp_ptr = unsafe {
+        (*ptr::addr_of_mut!(MTP)).as_mut_ptr()
+    };
+    unsafe {
+        mtp_ptr.write(MtpDescriptors::new(bus));
+    }
+
     let usb_ptr = unsafe {
         (*ptr::addr_of_mut!(USB_DEVICE)).as_mut_ptr()
     };
@@ -261,6 +274,7 @@ fn main() -> ! {
 
     CAMERA_PTR.store(camera_ptr, Ordering::Release);
     AUDIO_PTR.store(audio_ptr, Ordering::Release);
+    MTP_PTR.store(mtp_ptr, Ordering::Release);
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
 
     // Start the independent USB service timers only after all USB objects
@@ -941,14 +955,17 @@ fn TIM2() {
     let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
     let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
     let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
+    let mtp_ptr = MTP_PTR.load(Ordering::Acquire);
     if !usb_ptr.is_null()
         && !camera_ptr.is_null()
         && !audio_ptr.is_null()
+        && !mtp_ptr.is_null()
     {
         let usb = unsafe { &mut *usb_ptr };
         let camera = unsafe { &mut *camera_ptr };
         let audio = unsafe { &mut *audio_ptr };
-        let _ = usb.poll(&mut [camera, audio]);
+        let mtp = unsafe { &mut *mtp_ptr };
+        let _ = usb.poll(&mut [camera, audio, mtp]);
     }
 }
 
