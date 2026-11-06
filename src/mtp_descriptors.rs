@@ -75,11 +75,13 @@ impl<'a, B: UsbBus> MtpDescriptors<'a, B> {
 
 impl<B: UsbBus> UsbClass<B> for MtpDescriptors<'_, B> {
     fn get_configuration_descriptors(&self, writer: &mut DescriptorWriter) -> Result<()> {
-        writer.interface(
+        writer.interface_alt(
             self.interface,
+            usb_device::device::DEFAULT_ALTERNATE_SETTING,
             STILL_IMAGE_CLASS,
             PTP_SUBCLASS,
             PTP_PROTOCOL,
+            Some(self.interface_string),
         )?;
         writer.endpoint(&self.bulk_out)?;
         writer.endpoint(&self.bulk_in)?;
