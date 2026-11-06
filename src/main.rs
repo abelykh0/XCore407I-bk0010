@@ -40,6 +40,15 @@ pub extern "C" fn tusb_time_millis_api() -> u32 {
 #[unsafe(no_mangle)]
 pub static SystemCoreClock: u32 = 168_000_000;
 
+// C BK platform callback: return the STM32 RTC as Unix seconds (UTC).
+// The C I/O layer latches this value when BK reads RTC_TIME_L.
+#[unsafe(no_mangle)]
+pub extern "C" fn bk_rtc_unix_time() -> u32 {
+    let rtc = unsafe { &*pac::RTC::ptr() };
+    rtc::unix_time(rtc)
+}
+
+
 
 const FILE_BROWSER_OPEN: u8 = 1;
 const FILE_BROWSER_UP: u8 = 2;
@@ -270,7 +279,8 @@ fn main() -> ! {
         &mut core.NVIC,
     );
 
-    // let mut last_rtc_sample = 0; // RTC clock overlay temporarily disabled.
+    // Refresh the RTC calendar diagnostic once per second on screen row 22.
+    let mut last_rtc_diag = TICKS.load(Ordering::Relaxed).wrapping_sub(1_000);
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
@@ -279,6 +289,14 @@ fn main() -> ! {
     let mut browser_open = false;
 
     loop {
+        let now = TICKS.load(Ordering::Relaxed);
+        if !browser_open && now.wrapping_sub(last_rtc_diag) >= 1_000 {
+            last_rtc_diag = now;
+            let rtc_regs = unsafe { &*pac::RTC::ptr() };
+            let line = rtc::diagnostic_text(rtc_regs);
+            show_file_browser_line(22, &line, false);
+        }
+
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
         if !USB_FS_READY.load(Ordering::Acquire) {

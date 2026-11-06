@@ -8,6 +8,23 @@
 #include <stddef.h>
 #include "platform.h"
 
+// Emulator RTC extension: the STM32 RTC returns Unix seconds. Reading the
+// low word captures a snapshot; the high word is read from that same snapshot.
+extern uint32_t bk_rtc_unix_time(void);
+static uint32_t bk_rtc_latched_time;
+
+static uint16_t bk_rtc_read_time_low(void)
+{
+    bk_rtc_latched_time = bk_rtc_unix_time();
+    return (uint16_t)bk_rtc_latched_time;
+}
+
+static uint16_t bk_rtc_read_time_high(void)
+{
+    return (uint16_t)(bk_rtc_latched_time >> 16);
+}
+
+
 #define RAM_AVAILABLE 0x4000u
 #define MONITOR_BASE  0x8000u
 #define MONITOR_SIZE  0x2000u
@@ -147,6 +164,7 @@ void bk_reset(void)
     port0177662 = 0;
     port0177716 = 0x0040;
     port0177714 = 0;
+    bk_rtc_latched_time = 0;
     bk_audio_enabled = 0;
     bk_audio_level = 0;
     bk_audio_edge_head = 0;
@@ -177,6 +195,10 @@ int ll_byte(pdp_regs *p, c_addr addr, d_byte *byte)
         case 0177715: *byte = (uint8_t)(port0177714 >> 8); break;
         case 0177716: *byte = (uint8_t)port0177716; break;
         case 0177717: *byte = (uint8_t)(port0177716 >> 8); break;
+        case 0177720: *byte = (uint8_t)bk_rtc_read_time_low(); break;
+        case 0177721: *byte = (uint8_t)(bk_rtc_latched_time >> 8); break;
+        case 0177722: *byte = (uint8_t)bk_rtc_read_time_high(); break;
+        case 0177723: *byte = (uint8_t)(bk_rtc_latched_time >> 24); break;
         default: *byte = 0; break;
         }
     } else if (addr >= BASIC_BASE) {
@@ -216,6 +238,8 @@ int ll_word(pdp_regs *p, c_addr addr, d_word *word)
         case 0177664: *word = port0177664; break;
         case 0177714: *word = port0177714; break;
         case 0177716: *word = port0177716; break;
+        case 0177720: *word = bk_rtc_read_time_low(); break;
+        case 0177722: *word = bk_rtc_read_time_high(); break;
         default: *word = 0; break;
         }
         return OK;

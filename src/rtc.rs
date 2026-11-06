@@ -183,3 +183,78 @@ fn decode_bcd(value: u32) -> Option<u8> {
 
     Some(tens * 10 + units)
 }
+
+
+/// Show raw RTC time/date register contents for hardware diagnostics.
+/// Read TR first and DR second to complete the shadow-register read sequence.
+/// INITS and RSF are deliberately not used to gate this diagnostic.
+pub fn diagnostic_text(rtc: &stm32f4::stm32f407::rtc::RegisterBlock) -> [u8; 23] {
+    let time = rtc.tr().read().bits();
+    let date = rtc.dr().read().bits();
+
+    let mut out = *b"TR=00000000 DR=00000000";
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    for i in 0..8 {
+        let shift = (7 - i) * 4;
+        out[3 + i] = HEX[((time >> shift) & 0x0f) as usize];
+        out[15 + i] = HEX[((date >> shift) & 0x0f) as usize];
+    }
+
+    out
+}
+
+/// Return the STM32 RTC calendar as unsigned Unix time (UTC seconds since
+/// 1970-01-01). The STM32F407 calendar stores a two-digit year, interpreted
+/// here as 2000..2099. Reading TR before DR completes the RTC shadow-register
+/// read sequence and keeps the calendar fields coherent.
+pub fn unix_time(rtc: &stm32f4::stm32f407::rtc::RegisterBlock) -> u32 {
+    // Read the live calendar registers regardless of INITS/RSF status.
+    // The diagnostic confirms TR and DR are populated and advancing.
+    let time = rtc.tr().read().bits();
+    let date = rtc.dr().read().bits();
+
+    let Some(seconds) = decode_bcd(time & 0x7f) else { return 0; };
+    let Some(minutes) = decode_bcd((time >> 8) & 0x7f) else { return 0; };
+    let Some(hours) = decode_bcd((time >> 16) & 0x3f) else { return 0; };
+    let Some(day) = decode_bcd(date & 0x3f) else { return 0; };
+    let Some(month) = decode_bcd((date >> 8) & 0x1f) else { return 0; };
+    let Some(year) = decode_bcd((date >> 16) & 0xff) else { return 0; };
+
+    if seconds >= 60 || minutes >= 60 || hours >= 24 || month == 0 || month > 12 {
+        return 0;
+    }
+
+    let year = 2000u32 + year as u32;
+    let leap = |y: u32| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_lengths = [
+        31u32,
+        if leap(year) { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let days_in_month = month_lengths[(month - 1) as usize];
+    if day == 0 || day as u32 > days_in_month {
+        return 0;
+    }
+
+    // Count whole UTC days since 1970-01-01. The RTC's two-digit year
+    // range is 2000..2099, so this loop is small and avoids large arithmetic.
+    let mut days = 0u32;
+    let mut y = 1970u32;
+    while y < year {
+        days += if leap(y) { 366 } else { 365 };
+        y += 1;
+    }
+
+    let mut m = 1u32;
+    while m < month as u32 {
+        days += month_lengths[(m - 1) as usize];
+        m += 1;
+    }
+    days += day as u32 - 1;
+
+    days * 86_400
+        + hours as u32 * 3_600
+        + minutes as u32 * 60
+        + seconds as u32
+}

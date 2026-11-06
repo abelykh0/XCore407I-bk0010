@@ -42,3 +42,19 @@ probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcor
 - Full keyboard support (СУ, АР2)
 - БК-0011 support
 - Ability to save and delete files
+
+
+## Emulator RTC I/O
+
+The emulator exposes the STM32F407 calendar as unsigned 32-bit Unix time
+(seconds since 1970-01-01 00:00:00 UTC) through two read-only BK I/O words:
+
+| Octal address | Register | Value |
+| --- | --- | --- |
+| `177720` | `RTC_TIME_L` | Bits 0..15 |
+| `177722` | `RTC_TIME_H` | Bits 16..31 |
+
+Read `177720` first. That access captures the complete 32-bit timestamp;
+the subsequent read of `177722` returns the high word from the same snapshot.
+The snapshot is refreshed by the next read of `177720`. Byte reads follow
+the same low-word-first rule. The registers are read-only.
