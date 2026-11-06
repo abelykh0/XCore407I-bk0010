@@ -11,4 +11,5 @@ pub mod rom;
 pub mod rtc;
 pub mod usb_uvc;
 pub mod usb_audio;
+pub mod mtp_descriptors;
 pub mod uvc;
