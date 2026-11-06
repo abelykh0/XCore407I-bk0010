@@ -1107,7 +1107,7 @@ fn service_mtp_get_object() {
             transaction_id,
         );
     }
-    NVIC::unmask(interrupt::TIM2);
+    unsafe { NVIC::unmask(interrupt::TIM2); }
 }
 
 /// TIM2 services the USB HS device at 10 kHz (100 us between polls).
