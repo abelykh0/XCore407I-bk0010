@@ -6,7 +6,7 @@ A **[БК-0010](https://en.wikipedia.org/wiki/Elektronika_BK) (Elektronika BK) e
 
 The project uses an unusual approach to multimedia I/O:
 
-- **Video:** Streamed directly to the PC as a USB Video Class (UVC) camera at **25 FPS**, using uncompressed NV12 video.
+- **Video:** Streamed directly to the PC as a USB Video Class (UVC) camera at **25 fps**, using uncompressed NV12 video.
 - **Audio:** Transmitted to the PC through a USB Line In audio device.
 - **Input:** A physical USB keyboard connected to a separate USB port, using the STM32's USB Host functionality.
 - **Storage:** Reads files from a LittleFS filesystem stored on the onboard K9F1G08U0E 1-Gbit (128 MB) NAND Flash. Files can be launched directly from the filesystem. Adding files to LittleFS is outside the scope of this project.
@@ -29,21 +29,6 @@ The XCore407I board provides the hardware required for the emulator:
 - **Performance:** Maintaining stable 25 FPS video alongside continuous audio requires careful interrupt prioritization, synchronization, and CPU-load management.
 - **NAND Flash integration:** Implementing reliable LittleFS access on raw NAND Flash, including handling its block-oriented storage characteristics.
 
-## Commands to Build and Flash
-
-```powershell
-cargo build --release --target thumbv7em-none-eabihf
-probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
-```
-
-## Not implemented / TODO
-
-- Improve emulation timing accuracy
-- Full keyboard support (СУ, АР2)
-- БК-0011 support
-- Ability to save and delete files
-
-
 ## Emulator RTC I/O
 
 The emulator exposes the STM32F407 calendar as unsigned 32-bit Unix time
@@ -58,3 +43,17 @@ Read `177720` first. That access captures the complete 32-bit timestamp;
 the subsequent read of `177722` returns the high word from the same snapshot.
 The snapshot is refreshed by the next read of `177720`. Byte reads follow
 the same low-word-first rule. The registers are read-only.
+
+## Commands to Build and Flash
+
+```powershell
+cargo build --release --target thumbv7em-none-eabihf
+probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
+```
+
+## Not implemented / TODO
+
+- Improve emulation timing accuracy
+- Full keyboard support (СУ, АР2)
+- БК-0011 support
+- Ability to save and delete files
