@@ -390,13 +390,26 @@ pub fn usb_bus() -> core::result::Result<&'static BoardUsbAllocator, UsbBusAlrea
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .map_err(|_| UsbBusAlreadyInitialized)?;
 
-    // DMA buffers for EP0 OUT (256 bytes) and EP0 IN (64 bytes).
+    // Endpoint DMA staging capacity:
+    // - EP0 OUT: 256 bytes
+    // - EP0 IN: 64 bytes
+    // - reserved MTP EP3 OUT: 512 bytes
+    // - reserved MTP EP3 IN: 512 bytes
+    // - reserved MTP EP4 IN event: 64 bytes
+    //
     // UVC and UAC2 isochronous IN endpoints submit directly from persistent
     // source buffers and do not consume endpoint staging memory.
     const EP0_OUT_WORDS: usize = 256 / 4;
     const EP0_IN_WORDS: usize = 64 / 4;
-    static mut EP_MEMORY: [u32; EP0_OUT_WORDS + EP0_IN_WORDS] =
-        [0; EP0_OUT_WORDS + EP0_IN_WORDS];
+    const MTP_BULK_OUT_WORDS: usize = 512 / 4;
+    const MTP_BULK_IN_WORDS: usize = 512 / 4;
+    const MTP_EVENT_IN_WORDS: usize = 64 / 4;
+    const EP_MEMORY_WORDS: usize = EP0_OUT_WORDS
+        + EP0_IN_WORDS
+        + MTP_BULK_OUT_WORDS
+        + MTP_BULK_IN_WORDS
+        + MTP_EVENT_IN_WORDS;
+    static mut EP_MEMORY: [u32; EP_MEMORY_WORDS] = [0; EP_MEMORY_WORDS];
     static mut BUS: MaybeUninit<BoardUsbAllocator> = MaybeUninit::uninit();
     let memory = unsafe { &mut *core::ptr::addr_of_mut!(EP_MEMORY) };
     let bus = synopsys_usb_otg::UsbBus::new(F407UsbHs, memory);
