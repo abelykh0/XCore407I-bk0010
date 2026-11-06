@@ -326,12 +326,11 @@ impl<USB: UsbPeripheral> EndpointAllocator<USB> {
             // Match the original C configuration's 32-word EP0 TX FIFO.
             core::cmp::max(descr.max_packet_size as usize, 128)
         } else if matches!(descr.ep_type, EndpointType::Isochronous { .. }) {
-            // The HS UVC endpoint carries three 768-byte transactions per
-            // microframe. Keep 48 words of refill margin beyond that payload.
-            // Small isochronous endpoints (the 12-byte FIFO-backed audio
-            // endpoint) need only the allocator's 16-word minimum.
+            // The HS UVC endpoint carries three transactions per microframe.
+            // Allocate exactly the complete high-bandwidth payload, without
+            // the previous 48-word refill margin. Small isochronous endpoints
+            // (the 12-byte audio endpoint) retain the 16-word minimum.
             descr.max_packet_size as usize * 3
-                + if descr.max_packet_size > 64 { 48 * 4 } else { 0 }
         } else {
             descr.max_packet_size as usize
         };
