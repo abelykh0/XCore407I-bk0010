@@ -262,7 +262,8 @@ pub const CONTAINER_HEADER_LEN: usize = 12;
 const PLACEHOLDER_STORAGE_ID: u32 = 0x0001_0001;
 const DEMO_OBJECT_HANDLE: u32 = 1;
 const DEMO_OBJECT_NAME: &str = "README.txt";
-pub const MTP_OBJECT_CAPACITY: usize = 512;
+// The BK emulator has a tight 128 KiB DMA-visible SRAM budget. Keep this in sync with MTP_ROOT_CAPACITY.
+pub const MTP_OBJECT_CAPACITY: usize = 16;
 const DEFAULT_README: &[u8] = b"XCore407I NAND diagnostic pending.\r\n";
 
 /// One entry in the bounded root-directory snapshot supplied by the main loop.
