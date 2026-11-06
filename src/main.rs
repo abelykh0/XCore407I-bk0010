@@ -48,8 +48,6 @@ pub extern "C" fn bk_rtc_unix_time() -> u32 {
     rtc::unix_time(rtc)
 }
 
-
-
 const FILE_BROWSER_OPEN: u8 = 1;
 const FILE_BROWSER_UP: u8 = 2;
 const FILE_BROWSER_DOWN: u8 = 3;
@@ -57,6 +55,7 @@ const FILE_BROWSER_ENTER: u8 = 4;
 const FILE_BROWSER_ESCAPE: u8 = 5;
 const MAX_BROWSER_FILES: usize = 25;
 const MAX_BROWSER_PATH: usize = 256;
+
 // Keep the browser's path table in ordinary .bss, not on the limited stack.
 static mut BROWSER_PATHS: [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES] =
     [[0; MAX_BROWSER_PATH]; MAX_BROWSER_FILES];
@@ -112,7 +111,6 @@ fn main() -> ! {
     core.SCB.enable_fpu();
 
     rtc::initialize(&device.RCC, &device.PWR, &device.RTC);
-    // update_clock_from_rtc(); // Temporarily disable the RTC clock overlay.
 
     enable_cycle_counter(&mut core);
 
@@ -127,10 +125,6 @@ fn main() -> ! {
 
     // initialize_demo_canvas();
     clear_demo_canvas(0x10);
-    // Clear the status area.
-    for row in 22..32 {
-        show_file_browser_line(row, b"", false);
-    }
 
     configure_board_pins(
         &mut device.RCC,
@@ -251,14 +245,14 @@ fn main() -> ! {
             .build(),
         );
     }
-
+/*
     // Experiment: keep UVC registered and polled, but suppress all video payload
     // submissions to isolate video endpoint traffic from audio scheduling.
     unsafe {
         (&mut *camera_ptr).set_video_payloads_enabled(true);
         (&mut *camera_ptr).set_repeat_video_batch(false);
     }
-
+*/
     CAMERA_PTR.store(camera_ptr, Ordering::Release);
     AUDIO_PTR.store(audio_ptr, Ordering::Release);
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
@@ -279,9 +273,6 @@ fn main() -> ! {
         &mut core.NVIC,
     );
 
-    // Refresh the RTC calendar diagnostic once per second on screen row 22.
-    let mut last_rtc_diag = TICKS.load(Ordering::Relaxed).wrapping_sub(1_000);
-
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
     let mut browser_count = 0usize;
@@ -289,16 +280,6 @@ fn main() -> ! {
     let mut browser_open = false;
 
     loop {
-        /*
-        let now = TICKS.load(Ordering::Relaxed);
-        if !browser_open && now.wrapping_sub(last_rtc_diag) >= 1_000 {
-            last_rtc_diag = now;
-            let rtc_regs = unsafe { &*pac::RTC::ptr() };
-            let line = rtc::diagnostic_text(rtc_regs);
-            show_file_browser_line(22, &line, false);
-        }
-        */
-
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
         if !USB_FS_READY.load(Ordering::Acquire) {
