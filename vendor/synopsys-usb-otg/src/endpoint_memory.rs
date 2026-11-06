@@ -130,6 +130,7 @@ impl Default for EndpointBuffer {
 
 pub struct EndpointMemoryAllocator<USB> {
     next_free_offset: usize,
+    rx_size_words: usize,
     max_size_words: usize,
     memory: &'static mut [u32],
     tx_fifo_size_words: [u16; 9],
@@ -140,6 +141,7 @@ impl<USB: UsbPeripheral> EndpointMemoryAllocator<USB> {
     pub fn new(memory: &'static mut [u32]) -> Self {
         Self {
             next_free_offset: 0,
+            rx_size_words: 0,
             max_size_words: 0,
             memory,
             tx_fifo_size_words: [0; 9],
@@ -150,6 +152,7 @@ impl<USB: UsbPeripheral> EndpointMemoryAllocator<USB> {
     pub fn allocate_rx_buffer(&mut self, size: usize) -> Result<EndpointBuffer> {
         let size_words = (size + 3) / 4;
         let buffer = self.allocate_words(size_words)?;
+        self.rx_size_words += size_words;
         self.max_size_words = core::cmp::max(self.max_size_words, size_words);
         Ok(EndpointBuffer::new(buffer))
     }
@@ -200,7 +203,7 @@ impl<USB: UsbPeripheral> EndpointMemoryAllocator<USB> {
 
     /// Returns the size of memory allocated for OUT endpoints in words
     pub fn total_rx_buffer_size_words(&self) -> u16 {
-        self.next_free_offset as u16
+        self.rx_size_words as u16
     }
 
     pub fn tx_fifo_size_words(&self, ep_number: usize) -> u16 {
