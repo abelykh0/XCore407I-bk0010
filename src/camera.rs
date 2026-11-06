@@ -86,7 +86,7 @@ pub const TRANSFER_BYTES: usize = UVC_HEADER_BYTES + PAYLOAD_BYTES;
 
 pub const CANVAS_HEIGHT: usize = HEIGHT / 2;
 pub const CANVAS_BYTES: usize = WIDTH * CANVAS_HEIGHT;
-pub const CANVAS_TAIL_BYTES: usize = 38_400;
+pub const CANVAS_TAIL_BYTES: usize = 47_084;
 pub const CANVAS_MAIN_BYTES: usize = CANVAS_BYTES - CANVAS_TAIL_BYTES;
 
 #[repr(C, align(4))]
