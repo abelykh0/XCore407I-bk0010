@@ -289,6 +289,7 @@ fn main() -> ! {
     let mut browser_open = false;
 
     loop {
+        /*
         let now = TICKS.load(Ordering::Relaxed);
         if !browser_open && now.wrapping_sub(last_rtc_diag) >= 1_000 {
             last_rtc_diag = now;
@@ -296,6 +297,7 @@ fn main() -> ! {
             let line = rtc::diagnostic_text(rtc_regs);
             show_file_browser_line(22, &line, false);
         }
+        */
 
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
