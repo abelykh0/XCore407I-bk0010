@@ -11,7 +11,7 @@ The project uses an unusual approach to multimedia I/O:
 - **Input:** A physical USB keyboard connected to a separate USB port, using the STM32's USB Host functionality.
 - **Storage:** Reads files from a LittleFS filesystem stored on the onboard K9F1G08U0E 1-Gbit (128 MB) NAND Flash. Files can be launched directly from the filesystem. Adding files to LittleFS is outside the scope of this project.
 
-[Video](https://youtube.com/shorts/IPjBy6mAeOw)
+[Video](https://www.youtube.com/watch?v=IPjBy6mAeOw)
 
 ## Hardware
 
