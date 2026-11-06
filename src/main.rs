@@ -767,10 +767,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
         */
     }
 
-    // if used != 0 {
-    //     show_keyboard_input(&text[..used]);
-    // } // Keyboard diagnostic text temporarily disabled.
-
     // Only decoded key bytes go to the emulator; display labels are not BK input.
     if emulator_used != 0 {
         unsafe {
