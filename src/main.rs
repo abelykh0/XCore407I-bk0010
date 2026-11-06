@@ -20,7 +20,7 @@ use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
 };
 use xcore407i_blinker::usb_audio::BkEmulatorAudio;
-use xcore407i_blinker::mtp_descriptors::MtpDescriptors;
+use xcore407i_blinker::mtp::MtpUsbClass;
 
 // USB polling timer runs at 16 kHz (62.5 us between polls).
 const USB_POLL_TIMER_HZ: u32 = 16_000;
@@ -97,7 +97,7 @@ type BoardUsbDevice = UsbDevice<'static, BoardUsbBus>;
 type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
 type BoardAudioHandler = BkEmulatorAudio;
 type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
-type BoardMtpClass = MtpDescriptors<'static, BoardUsbBus>;
+type BoardMtpClass = MtpUsbClass<'static, BoardUsbBus>;
 
 // These pointers are published once, before TIM2 is enabled. After that,
 // TIM2 is the sole owner of both mutable objects. main() must not access them.
@@ -239,14 +239,13 @@ fn main() -> ! {
         audio_ptr.write(audio_class);
     }
 
-    // Register the descriptor-only Still Image/PTP interface. MTP protocol
-    // requests and data transfers are intentionally not implemented yet.
+    // Register the Still Image/PTP class with the MTP transport and protocol engine.
     show_file_browser_line(22, b"USB INIT: BEFORE MTP", false);
     let mtp_ptr = unsafe {
         (*ptr::addr_of_mut!(MTP)).as_mut_ptr()
     };
     unsafe {
-        mtp_ptr.write(MtpDescriptors::new(bus));
+        mtp_ptr.write(MtpUsbClass::new(bus));
     }
     show_file_browser_line(22, b"USB INIT: AFTER MTP", false);
 
