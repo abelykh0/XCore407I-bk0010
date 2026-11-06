@@ -7,7 +7,7 @@
 use usb_device::bus::{InterfaceNumber, StringIndex, UsbBusAllocator};
 use usb_device::class::UsbClass;
 use usb_device::descriptor::DescriptorWriter;
-use usb_device::endpoint::{EndpointIn, EndpointOut, EndpointType};
+use usb_device::endpoint::{EndpointAddress, EndpointIn, EndpointOut, EndpointType};
 use usb_device::Result;
 use stm32f4::stm32f407::TIM5;
 
@@ -504,13 +504,13 @@ impl<'a, B: usb_device::bus::UsbBus> MtpUsbClass<'a, B> {
         let interface = allocator.interface();
         let interface_string = allocator.string();
         let bulk_out = allocator
-            .alloc(None, EndpointType::Bulk, BULK_MAX_PACKET_SIZE, 0)
+            .alloc(Some(EndpointAddress::from(0x03)), EndpointType::Bulk, BULK_MAX_PACKET_SIZE, 0)
             .expect("MTP bulk OUT endpoint allocation failed");
         let bulk_in = allocator
-            .alloc(None, EndpointType::Bulk, BULK_MAX_PACKET_SIZE, 0)
+            .alloc(Some(EndpointAddress::from(0x83)), EndpointType::Bulk, BULK_MAX_PACKET_SIZE, 0)
             .expect("MTP bulk IN endpoint allocation failed");
         let event_in = allocator
-            .alloc(None, EndpointType::Interrupt, EVENT_MAX_PACKET_SIZE, EVENT_INTERVAL)
+            .alloc(Some(EndpointAddress::from(0x84)), EndpointType::Interrupt, EVENT_MAX_PACKET_SIZE, EVENT_INTERVAL)
             .expect("MTP event IN endpoint allocation failed");
 
         Self {
