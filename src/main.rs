@@ -173,6 +173,7 @@ fn main() -> ! {
         );
     }
 
+    show_file_browser_line(22, b"USB INIT: BUS READY", false);
     let bus = usb_bus().expect("USB bus initialization failed");
 
     // The large endpoint buffers remain in their existing DMA-visible SRAM
@@ -240,17 +241,20 @@ fn main() -> ! {
 
     // Register the descriptor-only Still Image/PTP interface. MTP protocol
     // requests and data transfers are intentionally not implemented yet.
+    show_file_browser_line(22, b"USB INIT: BEFORE MTP", false);
     let mtp_ptr = unsafe {
         (*ptr::addr_of_mut!(MTP)).as_mut_ptr()
     };
     unsafe {
         mtp_ptr.write(MtpDescriptors::new(bus));
     }
+    show_file_browser_line(22, b"USB INIT: AFTER MTP", false);
 
     let usb_ptr = unsafe {
         (*ptr::addr_of_mut!(USB_DEVICE)).as_mut_ptr()
     };
 
+    show_file_browser_line(22, b"USB INIT: BEFORE DEVICE BUILD", false);
     unsafe {
         usb_ptr.write(
             UsbDeviceBuilder::new(
@@ -264,6 +268,7 @@ fn main() -> ! {
             .build(),
         );
     }
+    show_file_browser_line(22, b"USB INIT: AFTER DEVICE BUILD", false);
 
     // Experiment: keep UVC registered and polled, but suppress all video payload
     // submissions to isolate video endpoint traffic from audio scheduling.
@@ -284,6 +289,7 @@ fn main() -> ! {
         &device.TIM2,
         &mut core.NVIC,
     );
+    show_file_browser_line(22, b"USB INIT: TIM2 RUNNING", false);
 
     // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
     // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
@@ -302,6 +308,7 @@ fn main() -> ! {
     let mut browser_selected = 0usize;
     let mut browser_open = false;
 
+    show_file_browser_line(22, b"USB INIT: MAIN LOOP", false);
     loop {
         /*
         let now = TICKS.load(Ordering::Relaxed);
