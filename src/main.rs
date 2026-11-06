@@ -1033,7 +1033,7 @@ fn service_mtp_get_object() {
 
     NVIC::mask(interrupt::TIM2);
     let request = unsafe { (&mut *mtp_ptr).take_get_object_request() };
-    NVIC::unmask(interrupt::TIM2);
+    unsafe { NVIC::unmask(interrupt::TIM2); }
     let Some((handle, transaction_id)) = request else {
         return;
     };
