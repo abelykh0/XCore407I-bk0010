@@ -1048,7 +1048,7 @@ fn service_mtp_get_object() {
                 transaction_id,
             );
         }
-        NVIC::unmask(interrupt::TIM2);
+        unsafe { NVIC::unmask(interrupt::TIM2); }
         return;
     };
 
@@ -1060,7 +1060,7 @@ fn service_mtp_get_object() {
                 transaction_id,
             );
         }
-        NVIC::unmask(interrupt::TIM2);
+        unsafe { NVIC::unmask(interrupt::TIM2); }
         return;
     }
 
@@ -1073,7 +1073,7 @@ fn service_mtp_get_object() {
                 transaction_id,
             );
         }
-        NVIC::unmask(interrupt::TIM2);
+        unsafe { NVIC::unmask(interrupt::TIM2); }
         return;
     };
     let full_path = littlefs2::path!("/").join(relative_path.as_path());
@@ -1280,7 +1280,7 @@ fn configure_usb_poll_timer(
     // Configure NVIC priority and clear any pending interrupt.
     unsafe {
         nvic.set_priority(interrupt::TIM2, TIM2_PRIORITY << 4);
-        NVIC::unmask(interrupt::TIM2);
+        unsafe { NVIC::unmask(interrupt::TIM2); }
     }
 
     NVIC::unpend(interrupt::TIM2);
