@@ -55,6 +55,9 @@ static mut BROWSER_PATH_LENGTHS: [u16; MAX_BROWSER_FILES] = [0; MAX_BROWSER_FILE
 static FILE_BROWSER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static FILE_BROWSER_ACTION: AtomicU8 = AtomicU8::new(0);
 static USB_FS_STATUS: AtomicU32 = AtomicU32::new(0);
+static USB_FS_READY: AtomicBool = AtomicBool::new(false);
+static USB_FS_RETRY_AT: AtomicU32 = AtomicU32::new(0);
+const USB_FS_RETRY_INTERVAL_MS: u32 = 500;
 // TIM3 schedules TinyUSB host work; the actual task runs in thread context.
 static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -144,36 +147,18 @@ fn main() -> ! {
     core.SYST.enable_interrupt();
     core.SYST.enable_counter();
 
-    // Enable and reset OTG_FS before handing it to TinyUSB. OTG_HS remains
-    // owned by the UVC driver and is not reset here.
-    device.RCC.ahb2enr().modify(|_, w| w.otgfsen().set_bit());
-    let _ = device.RCC.ahb2enr().read().bits(); // complete the clock-enable write
-
-    device.RCC.ahb2rstr().modify(|_, w| w.otgfsrst().set_bit());
-    for _ in 0..16 {
-        unsafe { core::arch::asm!("nop"); }
-    }
-    device.RCC.ahb2rstr().modify(|_, w| w.otgfsrst().clear_bit());
-    let _ = device.RCC.ahb2rstr().read().bits();
-
-    // Prepare the OTG_FS interrupt while keeping it masked until TinyUSB has
-    // initialized the host controller and installed its interrupt sources.
+    // Prepare and initialize OTG_FS host. A failed attempt is retried from
+    // the main loop after a short delay; OTG_HS remains owned by the UVC driver.
     unsafe {
         core.NVIC.set_priority(interrupt::OTG_FS, 0x3 << 4);
         NVIC::unpend(interrupt::OTG_FS);
         NVIC::mask(interrupt::OTG_FS);
     }
-
-    // Initialize TinyUSB host on root-hub port 0 (OTG_FS).
-    let rh_init = tusb::tusb_rhport_init_t {
-        role: tusb::tusb_role_t::TUSB_ROLE_HOST,
-        speed: tusb::tusb_speed_t::TUSB_SPEED_FULL,
-    };
-    if unsafe { tusb::tuh_rhport_init(0, &rh_init) } {
-        USB_FS_STATUS.store(1, Ordering::Release);
-        unsafe { NVIC::unmask(interrupt::OTG_FS); }
-    } else {
-        USB_FS_STATUS.store(2, Ordering::Release);
+    if !try_init_usb_fs_host(&device.RCC, &mut core.NVIC) {
+        USB_FS_RETRY_AT.store(
+            TICKS.load(Ordering::Relaxed).wrapping_add(USB_FS_RETRY_INTERVAL_MS),
+            Ordering::Release,
+        );
     }
 
     let bus = usb_bus().expect("USB bus initialization failed");
@@ -294,10 +279,29 @@ fn main() -> ! {
     let mut browser_open = false;
 
     loop {
+        // Retry OTG_FS initialization outside interrupt context. Keep the
+        // IRQ masked until TinyUSB reports a successful root-hub init.
+        if !USB_FS_READY.load(Ordering::Acquire) {
+            let now = TICKS.load(Ordering::Relaxed);
+            let retry_at = USB_FS_RETRY_AT.load(Ordering::Acquire);
+            if now.wrapping_sub(retry_at) as i32 >= 0 {
+                if !try_init_usb_fs_host(&device.RCC, &mut core.NVIC) {
+                    USB_FS_RETRY_AT.store(
+                        now.wrapping_add(USB_FS_RETRY_INTERVAL_MS),
+                        Ordering::Release,
+                    );
+                }
+            }
+        }
+
         // Service the USB FS host in thread context. TIM3 only schedules this
         // work; the host task must never run from the timer ISR.
-        if USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel) {
+        if USB_FS_READY.load(Ordering::Acquire)
+            && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+        {
             unsafe { tusb::tuh_task_ext(0, false); }
+        } else {
+            USB_HOST_TASK_PENDING.store(false, Ordering::Release);
         }
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
@@ -929,6 +933,53 @@ fn TIM2() {
 ///
 /// TinyUSB's host task dispatches callbacks and is not ISR-safe. TIM3 therefore
 /// only requests a task run; main() performs the work in thread context.
+
+/// Reset and initialize the internal-FS-PHY OTG_FS controller as a TinyUSB
+/// host. The IRQ remains masked on failure so an uninitialized controller
+/// cannot vector into the host stack.
+fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
+    unsafe {
+        nvic.set_priority(interrupt::OTG_FS, 0x3 << 4);
+        NVIC::unpend(interrupt::OTG_FS);
+        NVIC::mask(interrupt::OTG_FS);
+    }
+
+    // Enable the peripheral clock, then reset only OTG_FS. OTG_HS is
+    // independent and must remain untouched because it carries UVC.
+    rcc.ahb2enr().modify(|_, w| w.otgfsen().set_bit());
+    let _ = rcc.ahb2enr().read().bits();
+
+    rcc.ahb2rstr().modify(|_, w| w.otgfsrst().set_bit());
+    for _ in 0..16 {
+        unsafe { core::arch::asm!("nop"); }
+    }
+    rcc.ahb2rstr().modify(|_, w| w.otgfsrst().clear_bit());
+    let _ = rcc.ahb2rstr().read().bits();
+
+    let rh_init = tusb::tusb_rhport_init_t {
+        role: tusb::tusb_role_t::TUSB_ROLE_HOST,
+        speed: tusb::tusb_speed_t::TUSB_SPEED_FULL,
+    };
+
+    if unsafe { tusb::tuh_rhport_init(0, &rh_init) } {
+        USB_FS_STATUS.store(1, Ordering::Release);
+        USB_FS_READY.store(true, Ordering::Release);
+        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        unsafe {
+            NVIC::unpend(interrupt::OTG_FS);
+            NVIC::unmask(interrupt::OTG_FS);
+        }
+        true
+    } else {
+        USB_FS_STATUS.store(2, Ordering::Release);
+        USB_FS_READY.store(false, Ordering::Release);
+        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        NVIC::unpend(interrupt::OTG_FS);
+        NVIC::mask(interrupt::OTG_FS);
+        false
+    }
+}
+
 fn configure_usb_host_task_timer(
     rcc: &pac::RCC,
     tim3: &pac::TIM3,
