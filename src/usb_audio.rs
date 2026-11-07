@@ -198,9 +198,32 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
         // Capture-only stream; there is no USB playback path.
     }
 
-    fn audio_data_tx(&mut self, _ep: &Endpoint<'a, B, In>) {
-        // Isolation experiment: keep UAC2 configured and polled, but do not
-        // submit any isochronous IN packets to the host.
+    fn audio_data_tx(&mut self, ep: &Endpoint<'a, B, In>) {
+        if !self.active || self.dma_in_flight {
+            return;
+        }
+
+        let packet = unsafe {
+            core::slice::from_raw_parts_mut(
+                self.dma_packet.0.as_mut_ptr().cast::<u8>(),
+                PACKET_BYTES,
+            )
+        };
+        fill_packet_from_ring(&mut self.last_sample, packet);
+
+        // Persistent DMA-visible SRAM; do not modify until completion callback.
+        let dma_bytes = unsafe {
+            core::slice::from_raw_parts(
+                self.dma_packet.0.as_ptr().cast::<u8>(),
+                PACKET_BYTES,
+            )
+        };
+        match unsafe { ep.write_iso_batch_dma(dma_bytes, 1, 1) } {
+            Ok(_) => self.dma_in_flight = true,
+            Err(_) => {
+                PCM_USB_SUBMIT_ERRORS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     fn audio_data_tx_complete(&mut self) {
