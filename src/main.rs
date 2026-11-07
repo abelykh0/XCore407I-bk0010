@@ -21,8 +21,8 @@ use xcore407i_blinker::usb_uvc::{
 };
 use xcore407i_blinker::usb_audio::{AudioPcmProducer, BkEmulatorAudio};
 
-// USB polling timer runs at 8 kHz (125 us between polls).
-const USB_POLL_TIMER_HZ: u32 = 8_000;
+// USB polling timer runs at 16 kHz (62.5 us between polls).
+const USB_POLL_TIMER_HZ: u32 = 16_000;
 const TIM2_PRIORITY: u8 = 0;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
@@ -266,7 +266,7 @@ fn main() -> ! {
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
 
     // Start the independent USB service timers only after all USB objects
-    // are initialized and published. TIM2 services the HS USB device at 8 kHz.
+    // are initialized and published. TIM2 services the HS USB device at 16 kHz.
     configure_usb_poll_timer(
         &device.RCC,
         &device.TIM2,
@@ -1035,7 +1035,7 @@ fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     }
 }
 
-/// TIM2 services the USB HS device at 8 kHz (125 us between polls).
+/// TIM2 services the USB HS device at 16 kHz (62.5 us between polls).
 /// Video rendering is performed by the main-loop producer, not by callbacks.
 #[interrupt]
 fn TIM2() {
@@ -1164,13 +1164,13 @@ fn configure_exception_priorities(scb: &mut SCB) {
     }
 }
 
-/// Configure TIM2 for a 125 us update period and enable its NVIC line.
+/// Configure TIM2 for a 62.5 us update period and enable its NVIC line.
 fn configure_usb_poll_timer(
     rcc: &pac::RCC,
     tim2: &pac::TIM2,
     nvic: &mut NVIC,
 ) {
-    // TIM2CLK = 84 MHz, PSC = 0, ARR = 8399 => 10,000 updates/second.
+    // TIM2CLK = 84 MHz, PSC = 0; ARR is derived for 16,000 updates/second.
     let timer_ticks = 84_000_000 / USB_POLL_TIMER_HZ;
 
     // Enable TIM2 on APB1.
@@ -1185,7 +1185,7 @@ fn configure_usb_poll_timer(
     tim2.dier().write(|w| w.uie().clear_bit());
 
     // PSC and CNT are zero after the peripheral reset.
-    // ARR = 10499 gives a 125 us update period at 84 MHz.
+    // ARR is 5249 for a 62.5 us update period at 84 MHz.
     tim2.arr().write(|w| unsafe {
         w.arr().bits(timer_ticks - 1)
     });
