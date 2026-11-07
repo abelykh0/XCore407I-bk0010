@@ -393,7 +393,7 @@ fn main() -> ! {
         // core stops at a 60,000-tick frame boundary or after 128 instructions,
         // whichever comes first, leaving time for USB and video servicing.
         if !browser_open {
-            unsafe { bk_run_batch(128); }
+            unsafe { bk_run_batch(16); }
 
             let frame_now = unsafe { bk_get_frame_count() };
             if frame_now != keyboard_frame_seen {
