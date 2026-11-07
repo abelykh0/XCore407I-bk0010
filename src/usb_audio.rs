@@ -198,7 +198,12 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
         // Capture-only stream; there is no USB playback path.
     }
 
-    fn audio_data_tx(&mut self, ep: &Endpoint<'a, B, In>) {
+    fn audio_data_tx(&mut self, _ep: &Endpoint<'a, B, In>) {
+        // Isolation experiment: keep UAC2 configured and polled, but do not
+        // submit any isochronous IN packets to the host.
+        return;
+
+        #[allow(unreachable_code)]
         if !self.active || self.dma_in_flight {
             return;
         }
