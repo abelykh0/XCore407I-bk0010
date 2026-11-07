@@ -144,6 +144,11 @@ impl AudioPcmProducer {
         }
     }
 
+    /// Current queue-controller correction, in parts per million.
+    pub fn rate_adjust_ppm(&self) -> i32 {
+        self.rate_adjust_ppm
+    }
+
     /// Convert all currently elapsed BK time into PCM, bounded per call so
     /// video/USB servicing remains responsive.
     pub fn produce(&mut self, current_ticks: u64) {
