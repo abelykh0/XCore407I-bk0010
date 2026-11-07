@@ -21,8 +21,8 @@ use xcore407i_blinker::usb_uvc::{
 };
 use xcore407i_blinker::usb_audio::{AudioPcmProducer, BkEmulatorAudio};
 
-// USB polling timer runs at 12 kHz (approximately 83.3 us between polls).
-const USB_POLL_TIMER_HZ: u32 = 12_000;
+// USB polling timer runs at 8 kHz (one poll per high-speed microframe).
+const USB_POLL_TIMER_HZ: u32 = 8_000;
 const TIM2_PRIORITY: u8 = 0;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
