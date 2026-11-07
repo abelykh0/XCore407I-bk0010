@@ -38,6 +38,11 @@
 // Device audio class is enabled during the UAC2 port; its function-specific
 // packet/FIFO sizing will be set alongside the migrated audio descriptors.
 #define CFG_TUD_AUDIO 1
+#define CFG_TUD_AUDIO_ENABLE_EP_IN 1
+#define CFG_TUD_AUDIO_ENABLE_EP_OUT 0
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 12
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ 96
+#define CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL 0
 
 // USB FS host: keyboard only.
 #define CFG_TUH_DEVICE_MAX 1
