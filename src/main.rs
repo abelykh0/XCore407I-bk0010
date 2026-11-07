@@ -442,6 +442,26 @@ fn main() -> ! {
                         if !browser_open {
                             show_file_browser_line(29, &line, false);
 
+                            let (audio_underruns, audio_overflows, _, audio_incomplete, audio_submit_errors, audio_queued) =
+                                BkEmulatorAudio::diagnostics();
+
+                            line.fill(b' ');
+                            used = 0;
+                            append_diag_text(&mut line, &mut used, b"AUD U ");
+                            append_diag_number(&mut line, &mut used, audio_underruns);
+                            append_diag_text(&mut line, &mut used, b" E ");
+                            append_diag_number(&mut line, &mut used, audio_incomplete);
+                            show_file_browser_line(31, &line, false);
+
+                            line.fill(b' ');
+                            used = 0;
+                            append_diag_text(&mut line, &mut used, b"AUD O ");
+                            append_diag_number(&mut line, &mut used, audio_overflows);
+                            append_diag_text(&mut line, &mut used, b" SUB ");
+                            append_diag_number(&mut line, &mut used, audio_submit_errors);
+                            append_diag_text(&mut line, &mut used, b" Q ");
+                            append_diag_number(&mut line, &mut used, audio_queued);
+                            show_file_browser_line(32, &line, false);
                         }
 
                         diag_last_rtc_second = rtc_second;
