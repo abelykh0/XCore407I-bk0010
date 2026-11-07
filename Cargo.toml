@@ -5,6 +5,8 @@ edition = "2024"
 
 [build-dependencies]
 cc = "1.11.1"
+bindgen = "0.68.1"
+glob = "0.3"
 
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
@@ -18,7 +20,6 @@ littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"
 usb-device = { version = "0.3.2", features = ["control-buffer-512"] }
 synopsys-usb-otg = { path = "vendor/synopsys-usb-otg", version = "0.5.0", features = ["hs", "internal-dma"] }
 usbd-uac2 = { path = "vendor/usbd-uac2", version = "0.1.2" }
-tinyusb-sys = { path = "vendor/tinyusb-sys", default-features = false, features = ["host", "hid", "stm32f4"] }
 
 [features]
 # Keep a one-packet-per-microframe UVC mode available for host compatibility.
