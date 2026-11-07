@@ -87,6 +87,7 @@ fn main() {
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
         .include("usb")
+        .file("usb/tusb_class_drivers.c")
         .include(format!("{tinyusb_root}/src"))
         .include(&cmsis_device)
         .include(cmsis_core)
