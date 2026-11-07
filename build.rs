@@ -114,10 +114,10 @@ fn main() {
         // preventing bindgen from generating the problematic nested layout.
         // The application transfers UVC control payloads as raw bytes.
         .opaque_type("video_probe_and_commit_control_t")
-        // bindgen 0.68 still emits this anonymous nested bitfield helper even
-        // when its containing named type is opaque. It is an implementation
-        // detail of the C declaration and is not referenced by the public API.
-        .blocklist_type("video_probe_and_commit_control_t__bindgen_ty_1__bindgen_ty_1")
+        // The nested helper is referenced by a generated union field, so it
+        // must remain declared. Make it opaque rather than blocklisting it;
+        // this preserves the Rust type name while avoiding its invalid layout.
+        .opaque_type("video_probe_and_commit_control_t__bindgen_ty_1__bindgen_ty_1")
         .clang_args(&[
             "-target",
             &target,
