@@ -77,6 +77,8 @@ impl AudioPcmProducer {
         PCM_TAIL.store(0, Ordering::Relaxed);
         PCM_UNDERRUNS.store(0, Ordering::Relaxed);
         PCM_OVERFLOWS.store(0, Ordering::Relaxed);
+        PCM_USB_INCOMPLETE.store(0, Ordering::Relaxed);
+        PCM_USB_SUBMIT_ERRORS.store(0, Ordering::Relaxed);
         self.epoch = epoch;
         self.initialized = true;
         self.sample_level = PCM_START_LEVEL.load(Ordering::Acquire) != 0;
@@ -172,7 +174,6 @@ impl Default for AudioPcmProducer {
 struct DmaPacket([u32; PACKET_BYTES / 4]);
 
 pub struct BkEmulatorAudio {
-    sample_level: bool,
     active: bool,
     dma_in_flight: bool,
     last_sample: i16,
@@ -184,7 +185,6 @@ impl BkEmulatorAudio {
 
     pub const fn new() -> Self {
         Self {
-            sample_level: false,
             active: false,
             dma_in_flight: false,
             last_sample: -AUDIO_AMPLITUDE,
@@ -319,15 +319,15 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
         }
 
         if alt_setting == 1 {
-            self.sample_level = unsafe { bk_audio_start() != 0 };
-            self.last_sample = if self.sample_level {
+            let start_level = unsafe { bk_audio_start() != 0 };
+            self.last_sample = if start_level {
                 AUDIO_AMPLITUDE
             } else {
                 -AUDIO_AMPLITUDE
             };
             self.dma_in_flight = false;
             PCM_READY.store(false, Ordering::Release);
-            PCM_START_LEVEL.store(self.sample_level as u8, Ordering::Relaxed);
+            PCM_START_LEVEL.store(start_level as u8, Ordering::Relaxed);
             PCM_ACTIVE.store(true, Ordering::Release);
             PCM_EPOCH.fetch_add(1, Ordering::AcqRel);
             self.active = true;
