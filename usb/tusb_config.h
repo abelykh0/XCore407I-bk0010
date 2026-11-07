@@ -23,6 +23,8 @@
 // HS device DMA is mandatory for the UVC data path. FS host HID bandwidth is
 // low; keep its controller configuration independently selectable.
 #define CFG_TUD_DWC2_DMA_ENABLE 1
+// Reserve two max-packet slots for a three-transaction HS ISO IN endpoint.
+#define CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER 2
 #define CFG_TUH_DWC2_DMA_ENABLE 0
 
 #define CFG_TUD_ENDPOINT0_SIZE 64
