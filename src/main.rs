@@ -405,9 +405,8 @@ fn main() -> ! {
             }
         }
 
-        // Convert speaker transitions into a buffered PCM stream in thread
-        // context. TIM2 only consumes six prepared samples per USB microframe.
-        audio_pcm_producer.produce(unsafe { bk_get_ticks() });
+        // Feed USB audio from a precomputed 1 kHz tone, independent of BK state.
+        audio_pcm_producer.produce_tone();
 
         // Snapshot emulator throughput once per RTC second. PDP ticks, not
         // STM32 clock cycles or instruction count, define emulated time.
@@ -426,7 +425,6 @@ fn main() -> ! {
                         let cycles = unsafe { bk_get_ticks() };
                         let frames = unsafe { bk_get_frame_count() };
                         let cycles_per_second = cycles.wrapping_sub(diag_last_cycles) / elapsed as u64;
-                        audio_pcm_producer.set_tick_rate(cycles_per_second.min(u32::MAX as u64) as u32);
                         let frames_per_second = frames.wrapping_sub(diag_last_frames) / elapsed;
                         let mut line = [b' '; 32];
                         let mut used = 0usize;
