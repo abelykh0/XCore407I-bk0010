@@ -30,8 +30,8 @@ static ISO_INCOMPLETE_DIEPINT: [core::sync::atomic::AtomicU32; 9] =
 static ISO_INCOMPLETE_FNSOF: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
 
-/// Full 14-bit frame number targeted by each armed high-speed isochronous IN transfer.
-/// Bit 31 marks the entry valid; bits 13:0 hold the target frame number.
+/// Full 14-bit SOF counter targeted by each armed high-speed isochronous IN transfer.
+/// At high speed, each SOF counter step is one 125-us microframe; bit 31 marks validity.
 #[cfg(feature = "hs")]
 static ISO_IN_TARGET_FRAME: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
@@ -264,13 +264,19 @@ impl EndpointIn {
 
     /// Reinitialize an isochronous endpoint after repeated incomplete frames.
     #[cfg(feature = "hs")]
-    pub(crate) fn recover_iso_endpoint_hw(&self) {
-        if matches!(self.common.descriptor.ep_type, EndpointType::Isochronous { .. }) {
-            critical_section::with(|cs| {
-                self.deconfigure(cs);
-                self.configure(cs);
-            });
+    pub fn recover_iso_endpoint_hw(&self) -> bool {
+        if !matches!(self.common.descriptor.ep_type, EndpointType::Isochronous { .. }) {
+            return false;
         }
+
+        critical_section::with(|cs| {
+            self.deconfigure(cs);
+            self.configure(cs);
+        });
+
+        let ep = self.usb.endpoint_in(self.index() as usize);
+        read_reg!(endpoint_in, ep, DIEPCTL, USBAEP) != 0
+            && read_reg!(endpoint_in, ep, DIEPCTL, EPENA) == 0
     }
 
     pub fn write(&self, buf: &[u8]) -> Result<()> {
