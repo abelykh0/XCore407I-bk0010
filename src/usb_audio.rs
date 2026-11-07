@@ -93,14 +93,10 @@ impl Default for AudioPcmProducer {
     fn default() -> Self { Self::new() }
 }
 
-#[repr(align(4))]
-struct DmaPacket([u32; PACKET_BYTES / 4]);
-
 pub struct BkEmulatorAudio {
     active: bool,
-    dma_in_flight: bool,
+    transfer_in_flight: bool,
     last_sample: i16,
-    dma_packet: DmaPacket,
 }
 
 impl BkEmulatorAudio {
@@ -109,9 +105,8 @@ impl BkEmulatorAudio {
     pub const fn new() -> Self {
         Self {
             active: false,
-            dma_in_flight: false,
+            transfer_in_flight: false,
             last_sample: 0,
-            dma_packet: DmaPacket([0; PACKET_BYTES / 4]),
         }
     }
 
@@ -199,27 +194,16 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
     }
 
     fn audio_data_tx(&mut self, ep: &Endpoint<'a, B, In>) {
-        if !self.active || self.dma_in_flight {
+        if !self.active || self.transfer_in_flight {
             return;
         }
 
-        let packet = unsafe {
-            core::slice::from_raw_parts_mut(
-                self.dma_packet.0.as_mut_ptr().cast::<u8>(),
-                PACKET_BYTES,
-            )
-        };
-        Self::fill_packet_from_ring(&mut self.last_sample, packet);
+        let mut packet = [0u8; PACKET_BYTES];
+        Self::fill_packet_from_ring(&mut self.last_sample, &mut packet);
 
-        // Persistent DMA-visible SRAM; do not modify until completion callback.
-        let dma_bytes = unsafe {
-            core::slice::from_raw_parts(
-                self.dma_packet.0.as_ptr().cast::<u8>(),
-                PACKET_BYTES,
-            )
-        };
-        match unsafe { ep.write_iso_batch_dma(dma_bytes, 1, 1) } {
-            Ok(_) => self.dma_in_flight = true,
+        // Slave mode copies this small packet into the TX FIFO before returning.
+        match ep.write_iso_batch(&packet, 1, 1) {
+            Ok(_) => self.transfer_in_flight = true,
             Err(_) => {
                 PCM_USB_SUBMIT_ERRORS.fetch_add(1, Ordering::Relaxed);
             }
@@ -227,11 +211,11 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
     }
 
     fn audio_data_tx_complete(&mut self) {
-        self.dma_in_flight = false;
+        self.transfer_in_flight = false;
     }
 
     fn audio_data_tx_incomplete(&mut self) {
-        self.dma_in_flight = false;
+        self.transfer_in_flight = false;
         PCM_USB_INCOMPLETE.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -246,7 +230,7 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
 
         if alt_setting == 1 {
             self.last_sample = 0;
-            self.dma_in_flight = false;
+            self.transfer_in_flight = false;
             PCM_READY.store(false, Ordering::Release);
             PCM_ACTIVE.store(true, Ordering::Release);
             PCM_EPOCH.fetch_add(1, Ordering::AcqRel);
@@ -255,7 +239,7 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
             self.active = false;
             PCM_ACTIVE.store(false, Ordering::Release);
             PCM_READY.store(false, Ordering::Release);
-            self.dma_in_flight = false;
+            self.transfer_in_flight = false;
         }
     }
 }
