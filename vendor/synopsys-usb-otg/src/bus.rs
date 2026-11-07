@@ -734,7 +734,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
 
             let core_id = read_reg!(otg_global, regs.global(), CID);
 
-            let (wakeup, suspend, enum_done, reset, iep, _rxflvl, _oep) = read_reg!(
+            let (wakeup, suspend, enum_done, reset, _iep, _rxflvl, _oep) = read_reg!(
                 otg_global,
                 regs.global(),
                 GINTSTS,
