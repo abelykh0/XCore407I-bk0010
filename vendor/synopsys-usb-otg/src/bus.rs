@@ -9,7 +9,6 @@ static ISO_INCOMPLETE_EVENT_SNAPSHOT: AtomicU32 = AtomicU32::new(0);
 
 /// Last global incomplete-ISO event: bit 31 indicates an event was observed,
 /// bits 0..15 contain the endpoint mask returned by the abort checks.
-/// Returns zero in builds without internal DMA.
 pub fn iso_incomplete_event_snapshot() -> u32 {
     ISO_INCOMPLETE_EVENT_SNAPSHOT.load(Ordering::Relaxed)
 }
@@ -757,7 +756,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
                         }
                     }
                 }
-                #[cfg(feature = "internal-dma")]
+                #[cfg(feature = "hs")]
                 ISO_INCOMPLETE_EVENT_SNAPSHOT.store(
                     0x8000_0000 | ep_in_incomplete as u32,
                     Ordering::Relaxed,
