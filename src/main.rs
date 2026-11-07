@@ -153,7 +153,7 @@ fn main() -> ! {
     core.SYST.set_clock_source(SystClkSource::Core);
     core.SYST.set_reload(168_000 - 1); // 1 ms at 168 MHz
     core.SYST.clear_current();
-    configure_exception_priorities(&mut core.SCB);
+    configure_exception_priorities(&mut core.SCB, &mut core.NVIC);
     core.SYST.enable_interrupt();
     core.SYST.enable_counter();
 
@@ -1154,7 +1154,7 @@ fn TIM3() {
 
 /// Set a simple preemption-priority grouping and the system-handler priorities.
 /// STM32F407 implements four priority bits, stored in the upper nibble.
-fn configure_exception_priorities(scb: &mut SCB) {
+fn configure_exception_priorities(scb: &mut SCB, nvic: &mut NVIC) {
     const SCB_AIRCR: *mut u32 = 0xE000_ED0C as *mut u32;
 
     unsafe {
@@ -1166,7 +1166,7 @@ fn configure_exception_priorities(scb: &mut SCB) {
         // remains enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
         // Keep OTG_HS masked until the USB objects and ISR pointers are ready.
-        scb.set_priority(interrupt::OTG_HS, OTG_HS_PRIORITY << 4);
+        nvic.set_priority(interrupt::OTG_HS, OTG_HS_PRIORITY << 4);
         NVIC::mask(interrupt::OTG_HS);
         NVIC::unpend(interrupt::OTG_HS);
     }
