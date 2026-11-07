@@ -1317,6 +1317,9 @@ static void handle_incomplete_iso_in(uint8_t rhport) {
         dwc2_ep_tsize_t deptsiz = {.value = 0};
         deptsiz.xfer_size       = xfer->total_len;
         deptsiz.packet_count    = tu_div_ceil(xfer->total_len, xfer->max_size);
+        if (deptsiz.packet_count == 0) {
+          deptsiz.packet_count = 1; // Zero-length ISO packet still occupies one transaction
+        }
         deptsiz.mc_pid          = deptsiz.packet_count;
         epin->tsiz              = deptsiz.value;
 
