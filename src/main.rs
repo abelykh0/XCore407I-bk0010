@@ -458,6 +458,16 @@ fn main() -> ! {
                             append_diag_text(&mut line, &mut used, b" Q");
                             append_diag_number(&mut line, &mut used, audio_queued);
                             show_file_browser_line(29, &line, false);
+
+                            let (video_submit_errors, video_recovery_failures) =
+                                UvcUsbClass::<BoardUsbBus>::diagnostics();
+                            line.fill(b' ');
+                            used = 0;
+                            append_diag_text(&mut line, &mut used, b"V S");
+                            append_diag_number(&mut line, &mut used, video_submit_errors);
+                            append_diag_text(&mut line, &mut used, b" R");
+                            append_diag_number(&mut line, &mut used, video_recovery_failures);
+                            show_file_browser_line(30, &line, false);
                         }
 
                         diag_last_rtc_second = rtc_second;
