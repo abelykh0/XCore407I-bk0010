@@ -91,7 +91,6 @@ unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_run_batch(instruction_budget: u32) -> u32;
     fn bk_get_ticks() -> u64;
-    fn bk_get_instruction_count() -> u32;
     fn bk_get_frame_count() -> u32;
     fn sendInput(buffer: *mut u8, size: u8);
     fn bk_set_pc(start: u16);
@@ -293,7 +292,6 @@ fn main() -> ! {
     let mut diag_last_rtc_second = rtc::unix_time(rtc_registers);
     let mut diag_last_check_ms = TICKS.load(Ordering::Relaxed);
     let mut diag_last_cycles = unsafe { bk_get_ticks() };
-    let mut diag_last_instructions = unsafe { bk_get_instruction_count() };
     let mut diag_last_frames = unsafe { bk_get_frame_count() };
     let mut keyboard_frame_seen = diag_last_frames;
     let mut audio_pcm_producer = AudioPcmProducer::new();
@@ -421,48 +419,21 @@ fn main() -> ! {
                 if diag_last_rtc_second == 0 {
                     diag_last_rtc_second = rtc_second;
                     diag_last_cycles = unsafe { bk_get_ticks() };
-                    diag_last_instructions = unsafe { bk_get_instruction_count() };
                     diag_last_frames = unsafe { bk_get_frame_count() };
                 } else {
                     let elapsed = rtc_second.wrapping_sub(diag_last_rtc_second);
                     if elapsed != 0 {
                         let cycles = unsafe { bk_get_ticks() };
-                        let instructions = unsafe { bk_get_instruction_count() };
                         let frames = unsafe { bk_get_frame_count() };
                         let cycles_per_second = cycles.wrapping_sub(diag_last_cycles) / elapsed as u64;
                         audio_pcm_producer.set_tick_rate(cycles_per_second.min(u32::MAX as u64) as u32);
-                        let instructions_per_second =
-                            instructions.wrapping_sub(diag_last_instructions) / elapsed;
                         let frames_per_second = frames.wrapping_sub(diag_last_frames) / elapsed;
-                        let avg_cycles_x10 = if instructions_per_second != 0 {
-                            cycles_per_second.saturating_mul(10) / instructions_per_second as u64
-                        } else {
-                            0
-                        };
-
                         let mut line = [b' '; 32];
                         let mut used = 0usize;
                         append_diag_text(&mut line, &mut used, b"PDP CYC/S ");
                         append_diag_number(&mut line, &mut used, cycles_per_second as u32);
                         if !browser_open {
                             show_file_browser_line(27, &line, false);
-                        }
-
-                        line.fill(b' ');
-                        used = 0;
-                        append_diag_text(&mut line, &mut used, b"INS/S ");
-                        append_diag_number(&mut line, &mut used, instructions_per_second);
-                        append_diag_text(&mut line, &mut used, b" AVG ");
-                        append_diag_number(&mut line, &mut used, (avg_cycles_x10 / 10) as u32);
-                        if used < line.len() {
-                            line[used] = b'.';
-                            used += 1;
-                        }
-                        if used < line.len() {
-                            line[used] = b'0' + (avg_cycles_x10 % 10) as u8;
-                        }
-                        if !browser_open {
-                            show_file_browser_line(28, &line, false);
                         }
 
                         line.fill(b' ');
@@ -504,7 +475,6 @@ fn main() -> ! {
 
                         diag_last_rtc_second = rtc_second;
                         diag_last_cycles = cycles;
-                        diag_last_instructions = instructions;
                         diag_last_frames = frames;
                     }
                 }
