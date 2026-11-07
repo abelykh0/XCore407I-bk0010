@@ -77,13 +77,23 @@ static KEYBOARD_LOCKS: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
 static mut KEYBOARD_LED_REPORT: u8 = 0;
-// Characters decoded by TinyUSB are handed to the emulator from the main loop.
-static mut KEYBOARD_INPUT_BUFFER: [u8; 32] = [0; 32];
-static KEYBOARD_INPUT_LEN: AtomicU8 = AtomicU8::new(0);
+// HID callbacks enqueue decoded characters; the emulator consumes them once per
+// emulated BK frame. Both producer and consumer run in main-loop context.
+const KEYBOARD_QUEUE_CAPACITY: u32 = 128;
+const KEYBOARD_QUEUE_MASK: u32 = KEYBOARD_QUEUE_CAPACITY - 1;
+static mut KEYBOARD_INPUT_QUEUE: [u8; KEYBOARD_QUEUE_CAPACITY as usize] =
+    [0; KEYBOARD_QUEUE_CAPACITY as usize];
+static KEYBOARD_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_QUEUE_OVERFLOW: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
+    fn bk_run_batch(instruction_budget: u32) -> u32;
+    fn bk_get_ticks() -> u32;
+    fn bk_get_instruction_count() -> u32;
+    fn bk_get_frame_count() -> u32;
     fn sendInput(buffer: *mut u8, size: u8);
     fn bk_set_pc(start: u16);
     fn bk_request_stop_irq();
@@ -279,6 +289,15 @@ fn main() -> ! {
     let mut browser_selected = 0usize;
     let mut browser_open = false;
 
+    // RTC seconds delimit the once-per-second emulator diagnostics.
+    let rtc_registers = unsafe { &*pac::RTC::ptr() };
+    let mut diag_last_rtc_second = rtc::unix_time(rtc_registers);
+    let mut diag_last_check_ms = TICKS.load(Ordering::Relaxed);
+    let mut diag_last_cycles = unsafe { bk_get_ticks() };
+    let mut diag_last_instructions = unsafe { bk_get_instruction_count() };
+    let mut diag_last_frames = unsafe { bk_get_frame_count() };
+    let mut keyboard_frame_seen = diag_last_frames;
+
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
@@ -308,7 +327,7 @@ fn main() -> ! {
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
-            KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+            discard_keyboard_input();
             match list_root_files(&mut *browser_paths, &mut *browser_path_lengths) {
                 Ok(count) => {
                     browser_count = count;
@@ -371,21 +390,95 @@ fn main() -> ! {
             }
         }
 
-        // Run one emulator iteration in thread context. Video batches are
-        // rendered from the canvas below, never from the USB timer ISR.
+        // Run a bounded batch of PDP instructions in thread context. The C
+        // core stops at a 60,000-tick frame boundary or after 128 instructions,
+        // whichever comes first, leaving time for USB and video servicing.
         if !browser_open {
-            unsafe { bk_loop(); }
+            unsafe { bk_run_batch(128); }
 
-            let input_len = KEYBOARD_INPUT_LEN.swap(0, Ordering::AcqRel);
-            if input_len > 0 {
+            let frame_now = unsafe { bk_get_frame_count() };
+            if frame_now != keyboard_frame_seen {
+                keyboard_frame_seen = frame_now;
                 let mut buffer = [0u8; 32];
-                unsafe {
-                    ptr::copy_nonoverlapping(
-                        core::ptr::addr_of!(KEYBOARD_INPUT_BUFFER).cast::<u8>(),
-                        buffer.as_mut_ptr(),
-                        input_len as usize,
-                    );
-                    sendInput(buffer.as_mut_ptr(), input_len);
+                let input_len = dequeue_keyboard_input(&mut buffer);
+                if input_len != 0 {
+                    unsafe { sendInput(buffer.as_mut_ptr(), input_len as u8); }
+                }
+            }
+        }
+
+        // Snapshot emulator throughput once per RTC second. PDP ticks, not
+        // STM32 clock cycles or instruction count, define emulated time.
+        let now_ms = TICKS.load(Ordering::Relaxed);
+        if now_ms.wrapping_sub(diag_last_check_ms) >= 1000 {
+            diag_last_check_ms = now_ms;
+            let rtc_second = rtc::unix_time(rtc_registers);
+            if rtc_second != 0 && rtc_second != diag_last_rtc_second {
+                if diag_last_rtc_second == 0 {
+                    diag_last_rtc_second = rtc_second;
+                    diag_last_cycles = unsafe { bk_get_ticks() };
+                    diag_last_instructions = unsafe { bk_get_instruction_count() };
+                    diag_last_frames = unsafe { bk_get_frame_count() };
+                } else {
+                    let elapsed = rtc_second.wrapping_sub(diag_last_rtc_second);
+                    if elapsed != 0 {
+                        let cycles = unsafe { bk_get_ticks() };
+                        let instructions = unsafe { bk_get_instruction_count() };
+                        let frames = unsafe { bk_get_frame_count() };
+                        let cycles_per_second = cycles.wrapping_sub(diag_last_cycles) / elapsed;
+                        let instructions_per_second =
+                            instructions.wrapping_sub(diag_last_instructions) / elapsed;
+                        let frames_per_second = frames.wrapping_sub(diag_last_frames) / elapsed;
+                        let avg_cycles_x10 = if instructions_per_second != 0 {
+                            cycles_per_second.saturating_mul(10) / instructions_per_second
+                        } else {
+                            0
+                        };
+
+                        let mut line = [b' '; 32];
+                        let mut used = 0usize;
+                        append_diag_text(&mut line, &mut used, b"PDP CYC/S ");
+                        append_diag_number(&mut line, &mut used, cycles_per_second);
+                        if !browser_open {
+                            show_file_browser_line(27, &line, false);
+                        }
+
+                        line.fill(b' ');
+                        used = 0;
+                        append_diag_text(&mut line, &mut used, b"INS/S ");
+                        append_diag_number(&mut line, &mut used, instructions_per_second);
+                        append_diag_text(&mut line, &mut used, b" AVG ");
+                        append_diag_number(&mut line, &mut used, avg_cycles_x10 / 10);
+                        if used < line.len() {
+                            line[used] = b'.';
+                            used += 1;
+                        }
+                        if used < line.len() {
+                            line[used] = b'0' + (avg_cycles_x10 % 10) as u8;
+                        }
+                        if !browser_open {
+                            show_file_browser_line(28, &line, false);
+                        }
+
+                        line.fill(b' ');
+                        used = 0;
+                        append_diag_text(&mut line, &mut used, b"FR/S ");
+                        append_diag_number(&mut line, &mut used, frames_per_second);
+                        append_diag_text(&mut line, &mut used, b" KOVF ");
+                        append_diag_number(
+                            &mut line,
+                            &mut used,
+                            KEYBOARD_QUEUE_OVERFLOW.load(Ordering::Relaxed),
+                        );
+                        if !browser_open {
+                            show_file_browser_line(29, &line, false);
+                        }
+
+                        diag_last_rtc_second = rtc_second;
+                        diag_last_cycles = cycles;
+                        diag_last_instructions = instructions;
+                        diag_last_frames = frames;
+                    }
                 }
             }
         }
@@ -548,7 +641,7 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
-    KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+    discard_keyboard_input();
     unsafe {
         PREVIOUS_KEYS = [0; 6];
         PREVIOUS_MODIFIERS = 0;
@@ -577,7 +670,7 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
         KEYBOARD_LOCKS.store(0, Ordering::Release);
-        KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+        discard_keyboard_input();
         unsafe {
             PREVIOUS_KEYS = [0; 6];
             PREVIOUS_MODIFIERS = 0;
@@ -768,15 +861,80 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     }
 
     // Only decoded key bytes go to the emulator; display labels are not BK input.
+    // The main loop drains this queue at the next emulated frame boundary.
     if emulator_used != 0 {
-        unsafe {
-            ptr::copy_nonoverlapping(
-                emulator_input.as_ptr(),
-                core::ptr::addr_of_mut!(KEYBOARD_INPUT_BUFFER).cast::<u8>(),
-                emulator_used,
-            );
+        enqueue_keyboard_input(&emulator_input[..emulator_used]);
+    }
+}
+
+
+fn enqueue_keyboard_input(input: &[u8]) {
+    let mut head = KEYBOARD_QUEUE_HEAD.load(Ordering::Relaxed);
+    let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Acquire);
+    let queue = ptr::addr_of_mut!(KEYBOARD_INPUT_QUEUE).cast::<u8>();
+
+    for &byte in input {
+        if head.wrapping_sub(tail) >= KEYBOARD_QUEUE_CAPACITY {
+            KEYBOARD_QUEUE_OVERFLOW.fetch_add(1, Ordering::Relaxed);
+            break;
         }
-        KEYBOARD_INPUT_LEN.store(emulator_used as u8, Ordering::Release);
+        unsafe {
+            queue.add((head & KEYBOARD_QUEUE_MASK) as usize).write(byte);
+        }
+        head = head.wrapping_add(1);
+    }
+
+    KEYBOARD_QUEUE_HEAD.store(head, Ordering::Release);
+}
+
+fn dequeue_keyboard_input(output: &mut [u8; 32]) -> usize {
+    let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire);
+    let mut tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
+    let queue = ptr::addr_of!(KEYBOARD_INPUT_QUEUE).cast::<u8>();
+    let mut used = 0usize;
+
+    while tail != head && used < output.len() {
+        output[used] = unsafe {
+            queue.add((tail & KEYBOARD_QUEUE_MASK) as usize).read()
+        };
+        tail = tail.wrapping_add(1);
+        used += 1;
+    }
+
+    KEYBOARD_QUEUE_TAIL.store(tail, Ordering::Release);
+    used
+}
+
+fn discard_keyboard_input() {
+    let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire);
+    KEYBOARD_QUEUE_TAIL.store(head, Ordering::Release);
+}
+
+fn append_diag_text(line: &mut [u8; 32], used: &mut usize, text: &[u8]) {
+    for &byte in text {
+        if *used == line.len() {
+            break;
+        }
+        line[*used] = byte;
+        *used += 1;
+    }
+}
+
+fn append_diag_number(line: &mut [u8; 32], used: &mut usize, mut value: u32) {
+    let mut digits = [0u8; 10];
+    let mut count = 0usize;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        count += 1;
+        value /= 10;
+        if value == 0 || count == digits.len() {
+            break;
+        }
+    }
+    while count != 0 && *used < line.len() {
+        count -= 1;
+        line[*used] = digits[count];
+        *used += 1;
     }
 }
 
