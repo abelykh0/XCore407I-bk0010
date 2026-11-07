@@ -89,9 +89,8 @@ static KEYBOARD_QUEUE_OVERFLOW: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
-    fn bk_loop() -> i32;
     fn bk_run_batch(instruction_budget: u32) -> u32;
-    fn bk_get_ticks() -> u32;
+    fn bk_get_ticks() -> u64;
     fn bk_get_instruction_count() -> u32;
     fn bk_get_frame_count() -> u32;
     fn sendInput(buffer: *mut u8, size: u8);
@@ -438,7 +437,7 @@ fn main() -> ! {
                         let mut line = [b' '; 32];
                         let mut used = 0usize;
                         append_diag_text(&mut line, &mut used, b"PDP CYC/S ");
-                        append_diag_number(&mut line, &mut used, cycles_per_second);
+                        append_diag_number(&mut line, &mut used, cycles_per_second as u32);
                         if !browser_open {
                             show_file_browser_line(27, &line, false);
                         }
