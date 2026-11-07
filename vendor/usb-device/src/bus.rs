@@ -173,6 +173,14 @@ pub trait UsbBus: Sync + Sized {
     /// interrupt handler. See the [`PollResult`] struct for more information.
     fn poll(&self) -> PollResult;
 
+    /// Poll the controller while collecting endpoint events only for the
+    /// selected endpoint numbers. Implementations that cannot filter events
+    /// may use the default implementation; interrupt-driven buses should
+    /// override this to avoid consuming another context's endpoint flags.
+    fn poll_with_endpoint_mask(&self, _endpoint_mask: u16) -> PollResult {
+        self.poll()
+    }
+
     /// Simulates a disconnect from the USB bus, causing the host to reset and re-enumerate the
     /// device.
     ///
