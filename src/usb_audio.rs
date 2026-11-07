@@ -1,11 +1,10 @@
-//! UAC2 capture source connected to the BK-0010 emulator speaker output.
+//! UAC2 capture test source: a precomputed 1 kHz tone, independent of the BK emulator.
 //!
-//! Speaker transitions are timestamped in integral BK PDP ticks. The main-loop
-//! producer converts those transitions to 48 kHz PCM and queues samples in an
-//! SPSC ring. TIM2 consumes six queued samples per 8 kHz USB microframe.
+//! The main-loop producer copies samples from a fixed lookup table into an SPSC
+//! ring. TIM2 consumes six prepared samples per 8 kHz USB microframe.
 
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use usb_device::bus::UsbBus;
 use usb_device::endpoint::{Endpoint, In, Out};
 use usb_device::UsbDirection;
@@ -17,36 +16,15 @@ use usbd_uac2::{
 const AUDIO_SAMPLE_RATE: u32 = 48_000;
 const SAMPLES_PER_MICROFRAME: usize = 6;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
-const AUDIO_AMPLITUDE: i16 = 12_000;
-
-// The PCM clock follows the measured BK tick rate. Twice-tick units
-// preserve half-tick sample positions; a remainder accumulator distributes
-// fractional intervals without long-term rounding drift.
-const DEFAULT_BK_TICKS_PER_SECOND: u32 = 3_000_000;
-const MIN_BK_TICKS_PER_SECOND: u32 = 1_000_000;
-const MAX_BK_TICKS_PER_SECOND: u32 = 6_000_000;
-const PCM_RATE_DIVISOR: u64 = AUDIO_SAMPLE_RATE as u64;
+const TONE_TABLE: [i16; 48] = [0, 1566, 3106, 4592, 6000, 7305, 8485, 9520, 10392, 11087, 11591, 11897, 12000, 11897, 11591, 11087, 10392, 9520, 8485, 7305, 6000, 4592, 3106, 1566, 0, -1566, -3106, -4592, -6000, -7305, -8485, -9520, -10392, -11087, -11591, -11897, -12000, -11897, -11591, -11087, -10392, -9520, -8485, -7305, -6000, -4592, -3106, -1566];
 const PCM_RING_CAPACITY: u32 = 1_024;
 const PCM_RING_MASK: u32 = PCM_RING_CAPACITY - 1;
 const PCM_PREFILL_SAMPLES: u32 = 256;
-const PCM_TARGET_QUEUED_SAMPLES: u32 = 480;
-const PCM_RATE_SCALE: u64 = 1_000_000;
-const PCM_RATE_ADJUST_PER_SAMPLE_PPM: i32 = 250;
-const PCM_MAX_RATE_ADJUST_PPM: i32 = 150_000;
 const MAX_PRODUCE_PER_CALL: u32 = 256;
-
-unsafe extern "C" {
-    fn bk_audio_start() -> u8;
-    fn bk_audio_stop();
-    fn bk_audio_pop_edge(edge_ticks: *mut u64, level: *mut u8) -> u8;
-    fn bk_audio_get_edge_overflows() -> u32;
-}
 
 static PCM_HEAD: AtomicU32 = AtomicU32::new(0);
 static PCM_TAIL: AtomicU32 = AtomicU32::new(0);
 static PCM_EPOCH: AtomicU32 = AtomicU32::new(0);
-static PCM_BK_TICKS_PER_SECOND: AtomicU32 = AtomicU32::new(DEFAULT_BK_TICKS_PER_SECOND);
-static PCM_START_LEVEL: AtomicU8 = AtomicU8::new(0);
 static PCM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PCM_READY: AtomicBool = AtomicBool::new(false);
 static PCM_UNDERRUNS: AtomicU32 = AtomicU32::new(0);
@@ -55,174 +33,49 @@ static PCM_USB_INCOMPLETE: AtomicU32 = AtomicU32::new(0);
 static PCM_USB_SUBMIT_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 // Single producer: main loop. Single consumer: TIM2 USB ISR.
-static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] =
-    [0; PCM_RING_CAPACITY as usize];
+static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 /// Stateful PCM producer; keep this in main-loop context, never in the ISR.
 pub struct AudioPcmProducer {
     epoch: u32,
     initialized: bool,
-    next_sample_time2: u64,
-    sample_remainder: u64,
-    sample_level: bool,
-    pending_edge: Option<(u64, bool)>,
-    filtered_queue_q8: u32,
-    last_control_ticks: u64,
-    rate_adjust_ppm: i32,
+    tone_index: usize,
 }
 
 impl AudioPcmProducer {
     pub const fn new() -> Self {
-        Self {
-            epoch: 0,
-            initialized: false,
-            next_sample_time2: 0,
-            sample_remainder: 0,
-            sample_level: false,
-            pending_edge: None,
-            filtered_queue_q8: PCM_TARGET_QUEUED_SAMPLES << 8,
-            last_control_ticks: 0,
-            rate_adjust_ppm: 0,
-        }
+        Self { epoch: 0, initialized: false, tone_index: 0 }
     }
 
-    fn reset_for_epoch(&mut self, epoch: u32, current_ticks: u64) {
-        // The ISR clears PCM_READY before publishing a new epoch, so it will
-        // not touch ring indices while they are being reinitialized here.
-        PCM_HEAD.store(0, Ordering::Relaxed);
-        PCM_TAIL.store(0, Ordering::Relaxed);
-        PCM_UNDERRUNS.store(0, Ordering::Relaxed);
-        PCM_OVERFLOWS.store(0, Ordering::Relaxed);
-        PCM_USB_INCOMPLETE.store(0, Ordering::Relaxed);
-        PCM_USB_SUBMIT_ERRORS.store(0, Ordering::Relaxed);
-        self.epoch = epoch;
-        self.initialized = true;
-        self.sample_level = PCM_START_LEVEL.load(Ordering::Acquire) != 0;
-        self.pending_edge = None;
-
-        // Start 10 ms behind the current emulated time. This prefills the ring
-        // with the current speaker level and gives the consumer jitter margin.
-        let tick_rate = PCM_BK_TICKS_PER_SECOND.load(Ordering::Acquire) as u64;
-        let startup_latency = tick_rate / 100;
-        self.next_sample_time2 =
-            current_ticks.saturating_sub(startup_latency).saturating_mul(2);
-        self.sample_remainder = 0;
-        self.filtered_queue_q8 = PCM_TARGET_QUEUED_SAMPLES << 8;
-        self.last_control_ticks = current_ticks;
-        self.rate_adjust_ppm = 0;
-    }
-
-    fn apply_edges_through(&mut self, sample_time2: u64) {
-        loop {
-            if self.pending_edge.is_none() {
-                let mut edge_ticks = 0u64;
-                let mut level = 0u8;
-                if unsafe { bk_audio_pop_edge(&mut edge_ticks, &mut level) } == 0 {
-                    break;
-                }
-                self.pending_edge = Some((edge_ticks.saturating_mul(2), level != 0));
-            }
-
-            let (edge_time2, edge_level) = self.pending_edge.unwrap();
-            if edge_time2 <= sample_time2 {
-                self.sample_level = edge_level;
-                self.pending_edge = None;
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Update the PCM timebase from the once-per-second measured emulator rate.
-    /// Values outside a plausible range are ignored to avoid corrupting timing
-    /// if the diagnostic measurement is temporarily invalid.
-    pub fn set_tick_rate(&mut self, ticks_per_second: u32) {
-        if (MIN_BK_TICKS_PER_SECOND..=MAX_BK_TICKS_PER_SECOND)
-            .contains(&ticks_per_second)
-        {
-            PCM_BK_TICKS_PER_SECOND.store(ticks_per_second, Ordering::Release);
-        }
-    }
-
-    /// Convert all currently elapsed BK time into PCM, bounded per call so
-    /// video/USB servicing remains responsive.
-    pub fn produce(&mut self, current_ticks: u64) {
+    /// Fill the PCM ring from the precomputed tone table without reading emulator state.
+    pub fn produce_tone(&mut self) {
         if !PCM_ACTIVE.load(Ordering::Acquire) {
             self.initialized = false;
             return;
         }
-
         let epoch = PCM_EPOCH.load(Ordering::Acquire);
         if !self.initialized || epoch != self.epoch {
-            self.reset_for_epoch(epoch, current_ticks);
+            PCM_HEAD.store(0, Ordering::Relaxed);
+            PCM_TAIL.store(0, Ordering::Relaxed);
+            PCM_UNDERRUNS.store(0, Ordering::Relaxed);
+            PCM_OVERFLOWS.store(0, Ordering::Relaxed);
+            PCM_USB_INCOMPLETE.store(0, Ordering::Relaxed);
+            PCM_USB_SUBMIT_ERRORS.store(0, Ordering::Relaxed);
+            self.epoch = epoch;
+            self.initialized = true;
+            self.tone_index = 0;
         }
 
-        let current_time2 = current_ticks.saturating_mul(2);
-        let base_tick_rate = PCM_BK_TICKS_PER_SECOND.load(Ordering::Acquire)
-            .clamp(MIN_BK_TICKS_PER_SECOND, MAX_BK_TICKS_PER_SECOND) as u64;
-
-        // Close the loop around the actual USB queue depth. A high queue means
-        // the PCM producer is advancing through BK time too slowly, so increase
-        // the effective ticks/sample. A low queue does the opposite. Update at
-        // approximately 1 ms intervals and filter occupancy to avoid pitch jitter.
-        let control_interval = (base_tick_rate / 1_000).max(1);
-        if current_ticks.wrapping_sub(self.last_control_ticks) >= control_interval {
-            self.last_control_ticks = current_ticks;
-            let head = PCM_HEAD.load(Ordering::Acquire);
-            let tail = PCM_TAIL.load(Ordering::Acquire);
-            let queued = head.wrapping_sub(tail).min(PCM_RING_CAPACITY);
-            let queued_q8 = queued << 8;
-            let target_q8 = PCM_TARGET_QUEUED_SAMPLES << 8;
-            if queued_q8 >= self.filtered_queue_q8 {
-                self.filtered_queue_q8 += (queued_q8 - self.filtered_queue_q8) / 8;
-            } else {
-                self.filtered_queue_q8 -= (self.filtered_queue_q8 - queued_q8) / 8;
-            }
-
-            let error_samples =
-                (self.filtered_queue_q8 as i64 - target_q8 as i64) / 256;
-            let adjustment = (error_samples as i32)
-                .saturating_mul(PCM_RATE_ADJUST_PER_SAMPLE_PPM);
-            self.rate_adjust_ppm =
-                adjustment.clamp(-PCM_MAX_RATE_ADJUST_PPM, PCM_MAX_RATE_ADJUST_PPM);
-        }
-
-        let rate_scale = (PCM_RATE_SCALE as i64 + self.rate_adjust_ppm as i64) as u64;
-        let effective_tick_rate = base_tick_rate.saturating_mul(rate_scale) / PCM_RATE_SCALE;
-        let sample_step_numerator = effective_tick_rate * 2;
         let mut produced = 0u32;
-
-        while self.next_sample_time2 <= current_time2
-            && produced < MAX_PRODUCE_PER_CALL
-        {
-            self.apply_edges_through(self.next_sample_time2);
-            let sample = if self.sample_level {
-                AUDIO_AMPLITUDE
-            } else {
-                -AUDIO_AMPLITUDE
-            };
-
+        while produced < MAX_PRODUCE_PER_CALL {
             let head = PCM_HEAD.load(Ordering::Relaxed);
             let tail = PCM_TAIL.load(Ordering::Acquire);
-            if head.wrapping_sub(tail) < PCM_RING_CAPACITY {
-                let slot = (head & PCM_RING_MASK) as usize;
-                unsafe {
-                    ptr::addr_of_mut!(PCM_RING).cast::<i16>().add(slot).write(sample);
-                }
-                PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
-            } else {
-                // Keep the emulated sample clock and edge queue moving even if
-                // the emulator temporarily outruns the USB consumer.
-                PCM_OVERFLOWS.fetch_add(1, Ordering::Relaxed);
-            }
-
-            // Exact average interval: (2 * BK ticks/sec) / 48,000.
-            // Carry the remainder so fractional tick intervals do not drift.
-            let interval_numerator = self.sample_remainder + sample_step_numerator;
-            let interval_twice_ticks = interval_numerator / PCM_RATE_DIVISOR;
-            self.sample_remainder = interval_numerator % PCM_RATE_DIVISOR;
-            self.next_sample_time2 =
-                self.next_sample_time2.saturating_add(interval_twice_ticks);
+            if head.wrapping_sub(tail) >= PCM_RING_CAPACITY { break; }
+            let sample = TONE_TABLE[self.tone_index];
+            let slot = (head & PCM_RING_MASK) as usize;
+            unsafe { ptr::addr_of_mut!(PCM_RING).cast::<i16>().add(slot).write(sample); }
+            PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
+            self.tone_index = (self.tone_index + 1) % TONE_TABLE.len();
             produced += 1;
         }
 
@@ -232,12 +85,12 @@ impl AudioPcmProducer {
             PCM_READY.store(true, Ordering::Release);
         }
     }
+
+    pub fn rate_adjust_ppm(&self) -> i32 { 0 }
 }
 
 impl Default for AudioPcmProducer {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 #[repr(align(4))]
@@ -270,7 +123,7 @@ impl BkEmulatorAudio {
         (
             PCM_UNDERRUNS.load(Ordering::Relaxed),
             PCM_OVERFLOWS.load(Ordering::Relaxed),
-            unsafe { bk_audio_get_edge_overflows() },
+            0,
             PCM_USB_INCOMPLETE.load(Ordering::Relaxed),
             PCM_USB_SUBMIT_ERRORS.load(Ordering::Relaxed),
             head.wrapping_sub(tail),
@@ -392,15 +245,9 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
         }
 
         if alt_setting == 1 {
-            let start_level = unsafe { bk_audio_start() != 0 };
-            self.last_sample = if start_level {
-                AUDIO_AMPLITUDE
-            } else {
-                -AUDIO_AMPLITUDE
-            };
+            self.last_sample = 0;
             self.dma_in_flight = false;
             PCM_READY.store(false, Ordering::Release);
-            PCM_START_LEVEL.store(start_level as u8, Ordering::Relaxed);
             PCM_ACTIVE.store(true, Ordering::Release);
             PCM_EPOCH.fetch_add(1, Ordering::AcqRel);
             self.active = true;
@@ -409,9 +256,6 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
             PCM_ACTIVE.store(false, Ordering::Release);
             PCM_READY.store(false, Ordering::Release);
             self.dma_in_flight = false;
-            unsafe {
-                bk_audio_stop();
-            }
-        }
+}
     }
 }
