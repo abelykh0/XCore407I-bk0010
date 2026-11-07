@@ -49,8 +49,8 @@ uint16_t port0177714 = 0;
 static uint32_t bk_frame_count;
 static double bk_next_frame_tick = 60000.0;
 
-// Audio output transition queue. The emulator is the single producer
-// (thread context); USB Audio consumes transitions from the TIM2 ISR.
+// Audio output transition queue. The emulator and PCM producer both run
+// in main-loop context; TIM2 only consumes already-buffered PCM samples.
 #define BK_AUDIO_EDGE_CAPACITY 512u
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
 static volatile uint16_t bk_audio_edge_head;
