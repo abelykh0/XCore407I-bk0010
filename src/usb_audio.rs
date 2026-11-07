@@ -15,6 +15,7 @@ use usbd_uac2::{
 const AUDIO_SAMPLE_RATE: u32 = 48_000;
 const SAMPLES_PER_MICROFRAME: usize = 6;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
+const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 const AUDIO_SAMPLE_PERIOD_CYCLES: u32 = 3_500; // 168 MHz / 48 kHz
 const AUDIO_STARTUP_LATENCY_CYCLES: u32 = 168_000; // 1 ms edge-queue lead
 const AUDIO_AMPLITUDE: i16 = 12_000;
