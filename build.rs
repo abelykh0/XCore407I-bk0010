@@ -109,10 +109,11 @@ fn main() {
         .ctypes_prefix("core::ffi")
         // TinyUSB's UVC probe/commit control contains nested packed anonymous
         // bitfield structs. bindgen 0.68 emits an invalid Rust repr(C, packed,
-        // align) for one of those nested types. The application does not need
-        // this C type: UVC control payloads are transferred as raw bytes.
-        // Keep it out of generated bindings rather than changing its C ABI.
-        .blocklist_type("video_probe_and_commit_control_t")
+        // align) for one of those nested types. Keep the public named type as
+        // an opaque ABI-sized type (so API declarations remain valid), while
+        // preventing bindgen from generating the problematic nested layout.
+        // The application transfers UVC control payloads as raw bytes.
+        .opaque_type("video_probe_and_commit_control_t")
         .clang_args(&[
             "-target",
             &target,
