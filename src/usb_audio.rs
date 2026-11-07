@@ -144,11 +144,6 @@ impl AudioPcmProducer {
         }
     }
 
-    /// Current queue-controller correction, in parts per million.
-    pub fn rate_adjust_ppm(&self) -> i32 {
-        self.rate_adjust_ppm
-    }
-
     /// Convert all currently elapsed BK time into PCM, bounded per call so
     /// video/USB servicing remains responsive.
     pub fn produce(&mut self, current_ticks: u64) {
@@ -209,17 +204,17 @@ impl AudioPcmProducer {
 
             let head = PCM_HEAD.load(Ordering::Relaxed);
             let tail = PCM_TAIL.load(Ordering::Acquire);
-            if head.wrapping_sub(tail) >= PCM_RING_CAPACITY {
-                // The queue is full. Do not synthesize and discard up to 256
-                // individual samples; fast-forward the PCM clock in one step.
-                break;
+            if head.wrapping_sub(tail) < PCM_RING_CAPACITY {
+                let slot = (head & PCM_RING_MASK) as usize;
+                unsafe {
+                    ptr::addr_of_mut!(PCM_RING).cast::<i16>().add(slot).write(sample);
+                }
+                PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
+            } else {
+                // Keep the emulated sample clock and edge queue moving even if
+                // the emulator temporarily outruns the USB consumer.
+                PCM_OVERFLOWS.fetch_add(1, Ordering::Relaxed);
             }
-
-            let slot = (head & PCM_RING_MASK) as usize;
-            unsafe {
-                ptr::addr_of_mut!(PCM_RING).cast::<i16>().add(slot).write(sample);
-            }
-            PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
 
             // Exact average interval: (2 * BK ticks/sec) / 48,000.
             // Carry the remainder so fractional tick intervals do not drift.
@@ -229,28 +224,6 @@ impl AudioPcmProducer {
             self.next_sample_time2 =
                 self.next_sample_time2.saturating_add(interval_twice_ticks);
             produced += 1;
-        }
-
-        let queued_now = PCM_HEAD
-            .load(Ordering::Acquire)
-            .wrapping_sub(PCM_TAIL.load(Ordering::Acquire));
-        if queued_now >= PCM_RING_CAPACITY && self.next_sample_time2 <= current_time2 {
-            // Samples up to current emulated time cannot be queued. Consume
-            // their speaker transitions and advance the fractional sample
-            // clock mathematically, rather than iterating over discarded PCM.
-            self.apply_edges_through(current_time2);
-            let delta = (current_time2 - self.next_sample_time2) as u128;
-            let required = (delta + 1) * PCM_RATE_DIVISOR as u128
-                - self.sample_remainder as u128;
-            let step = sample_step_numerator as u128;
-            let skipped = (required + step - 1) / step;
-            let accumulated = self.sample_remainder as u128 + skipped * step;
-            let advance = accumulated / PCM_RATE_DIVISOR as u128;
-            self.sample_remainder = (accumulated % PCM_RATE_DIVISOR as u128) as u64;
-            self.next_sample_time2 = self
-                .next_sample_time2
-                .saturating_add(advance.min(u64::MAX as u128) as u64);
-            PCM_OVERFLOWS.fetch_add(skipped.min(u32::MAX as u128) as u32, Ordering::Relaxed);
         }
 
         let head = PCM_HEAD.load(Ordering::Acquire);
