@@ -107,8 +107,9 @@ type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
 type BoardAudioHandler = BkEmulatorAudio;
 type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
 
-// These pointers are published once before OTG_HS is unmasked. After that,
-// the OTG_HS ISR is the sole owner of both mutable USB objects. main() must not access them.
+// These pointers are published before either USB service context is enabled.
+// TIM2 and OTG_HS have equal preemption priority and are the only mutable
+// owners of the shared USB objects; main() must not access them.
 static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut());
 static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
 static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
