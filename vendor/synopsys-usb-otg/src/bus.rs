@@ -129,7 +129,10 @@ impl<USB: UsbPeripheral> UsbBus<USB> {
 
         for ep in &self.allocator.endpoints_out {
             if let Some(ep) = ep {
-                // OUT endpoint state is sampled by the timer-owned poller.
+                // EP0 SETUP/OUT must also be able to wake the interrupt owner.
+                if ep.address().index() == 0 {
+                    modify_reg!(otg_device, regs.device(), DAINTMSK, |v| v | 0x0001_0000);
+                }
                 ep.configure(cs);
             }
         }
@@ -574,7 +577,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
             write_reg!(otg_global, regs.global(), GINTMSK,
                 USBRST: 1, ENUMDNEM: 1,
                 USBSUSPM: 1, WUIM: 1,
-                IEPINT: 1
+                IEPINT: 1, OEPINT: 1, IISOIXFRM: 1
             );
 
             // clear pending interrupts
