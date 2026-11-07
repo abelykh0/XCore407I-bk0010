@@ -919,6 +919,10 @@ static void handle_bus_reset(uint8_t rhport) {
 
   xfer_status[0][TUSB_DIR_OUT].max_size = CFG_TUD_ENDPOINT0_SIZE;
   xfer_status[0][TUSB_DIR_IN].max_size = CFG_TUD_ENDPOINT0_SIZE;
+  // EP0 is not opened from a descriptor, so initialize its implicit
+  // single-transaction limit after the bus-reset state clear.
+  xfer_status[0][TUSB_DIR_OUT].max_transactions = 1;
+  xfer_status[0][TUSB_DIR_IN].max_transactions = 1;
 
   uint32_t gintmsk = GINTMSK_OTGINT | GINTMSK_IEPINT;
   // PTI carries missed ISOC IN data to the next frame; IncompISOCIN must stay masked
