@@ -199,16 +199,12 @@ impl<'a, B: UsbBus> UvcUsbClass<'a, B> {
     }
 
     fn submit_video_batch(endpoint: &EndpointIn<'a, B>, packet: &[u8], packet_count: u8) -> bool {
-        // The packet buffer is 4-byte aligned and remains untouched until
-        // endpoint_in_complete queues the next batch.
-        unsafe {
-            endpoint
-                // The descriptor advertises the endpoint's two-transaction
-                // maximum. Program DIEPTSIZ MCNT for this transfer's actual
-                // packet count, which can be one on a short final frame batch.
-                .write_iso_batch_dma(packet, packet_count, packet_count)
-                .is_ok()
-        }
+        // Slave mode copies the batch into the endpoint TX FIFO before returning.
+        // The descriptor advertises two transactions; a short final batch can
+        // contain only one packet.
+        endpoint
+            .write_iso_batch(packet, packet_count, packet_count)
+            .is_ok()
     }
 }
 
@@ -390,8 +386,8 @@ pub fn usb_bus() -> core::result::Result<&'static BoardUsbAllocator, UsbBusAlrea
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .map_err(|_| UsbBusAlreadyInitialized)?;
 
-    // DMA buffers for EP0 OUT (256 bytes) and EP0 IN (64 bytes). The UVC
-    // isochronous endpoint submits directly from the camera buffer.
+    // Endpoint packet buffers for control traffic. UVC frame batches are copied
+    // directly into the configured TX FIFO in slave mode.
     const EP0_OUT_WORDS: usize = 256 / 4;
     const EP0_IN_WORDS: usize = 64 / 4;
     static mut EP_MEMORY: [u32; EP0_OUT_WORDS + EP0_IN_WORDS] =
