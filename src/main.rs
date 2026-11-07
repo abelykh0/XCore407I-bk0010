@@ -21,7 +21,11 @@ use xcore407i_blinker::usb_uvc::{
 };
 use xcore407i_blinker::usb_audio::{AudioPcmProducer, BkEmulatorAudio};
 
-// OTG_HS endpoint events are serviced directly by the USB core interrupt.
+// Video endpoint EP1 is polled at the HS microframe cadence.
+// Audio endpoint EP2 is serviced from OTG_HS. Both contexts share one
+// serialized UsbDevice and dispatch only their assigned endpoint events.
+const VIDEO_POLL_TIMER_HZ: u32 = 8_000;
+const VIDEO_POLL_TIMER_PRIORITY: u8 = 0;
 const OTG_HS_PRIORITY: u8 = 0;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
@@ -264,8 +268,15 @@ fn main() -> ! {
     AUDIO_PTR.store(audio_ptr, Ordering::Release);
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
 
-    // The USB device and class pointers are now valid. Let DWC2 events drive
-    // service directly through OTG_HS instead of periodic TIM2 polling.
+    // TIM2 owns EP0/control and UVC EP1 events at 8 kHz. OTG_HS owns
+    // UAC2 EP2 events. Both handlers have equal preemption priority so they
+    // cannot enter the shared UsbDevice concurrently.
+    configure_video_poll_timer(
+        &device.RCC,
+        &device.TIM2,
+        &mut core.NVIC,
+    );
+
     unsafe {
         NVIC::unpend(interrupt::OTG_HS);
         NVIC::unmask(interrupt::OTG_HS);
@@ -1049,8 +1060,8 @@ fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     }
 }
 
-/// DWC2 raises OTG_HS when an enabled USB event needs servicing.
-/// Video rendering remains in the main-loop producer, not in this ISR.
+/// DWC2 IRQ service is restricted to UAC2 endpoint EP2. Events for EP1
+/// consumed by the shared controller poll are retained for TIM2 to dispatch.
 #[interrupt]
 fn OTG_HS() {
     let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
@@ -1060,7 +1071,28 @@ fn OTG_HS() {
         let usb = unsafe { &mut *usb_ptr };
         let camera = unsafe { &mut *camera_ptr };
         let audio = unsafe { &mut *audio_ptr };
-        let _ = usb.poll(&mut [camera, audio]);
+        let _ = usb.poll_with_endpoint_mask(&mut [camera, audio], 1 << 2);
+    }
+}
+
+/// TIM2 owns EP0 and UVC EP1. If this poll consumes an EP2 event before
+/// OTG_HS runs, pend OTG_HS so the audio callback is still serviced promptly.
+#[interrupt]
+fn TIM2() {
+    let tim2 = unsafe { &*pac::TIM2::ptr() };
+    tim2.sr().write(|w| w.uif().clear_bit());
+
+    let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
+    let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
+    let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
+    if !usb_ptr.is_null() && !camera_ptr.is_null() && !audio_ptr.is_null() {
+        let usb = unsafe { &mut *usb_ptr };
+        let camera = unsafe { &mut *camera_ptr };
+        let audio = unsafe { &mut *audio_ptr };
+        let _ = usb.poll_with_endpoint_mask(&mut [camera, audio], 0x0003);
+        if usb.pending_endpoint_events() & (1 << 2) != 0 {
+            unsafe { NVIC::pend(interrupt::OTG_HS); }
+        }
     }
 }
 
@@ -1165,11 +1197,45 @@ fn configure_exception_priorities(scb: &mut SCB, nvic: &mut NVIC) {
         // OTG_HS is the highest-priority USB device service path. SysTick
         // remains enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
-        // Keep OTG_HS masked until the USB objects and ISR pointers are ready.
+        // TIM2 and OTG_HS must have equal preemption priority: each polls
+        // the same UsbDevice and therefore must never preempt the other.
+        nvic.set_priority(interrupt::TIM2, VIDEO_POLL_TIMER_PRIORITY << 4);
         nvic.set_priority(interrupt::OTG_HS, OTG_HS_PRIORITY << 4);
+        NVIC::mask(interrupt::TIM2);
+        NVIC::unpend(interrupt::TIM2);
         NVIC::mask(interrupt::OTG_HS);
         NVIC::unpend(interrupt::OTG_HS);
     }
+}
+
+/// Configure TIM2 as the 8 kHz UVC/control service timer.
+fn configure_video_poll_timer(
+    rcc: &pac::RCC,
+    tim2: &pac::TIM2,
+    nvic: &mut NVIC,
+) {
+    // APB1 timer clock is 84 MHz (SYSCLK=168 MHz, APB1=/4, timer x2).
+    let timer_ticks = 84_000_000 / VIDEO_POLL_TIMER_HZ;
+
+    rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
+    rcc.apb1rstr().modify(|_, w| w.tim2rst().set_bit());
+    rcc.apb1rstr().modify(|_, w| w.tim2rst().clear_bit());
+
+    tim2.cr1().write(|w| w.cen().clear_bit());
+    tim2.dier().write(|w| w.uie().clear_bit());
+    tim2.psc().write(|w| unsafe { w.psc().bits(0) });
+    tim2.arr().write(|w| unsafe { w.arr().bits(timer_ticks - 1) });
+    tim2.egr().write(|w| w.ug().set_bit());
+    tim2.sr().write(|w| w.uif().clear_bit());
+
+    unsafe {
+        nvic.set_priority(interrupt::TIM2, VIDEO_POLL_TIMER_PRIORITY << 4);
+        NVIC::unpend(interrupt::TIM2);
+        NVIC::unmask(interrupt::TIM2);
+    }
+
+    tim2.dier().write(|w| w.uie().set_bit());
+    tim2.cr1().write(|w| w.cen().set_bit());
 }
 
 fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
