@@ -74,7 +74,7 @@ impl<'a, B: UsbBus> UvcUsbClass<'a, B> {
         allocator: &'a UsbBusAllocator<B>,
     ) -> core::result::Result<Self, UvcUsbClassInitError> {
         // The main-loop producer owns the singleton NV12 renderer. This
-        // class owns only USB control state and the DMA batch handoff.
+        // class owns only USB control state and the FIFO batch handoff.
         let function = UvcClass::try_new().ok_or(UvcUsbClassInitError::CameraAlreadyInUse)?;
         let control_interface = allocator.interface();
         let streaming_interface = allocator.interface();
@@ -197,7 +197,7 @@ impl<'a, B: UsbBus> UvcUsbClass<'a, B> {
             0,
             Some(self.interface_string),
         )?;
-        // The endpoint descriptor includes two transactions per HS microframe.
+        // The descriptor's two additional transactions allow three packets per HS microframe.
         writer.endpoint_hs_iso(&self.endpoint, ISO_PACKETS_PER_MICROFRAME - 1)?;
         Ok(())
     }
@@ -211,8 +211,8 @@ impl<'a, B: UsbBus> UvcUsbClass<'a, B> {
 
     fn submit_video_batch(endpoint: &EndpointIn<'a, B>, packet: &[u8], packet_count: u8) -> bool {
         // Slave mode copies the batch into the endpoint TX FIFO before returning.
-        // The descriptor advertises two transactions; a short final batch can
-        // contain only one packet.
+        // The descriptor allows three transactions; a short final batch can
+        // contain fewer packets, including a single-packet final batch.
         match endpoint.write_iso_batch(packet, packet_count, packet_count) {
             Ok(_) => true,
             Err(_) => {
