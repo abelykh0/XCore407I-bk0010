@@ -12,4 +12,5 @@ pub mod rtc;
 pub mod usb_uvc;
 pub mod usb_audio;
 pub mod tusb;
+mod tusb_class_drivers;
 pub mod uvc;
