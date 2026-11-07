@@ -103,8 +103,8 @@ type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
 type BoardAudioHandler = BkEmulatorAudio;
 type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
 
-// These pointers are published once, before TIM2 is enabled. After that,
-// TIM2 is the sole owner of both mutable objects. main() must not access them.
+// These pointers are published once before OTG_HS is unmasked. After that,
+// the OTG_HS ISR is the sole owner of both mutable USB objects. main() must not access them.
 static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut());
 static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
 static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
@@ -188,7 +188,7 @@ fn main() -> ! {
     while prepare_next_video_batch(&mut video_renderer) {}
 
     // Construct in place and publish raw pointers. No long-lived &mut reference
-    // is kept in main; the TIM2 ISR creates the only mutable references.
+    // is kept in main; the OTG_HS ISR creates the only mutable references.
     let camera_ptr = unsafe {
         (*ptr::addr_of_mut!(CAMERA)).as_mut_ptr()
     };
