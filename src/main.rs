@@ -434,18 +434,22 @@ fn main() -> ! {
                         append_diag_number(&mut line, &mut used, cycles_per_second as u32);
                         if !browser_open {
                             show_file_browser_line(27, &line, false);
+
+                            line.fill(b' ');
+                            used = 0;
+                            append_diag_text(&mut line, &mut used, b"AUD PPM ");
+                            append_diag_number(
+                                &mut line,
+                                &mut used,
+                                audio_pcm_producer.rate_adjust_ppm() as u32,
+                            );
+                            show_file_browser_line(28, &line, false);
                         }
 
                         line.fill(b' ');
                         used = 0;
                         append_diag_text(&mut line, &mut used, b"FR/S ");
                         append_diag_number(&mut line, &mut used, frames_per_second);
-                        append_diag_text(&mut line, &mut used, b" KOVF ");
-                        append_diag_number(
-                            &mut line,
-                            &mut used,
-                            KEYBOARD_QUEUE_OVERFLOW.load(Ordering::Relaxed),
-                        );
                         if !browser_open {
                             show_file_browser_line(29, &line, false);
 
