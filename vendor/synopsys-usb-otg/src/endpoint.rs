@@ -17,16 +17,16 @@ use critical_section::{CriticalSection, Mutex};
 use usb_device::endpoint::{EndpointAddress, EndpointType};
 use usb_device::{Result, UsbDirection, UsbError};
 
-#[cfg(feature = "hs")]
+#[cfg(any(feature = "internal-dma", feature = "hs"))]
 static ISO_INCOMPLETE_DIEPCTL: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
-#[cfg(feature = "hs")]
+#[cfg(any(feature = "internal-dma", feature = "hs"))]
 static ISO_INCOMPLETE_DIEPTSIZ: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
-#[cfg(feature = "hs")]
+#[cfg(any(feature = "internal-dma", feature = "hs"))]
 static ISO_INCOMPLETE_DIEPINT: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
-#[cfg(feature = "hs")]
+#[cfg(any(feature = "internal-dma", feature = "hs"))]
 static ISO_INCOMPLETE_FNSOF: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
 
