@@ -1098,48 +1098,15 @@ fn configure_exception_priorities(scb: &mut SCB, nvic: &mut NVIC) {
         let aircr = SCB_AIRCR.read_volatile();
         SCB_AIRCR.write_volatile((aircr & !(7 << 8)) | (0x5FA << 16));
 
-        // OTG_HS is the highest-priority USB device service path. SysTick
-        // remains enabled at priority 1 for TinyUSB's millisecond timebase.
+        // OTG_HS is the sole USB device service path. SysTick remains
+        // enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
-        // TIM2 and OTG_HS must have equal preemption priority: each polls
-        // the same UsbDevice and therefore must never preempt the other.
-        nvic.set_priority(interrupt::TIM2, VIDEO_POLL_TIMER_PRIORITY << 4);
         nvic.set_priority(interrupt::OTG_HS, OTG_HS_PRIORITY << 4);
         NVIC::mask(interrupt::TIM2);
         NVIC::unpend(interrupt::TIM2);
         NVIC::mask(interrupt::OTG_HS);
         NVIC::unpend(interrupt::OTG_HS);
     }
-}
-
-/// Configure TIM2 as the 8 kHz UVC/control service timer.
-fn configure_video_poll_timer(
-    rcc: &pac::RCC,
-    tim2: &pac::TIM2,
-    nvic: &mut NVIC,
-) {
-    // APB1 timer clock is 84 MHz (SYSCLK=168 MHz, APB1=/4, timer x2).
-    let timer_ticks = 84_000_000 / VIDEO_POLL_TIMER_HZ;
-
-    rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
-    rcc.apb1rstr().modify(|_, w| w.tim2rst().set_bit());
-    rcc.apb1rstr().modify(|_, w| w.tim2rst().clear_bit());
-
-    tim2.cr1().write(|w| w.cen().clear_bit());
-    tim2.dier().write(|w| w.uie().clear_bit());
-    tim2.psc().write(|w| unsafe { w.psc().bits(0) });
-    tim2.arr().write(|w| unsafe { w.arr().bits(timer_ticks - 1) });
-    tim2.egr().write(|w| w.ug().set_bit());
-    tim2.sr().write(|w| w.uif().clear_bit());
-
-    unsafe {
-        nvic.set_priority(interrupt::TIM2, VIDEO_POLL_TIMER_PRIORITY << 4);
-        NVIC::unpend(interrupt::TIM2);
-        NVIC::unmask(interrupt::TIM2);
-    }
-
-    tim2.dier().write(|w| w.uie().set_bit());
-    tim2.cr1().write(|w| w.cen().set_bit());
 }
 
 fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
