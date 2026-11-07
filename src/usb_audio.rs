@@ -19,10 +19,13 @@ const SAMPLES_PER_MICROFRAME: usize = 6;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
 const AUDIO_AMPLITUDE: i16 = 12_000;
 
-// 48 kHz samples are 62.5 BK ticks apart at the nominal 3 MHz BK clock.
-// Twice-tick units keep this exact: each sample advances by 125 units.
-const SAMPLE_STEP_TWICE_TICKS: u64 = 125;
-const STARTUP_LATENCY_TICKS: u64 = 30_000; // 10 ms at 3 MHz
+// The PCM clock follows the measured BK tick rate. Twice-tick units
+// preserve half-tick sample positions; a remainder accumulator distributes
+// fractional intervals without long-term rounding drift.
+const DEFAULT_BK_TICKS_PER_SECOND: u32 = 3_000_000;
+const MIN_BK_TICKS_PER_SECOND: u32 = 1_000_000;
+const MAX_BK_TICKS_PER_SECOND: u32 = 6_000_000;
+const PCM_RATE_DIVISOR: u64 = AUDIO_SAMPLE_RATE as u64;
 const PCM_RING_CAPACITY: u32 = 1_024;
 const PCM_RING_MASK: u32 = PCM_RING_CAPACITY - 1;
 const PCM_PREFILL_SAMPLES: u32 = 256;
@@ -38,6 +41,7 @@ unsafe extern "C" {
 static PCM_HEAD: AtomicU32 = AtomicU32::new(0);
 static PCM_TAIL: AtomicU32 = AtomicU32::new(0);
 static PCM_EPOCH: AtomicU32 = AtomicU32::new(0);
+static PCM_BK_TICKS_PER_SECOND: AtomicU32 = AtomicU32::new(DEFAULT_BK_TICKS_PER_SECOND);
 static PCM_START_LEVEL: AtomicU8 = AtomicU8::new(0);
 static PCM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PCM_READY: AtomicBool = AtomicBool::new(false);
@@ -55,6 +59,7 @@ pub struct AudioPcmProducer {
     epoch: u32,
     initialized: bool,
     next_sample_time2: u64,
+    sample_remainder: u64,
     sample_level: bool,
     pending_edge: Option<(u64, bool)>,
 }
@@ -65,6 +70,7 @@ impl AudioPcmProducer {
             epoch: 0,
             initialized: false,
             next_sample_time2: 0,
+            sample_remainder: 0,
             sample_level: false,
             pending_edge: None,
         }
@@ -86,8 +92,11 @@ impl AudioPcmProducer {
 
         // Start 10 ms behind the current emulated time. This prefills the ring
         // with the current speaker level and gives the consumer jitter margin.
+        let tick_rate = PCM_BK_TICKS_PER_SECOND.load(Ordering::Acquire) as u64;
+        let startup_latency = tick_rate / 100;
         self.next_sample_time2 =
-            current_ticks.saturating_sub(STARTUP_LATENCY_TICKS).saturating_mul(2);
+            current_ticks.saturating_sub(startup_latency).saturating_mul(2);
+        self.sample_remainder = 0;
     }
 
     fn apply_edges_through(&mut self, sample_time2: u64) {
@@ -111,6 +120,17 @@ impl AudioPcmProducer {
         }
     }
 
+    /// Update the PCM timebase from the once-per-second measured emulator rate.
+    /// Values outside a plausible range are ignored to avoid corrupting timing
+    /// if the diagnostic measurement is temporarily invalid.
+    pub fn set_tick_rate(&mut self, ticks_per_second: u32) {
+        if (MIN_BK_TICKS_PER_SECOND..=MAX_BK_TICKS_PER_SECOND)
+            .contains(&ticks_per_second)
+        {
+            PCM_BK_TICKS_PER_SECOND.store(ticks_per_second, Ordering::Release);
+        }
+    }
+
     /// Convert all currently elapsed BK time into PCM, bounded per call so
     /// video/USB servicing remains responsive.
     pub fn produce(&mut self, current_ticks: u64) {
@@ -125,6 +145,9 @@ impl AudioPcmProducer {
         }
 
         let current_time2 = current_ticks.saturating_mul(2);
+        let tick_rate = PCM_BK_TICKS_PER_SECOND.load(Ordering::Acquire)
+            .clamp(MIN_BK_TICKS_PER_SECOND, MAX_BK_TICKS_PER_SECOND) as u64;
+        let sample_step_numerator = tick_rate * 2;
         let mut produced = 0u32;
 
         while self.next_sample_time2 <= current_time2
@@ -151,8 +174,13 @@ impl AudioPcmProducer {
                 PCM_OVERFLOWS.fetch_add(1, Ordering::Relaxed);
             }
 
+            // Exact average interval: (2 * BK ticks/sec) / 48,000.
+            // Carry the remainder so fractional tick intervals do not drift.
+            let interval_numerator = self.sample_remainder + sample_step_numerator;
+            let interval_twice_ticks = interval_numerator / PCM_RATE_DIVISOR;
+            self.sample_remainder = interval_numerator % PCM_RATE_DIVISOR;
             self.next_sample_time2 =
-                self.next_sample_time2.saturating_add(SAMPLE_STEP_TWICE_TICKS);
+                self.next_sample_time2.saturating_add(interval_twice_ticks);
             produced += 1;
         }
 
