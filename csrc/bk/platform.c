@@ -57,10 +57,9 @@ static volatile uint16_t bk_audio_edge_head;
 static volatile uint16_t bk_audio_edge_tail;
 static volatile uint8_t bk_audio_enabled;
 static uint8_t bk_audio_level;
-static uint32_t bk_audio_edge_cycles[BK_AUDIO_EDGE_CAPACITY];
+static uint64_t bk_audio_edge_ticks[BK_AUDIO_EDGE_CAPACITY];
 static uint8_t bk_audio_edge_levels[BK_AUDIO_EDGE_CAPACITY];
-
-#define DWT_CYCCNT (*(volatile uint32_t *)0xE0001004u)
+static volatile uint32_t bk_audio_edge_overflows;
 
 static void bk_audio_record_level(uint8_t level)
 {
@@ -74,11 +73,12 @@ static void bk_audio_record_level(uint8_t level)
     uint16_t tail = bk_audio_edge_tail;
     if ((uint16_t)(head - tail) >= BK_AUDIO_EDGE_CAPACITY) {
         // Drop the newest edge rather than corrupting unread queue entries.
+        bk_audio_edge_overflows++;
         return;
     }
 
     uint16_t slot = head & BK_AUDIO_EDGE_MASK;
-    bk_audio_edge_cycles[slot] = DWT_CYCCNT;
+    bk_audio_edge_ticks[slot] = (uint64_t)ticks;
     bk_audio_edge_levels[slot] = level;
     __asm volatile("dmb" ::: "memory");
     bk_audio_edge_head = (uint16_t)(head + 1u);
@@ -88,6 +88,7 @@ uint8_t bk_audio_start(void)
 {
     // Called from the USB ISR; the emulator producer is paused while this runs.
     bk_audio_edge_tail = bk_audio_edge_head;
+    bk_audio_edge_overflows = 0;
     bk_audio_level = (port0177716 & 0x0040u) ? 1u : 0u;
     __asm volatile("dmb" ::: "memory");
     bk_audio_enabled = 1u;
@@ -100,20 +101,25 @@ void bk_audio_stop(void)
     __asm volatile("dmb" ::: "memory");
 }
 
-uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
+uint8_t bk_audio_pop_edge(uint64_t *edge_ticks, uint8_t *level)
 {
     uint16_t tail = bk_audio_edge_tail;
-    if (tail == bk_audio_edge_head || cycles == NULL || level == NULL) {
+    if (tail == bk_audio_edge_head || edge_ticks == NULL || level == NULL) {
         return 0u;
     }
 
     __asm volatile("dmb" ::: "memory");
     uint16_t slot = tail & BK_AUDIO_EDGE_MASK;
-    *cycles = bk_audio_edge_cycles[slot];
+    *edge_ticks = bk_audio_edge_ticks[slot];
     *level = bk_audio_edge_levels[slot];
     __asm volatile("dmb" ::: "memory");
     bk_audio_edge_tail = (uint16_t)(tail + 1u);
     return 1u;
+}
+
+uint32_t bk_audio_get_edge_overflows(void)
+{
+    return bk_audio_edge_overflows;
 }
 
 // STOP key requests the independent hardware IRQ1 (priority 5, vector 000004).
@@ -176,6 +182,7 @@ void bk_reset(void)
     bk_audio_level = 0;
     bk_audio_edge_head = 0;
     bk_audio_edge_tail = 0;
+    bk_audio_edge_overflows = 0;
     stop_irq_pending = 0;
     io_stop_happened = 0;
     last_branch = 0;
