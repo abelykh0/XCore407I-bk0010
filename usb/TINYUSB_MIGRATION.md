@@ -41,7 +41,11 @@ This work is isolated on `experiment/tinyusb-device-migration`. Do not merge int
    - Sets four-byte DMA alignment and compile-time guards against staging
      buffers larger than 4096 bytes.
 
-4. Existing Rust-side DMA buffers are documented/guarded:
+4. The TinyUSB C sources are now compiled directly from the root `build.rs`, with
+   bindings generated from `tusb.h` into `src/tusb.rs`. The `tinyusb-sys`
+   Rust wrapper dependency has been removed from `Cargo.toml`; the checked-in
+   TinyUSB 0.21.0 source remains in place.
+5. Existing Rust-side DMA buffers are documented/guarded:
    - UVC producer buffers: two separate 2304-byte, 4-byte-aligned buffers.
    - UAC2 source packet: 12 bytes in a 4-byte-aligned persistent object.
    - EP0 allocator storage: 256-byte OUT and 64-byte IN regions.
@@ -57,14 +61,14 @@ unchanged until transfer completion.
 
 ## Required validation before removing the old stack
 
-1. Compile TinyUSB directly from the checked-in 0.21.0 source with both stacks
-   enabled and no `tinyusb-sys` Rust wrapper.
+1. Build the new direct TinyUSB integration. The source/config/build wiring is
+   in place, but a successful compile has not yet been verified.
 2. Initialize OTG_FS as host and OTG_HS as device simultaneously.
 3. Verify the HS UVC descriptor advertises 768 x 3 and that DWC2 registers show
    `XFRSIZ=2304`, `PKTCNT=3`, `MC=3` for a full video microframe.
 4. Verify the FIFO allocation succeeds within the 1024-word HS FIFO RAM.
 5. Verify DMA buffer addresses are in SRAM (not CCM), 4-byte aligned, and no
    individual DMA transfer buffer exceeds 4096 bytes.
-6. Only then port UVC/UAC2 class callbacks and remove the four old Rust crates.
+6. Only then port UVC/UAC2 class callbacks and remove the remaining three old Rust crates.
 
 No hardware test or complete class migration has been claimed yet.
