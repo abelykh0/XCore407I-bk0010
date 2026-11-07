@@ -430,6 +430,7 @@ fn main() -> ! {
                         let instructions = unsafe { bk_get_instruction_count() };
                         let frames = unsafe { bk_get_frame_count() };
                         let cycles_per_second = cycles.wrapping_sub(diag_last_cycles) / elapsed as u64;
+                        audio_pcm_producer.set_tick_rate(cycles_per_second.min(u32::MAX as u64) as u32);
                         let instructions_per_second =
                             instructions.wrapping_sub(diag_last_instructions) / elapsed;
                         let frames_per_second = frames.wrapping_sub(diag_last_frames) / elapsed;
