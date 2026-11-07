@@ -218,8 +218,7 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
                 PACKET_BYTES,
             )
         };
-        // Audio-only FIFO path for this experiment; camera video remains DMA-backed.
-        match ep.write_iso_batch_fifo(packet, 1, 1) {
+        match unsafe { ep.write_iso_batch_dma(dma_bytes, 1, 1) } {
             Ok(_) => self.dma_in_flight = true,
             Err(_) => {
                 PCM_USB_SUBMIT_ERRORS.fetch_add(1, Ordering::Relaxed);
