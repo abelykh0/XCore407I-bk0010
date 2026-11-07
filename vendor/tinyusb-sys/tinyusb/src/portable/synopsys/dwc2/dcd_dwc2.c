@@ -812,9 +812,15 @@ bool dcd_edpt_xfer_fifo(uint8_t rhport, uint8_t ep_addr, tu_fifo_t* ff, uint16_t
 
   usbd_spin_lock(is_isr);
 
-  if (xfer->max_size == 0) {
-    ret = false;  // Endpoint is closed
+  if (xfer->max_size == 0 || xfer->max_transactions == 0) {
+    ret = false;  // Endpoint is closed or has a reserved HS multiplier
   } else {
+    dwc2_depctl_t const depctl = {.value = DWC2_REG(rhport)->ep[dir == TUSB_DIR_IN ? 0 : 1][epnum].ctl};
+    if (dir == TUSB_DIR_IN && depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS &&
+        tu_div_ceil(total_bytes, xfer->max_size) > xfer->max_transactions) {
+      usbd_spin_unlock(is_isr);
+      return false; // One DWC2 ISO IN transfer must fit in one microframe
+    }
     xfer->buffer = NULL;
     xfer->ff = ff;
     xfer->total_len = total_bytes;
