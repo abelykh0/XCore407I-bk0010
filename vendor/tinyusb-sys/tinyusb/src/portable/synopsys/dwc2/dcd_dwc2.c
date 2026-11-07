@@ -30,6 +30,10 @@
   #define CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER 2
 #endif
 
+#if CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER < 2 || CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER > 3
+  #error "HS isochronous IN FIFO multiplier must be 2 or 3"
+#endif
+
 #include "device/dcd.h"
 #include "device/usbd.h"
 #include "device/usbd_pvt.h"
