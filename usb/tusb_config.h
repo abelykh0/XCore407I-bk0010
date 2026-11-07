@@ -30,9 +30,14 @@
 #define CFG_TUD_ENDPOINT0_SIZE 64
 #define CFG_TUD_ENDPOINT0_BUFSIZE 512
 
-// The UVC endpoint carries exactly 3 x 768-byte transactions per microframe.
-// TinyUSB's class staging buffer must hold one complete 2304-byte transfer,
-// not a full video frame. Keep every individual USB DMA buffer <= 4096 bytes.
+// The STM32F407 OTG_HS has 1024 words (4096 bytes) of shared DWC2 FIFO RAM.
+// TinyUSB's DWC2 allocator accounts for RX FIFO, DMA endpoint-info words, EP0,
+// audio TX and video TX. For 3 x 768-byte UVC transactions it reserves 2 x
+// MPS (1536 bytes) in the video TX FIFO; the DWC2 can refill the third packet
+// after the first packet is sent. This is distinct from SRAM DMA buffers.
+//
+// The UVC class staging buffer holds one 2304-byte transfer, not a full frame.
+// Each individual SRAM DMA buffer remains <= 4096 bytes and 4-byte aligned.
 #define CFG_TUD_VIDEO 1
 #define CFG_TUD_VIDEO_STREAMING 1
 #define CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE 2304
