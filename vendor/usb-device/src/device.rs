@@ -52,6 +52,12 @@ pub struct UsbDevice<'a, B: UsbBus> {
     self_powered: bool,
     suspended_device_state: Option<UsbDeviceState>,
     pending_address: u8,
+    // Endpoint events are collected by whichever interrupt polls the bus,
+    // then dispatched only by the designated owner (video timer or audio IRQ).
+    pending_ep_out: u16,
+    pending_ep_in_complete: u16,
+    pending_ep_in_incomplete: u16,
+    pending_ep_setup: u16,
 }
 
 pub(crate) struct Config<'a> {
@@ -112,6 +118,10 @@ impl<B: UsbBus> UsbDevice<'_, B> {
             self_powered: false,
             suspended_device_state: None,
             pending_address: 0,
+            pending_ep_out: 0,
+            pending_ep_in_complete: 0,
+            pending_ep_in_incomplete: 0,
+            pending_ep_setup: 0,
         }
     }
 
@@ -173,6 +183,20 @@ impl<B: UsbBus> UsbDevice<'_, B> {
     /// Strictly speaking the list of classes is allowed to change between polls if the device has
     /// been reset, which is indicated by `state` being equal to [`UsbDeviceState::Default`].
     pub fn poll(&mut self, classes: &mut ClassList<'_, B>) -> bool {
+        self.poll_with_endpoint_mask(classes, u16::MAX)
+    }
+
+    /// Poll the shared USB controller, but dispatch endpoint events only for
+    /// endpoints selected by endpoint_mask. Events for other endpoints are
+    /// retained until their designated polling context calls this method.
+    ///
+    /// This supports composite devices that assign distinct service contexts
+    /// to separate endpoints. Calls must still be serialized.
+    pub fn poll_with_endpoint_mask(
+        &mut self,
+        classes: &mut ClassList<'_, B>,
+        endpoint_mask: u16,
+    ) -> bool {
         let pr = self.bus.poll();
 
         if self.device_state == UsbDeviceState::Suspend {
@@ -200,8 +224,29 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                 ep_in_incomplete,
                 ep_setup,
             } => {
-                // Combine bit fields for quick tests
+                // Preserve events consumed from the controller by the other
+                // service context. EP0/control events belong to the caller
+                // whose endpoint mask includes bit zero.
+                self.pending_ep_out |= ep_out;
+                self.pending_ep_in_complete |= ep_in_complete;
+                self.pending_ep_in_incomplete |= ep_in_incomplete;
+                self.pending_ep_setup |= ep_setup;
+
+                let ep_out = self.pending_ep_out & endpoint_mask;
+                let ep_in_complete = self.pending_ep_in_complete & endpoint_mask;
+                let ep_in_incomplete = self.pending_ep_in_incomplete & endpoint_mask;
+                let ep_setup = self.pending_ep_setup & endpoint_mask;
+
+                self.pending_ep_out &= !endpoint_mask;
+                self.pending_ep_in_complete &= !endpoint_mask;
+                self.pending_ep_in_incomplete &= !endpoint_mask;
+                self.pending_ep_setup &= !endpoint_mask;
+
+                // Combine only events owned by this polling context.
                 let mut eps = ep_out | ep_in_complete | ep_in_incomplete | ep_setup;
+                if eps == 0 {
+                    return false;
+                }
 
                 // Pending events for endpoint 0?
                 if (eps & 1) != 0 {
@@ -343,6 +388,14 @@ impl<B: UsbBus> UsbDevice<'_, B> {
         }
 
         false
+    }
+
+    /// Endpoint numbers with deferred events waiting for another service context.
+    pub fn pending_endpoint_events(&self) -> u16 {
+        self.pending_ep_out
+            | self.pending_ep_in_complete
+            | self.pending_ep_in_incomplete
+            | self.pending_ep_setup
     }
 
     fn control_in(&mut self, classes: &mut ClassList<'_, B>, req: control::Request) -> Result<()> {
