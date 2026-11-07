@@ -112,13 +112,13 @@ fn main() {
             &target,
             "-fvisibility=default",
             "-fshort-enums",
-            "-Iusb",
-            &format!("-I{tinyusb_root}/src"),
-            &format!("-I{cmsis_device}"),
-            &format!("-I{cmsis_core}"),
-            &format!("-I{cmsis_st_device}"),
-            "-DSTM32F407xx",
         ])
+        .clang_arg("-Iusb")
+        .clang_arg(format!("-I{tinyusb_root}/src"))
+        .clang_arg(format!("-I{cmsis_device}"))
+        .clang_arg(format!("-I{cmsis_core}"))
+        .clang_arg(format!("-I{cmsis_st_device}"))
+        .clang_arg("-DSTM32F407xx")
         .clang_args(&include_paths)
         .generate()
         .expect("Unable to generate TinyUSB bindings");
