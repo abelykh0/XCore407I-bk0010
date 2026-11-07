@@ -1,4 +1,4 @@
-use std::{env, fs, path::Path};
+use std::{env, path::Path};
 
 use cc::Build;
 
@@ -120,7 +120,6 @@ fn main() {
             "-DSTM32F407xx",
         ])
         .clang_args(&include_paths)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("Unable to generate TinyUSB bindings");
 
