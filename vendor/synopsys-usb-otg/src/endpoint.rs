@@ -28,9 +28,9 @@ static ISO_INCOMPLETE_DIEPINT: [core::sync::atomic::AtomicU32; 9] =
 static ISO_INCOMPLETE_FNSOF: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
 
-/// Full 14-bit microframe targeted by each armed high-speed isochronous IN transfer.
-/// Bit 31 marks the entry valid; bits 13:0 hold the target microframe number.
-#[cfg(all(feature = "internal-dma", feature = "hs"))]
+/// Full 14-bit frame number targeted by each armed high-speed isochronous IN transfer.
+/// Bit 31 marks the entry valid; bits 13:0 hold the target frame number.
+#[cfg(feature = "hs")]
 static ISO_IN_TARGET_FRAME: [core::sync::atomic::AtomicU32; 9] =
     [const { core::sync::atomic::AtomicU32::new(0) }; 9];
 
@@ -177,7 +177,7 @@ impl EndpointIn {
     /// Abort a missed isochronous IN transaction and flush its TX FIFO.
     /// Returns true when an enabled isochronous endpoint was successfully
     /// stopped, matching the STM32 HAL's incomplete-ISO interrupt handling.
-    #[cfg(feature = "internal-dma")]
+    #[cfg(feature = "hs")]
     pub fn abort_iso_incomplete(&self, current_frame: u32) -> bool {
         if !matches!(self.common.descriptor.ep_type, EndpointType::Isochronous { .. })
             || self.index() == 0
@@ -261,7 +261,7 @@ impl EndpointIn {
     }
 
     /// Reinitialize an isochronous endpoint after repeated incomplete frames.
-    #[cfg(feature = "internal-dma")]
+    #[cfg(feature = "hs")]
     pub(crate) fn recover_iso_endpoint_hw(&self) {
         if matches!(self.common.descriptor.ep_type, EndpointType::Isochronous { .. }) {
             critical_section::with(|cs| {
@@ -285,8 +285,8 @@ impl EndpointIn {
         #[cfg(feature = "hs")]
         {
             if !matches!(self.common.descriptor.ep_type, EndpointType::Isochronous { .. })
-                || !(1..=2).contains(&packet_count)
-                || !(1..=2).contains(&transactions_per_microframe)
+                || !(1..=3).contains(&packet_count)
+                || !(1..=3).contains(&transactions_per_microframe)
                 || packet_count > transactions_per_microframe
             {
                 return Err(UsbError::Unsupported);
@@ -347,8 +347,8 @@ impl EndpointIn {
         #[cfg(feature = "hs")]
         {
             if !matches!(self.common.descriptor.ep_type, EndpointType::Isochronous { .. })
-                || !(1..=2).contains(&packet_count)
-                || !(1..=2).contains(&transactions_per_microframe)
+                || !(1..=3).contains(&packet_count)
+                || !(1..=3).contains(&transactions_per_microframe)
                 || packet_count > transactions_per_microframe
             {
                 return Err(UsbError::Unsupported);
@@ -456,7 +456,6 @@ impl EndpointIn {
             // frame. Match STM32's LL driver: queue odd when the received SOF
             // frame number is even, and vice versa.
             let frame = read_reg!(otg_device, self.usb.device(), DSTS, FNSOF);
-            #[cfg(feature = "internal-dma")]
             ISO_IN_TARGET_FRAME[self.index() as usize].store(
                 0x8000_0000 | (frame.wrapping_add(1) & 0x3fff),
                 Ordering::Relaxed,
