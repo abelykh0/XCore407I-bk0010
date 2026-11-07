@@ -207,41 +207,41 @@ impl BkEmulatorAudio {
         )
     }
 
-    fn fill_packet_from_ring(&mut self, packet: &mut [u8]) {
-        if !PCM_READY.load(Ordering::Acquire) {
-            for i in 0..SAMPLES_PER_MICROFRAME {
-                let offset = i * 2;
-                packet[offset..offset + 2].copy_from_slice(&self.last_sample.to_le_bytes());
-            }
-            return;
-        }
-
-        let tail = PCM_TAIL.load(Ordering::Relaxed);
-        let head = PCM_HEAD.load(Ordering::Acquire);
-        let available = head.wrapping_sub(tail).min(SAMPLES_PER_MICROFRAME as u32);
-        for i in 0..available as usize {
-            let slot = (tail.wrapping_add(i as u32) & PCM_RING_MASK) as usize;
-            let sample = unsafe {
-                ptr::addr_of!(PCM_RING).cast::<i16>().add(slot).read()
-            };
-            self.last_sample = sample;
+fn fill_packet_from_ring(last_sample: &mut i16, packet: &mut [u8]) {
+    if !PCM_READY.load(Ordering::Acquire) {
+        for i in 0..SAMPLES_PER_MICROFRAME {
             let offset = i * 2;
-            packet[offset..offset + 2].copy_from_slice(&sample.to_le_bytes());
+            packet[offset..offset + 2].copy_from_slice(&last_sample.to_le_bytes());
         }
-
-        for i in available as usize..SAMPLES_PER_MICROFRAME {
-            let offset = i * 2;
-            packet[offset..offset + 2].copy_from_slice(&self.last_sample.to_le_bytes());
-        }
-
-        if available != 0 {
-            PCM_TAIL.store(tail.wrapping_add(available), Ordering::Release);
-        }
-        let missing = SAMPLES_PER_MICROFRAME as u32 - available;
-        if missing != 0 {
-            PCM_UNDERRUNS.fetch_add(missing, Ordering::Relaxed);
-        }
+        return;
     }
+
+    let tail = PCM_TAIL.load(Ordering::Relaxed);
+    let head = PCM_HEAD.load(Ordering::Acquire);
+    let available = head.wrapping_sub(tail).min(SAMPLES_PER_MICROFRAME as u32);
+    for i in 0..available as usize {
+        let slot = (tail.wrapping_add(i as u32) & PCM_RING_MASK) as usize;
+        let sample = unsafe {
+            ptr::addr_of!(PCM_RING).cast::<i16>().add(slot).read()
+        };
+        *last_sample = sample;
+        let offset = i * 2;
+        packet[offset..offset + 2].copy_from_slice(&sample.to_le_bytes());
+    }
+
+    for i in available as usize..SAMPLES_PER_MICROFRAME {
+        let offset = i * 2;
+        packet[offset..offset + 2].copy_from_slice(&last_sample.to_le_bytes());
+    }
+
+    if available != 0 {
+        PCM_TAIL.store(tail.wrapping_add(available), Ordering::Release);
+    }
+    let missing = SAMPLES_PER_MICROFRAME as u32 - available;
+    if missing != 0 {
+        PCM_UNDERRUNS.fetch_add(missing, Ordering::Relaxed);
+    }
+}
 }
 
 impl Default for BkEmulatorAudio {
@@ -283,7 +283,7 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
                 PACKET_BYTES,
             )
         };
-        self.fill_packet_from_ring(packet);
+        fill_packet_from_ring(&mut self.last_sample, packet);
 
         // Persistent DMA-visible SRAM; do not modify until completion callback.
         let dma_bytes = unsafe {
