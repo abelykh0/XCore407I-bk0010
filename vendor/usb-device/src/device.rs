@@ -766,6 +766,10 @@ impl<B: UsbBus> UsbDevice<'_, B> {
         self.suspended_device_state = None; // We may reset during Suspend
         self.remote_wakeup_enabled = false;
         self.pending_address = 0;
+        self.pending_ep_out = 0;
+        self.pending_ep_in_complete = 0;
+        self.pending_ep_in_incomplete = 0;
+        self.pending_ep_setup = 0;
 
         self.control.reset();
 
