@@ -22,7 +22,7 @@ use xcore407i_blinker::usb_uvc::{
 
 // UVC EP1 and control EP0 are serviced directly by OTG_HS.
 // UAC2 is not instantiated in this experiment.
-const OTG_HS_PRIORITY: u8 = 0;
+const OTG_HS_PRIORITY: u8 = 3;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
 
