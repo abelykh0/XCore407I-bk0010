@@ -405,8 +405,9 @@ fn main() -> ! {
             }
         }
 
-        // Feed USB audio from a precomputed 1 kHz tone, independent of BK state.
-        audio_pcm_producer.produce_tone();
+        // Isolation experiment: tone generation and audio packet submission
+        // are both disabled. UAC2 remains initialized and USB polling continues.
+        // audio_pcm_producer.produce_tone();
 
         // Snapshot emulator throughput once per RTC second. PDP ticks, not
         // STM32 clock cycles or instruction count, define emulated time.
