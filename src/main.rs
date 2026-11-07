@@ -19,13 +19,9 @@ use xcore407i_blinker::rtc;
 use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
 };
-use xcore407i_blinker::usb_audio::{AudioPcmProducer, BkEmulatorAudio};
 
-// Video endpoint EP1 is polled at the HS microframe cadence.
-// Audio endpoint EP2 is serviced from OTG_HS. Both contexts share one
-// serialized UsbDevice and dispatch only their assigned endpoint events.
-const VIDEO_POLL_TIMER_HZ: u32 = 8_000;
-const VIDEO_POLL_TIMER_PRIORITY: u8 = 0;
+// UVC EP1 and control EP0 are serviced directly by OTG_HS.
+// UAC2 is not instantiated in this experiment.
 const OTG_HS_PRIORITY: u8 = 0;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
@@ -104,15 +100,9 @@ unsafe extern "C" {
 type BoardUsbBus = UsbBus<F407UsbHs>;
 type BoardUsbDevice = UsbDevice<'static, BoardUsbBus>;
 type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
-type BoardAudioHandler = BkEmulatorAudio;
-type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
-
-// These pointers are published before either USB service context is enabled.
-// TIM2 and OTG_HS have equal preemption priority and are the only mutable
-// owners of the shared USB objects; main() must not access them.
+// OTG_HS is the sole mutable owner of the USB device and UVC class.
 static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut());
 static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
-static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
 
 #[entry]
 fn main() -> ! {
@@ -181,9 +171,6 @@ fn main() -> ! {
     // The large endpoint buffers remain in their existing DMA-visible SRAM
     // allocation. The UsbDevice itself remains in CCM as in the original code.
     static mut CAMERA: MaybeUninit<BoardUvcClass> = MaybeUninit::uninit();
-    static mut AUDIO_IMPL: MaybeUninit<BoardAudioHandler> = MaybeUninit::uninit();
-    static mut AUDIO: MaybeUninit<BoardAudioClass> = MaybeUninit::uninit();
-
     #[unsafe(link_section = ".ccmram.usb_device")]
     static mut USB_DEVICE: MaybeUninit<BoardUsbDevice> = MaybeUninit::uninit();
 
@@ -202,42 +189,6 @@ fn main() -> ! {
         camera_ptr.write(
             UvcUsbClass::new(bus).expect("UVC USB class initialization failed")
         );
-    }
-
-    let audio_ptr = unsafe {
-        (*ptr::addr_of_mut!(AUDIO)).as_mut_ptr()
-    };
-
-    // Keep the UAC2 handler in static storage for the lifetime of the class.
-    let audio_impl_ptr = unsafe {
-        (*ptr::addr_of_mut!(AUDIO_IMPL)).as_mut_ptr()
-    };
-    unsafe {
-        audio_impl_ptr.write(BkEmulatorAudio::new());
-    }
-    let audio_impl: &'static mut BoardAudioHandler = unsafe { &mut *audio_impl_ptr };
-
-    let audio_class = usbd_uac2::UsbAudioClassConfig::new(
-        usbd_uac2::UsbSpeed::High,
-        usbd_uac2::constants::FunctionCode::SoundRecorder,
-        audio_impl,
-    )
-    .with_input_config(
-        usbd_uac2::TerminalConfig::<usb_device::endpoint::In>::builder()
-            .base_id(4)
-            .num_channels(1)
-            .format(usbd_uac2::descriptors::FormatType1 {
-                bytes_per_sample: 2,
-                bit_resolution: 16,
-            })
-            .terminal_type(usbd_uac2::constants::TerminalType::ExtLineConnector)
-            .build(),
-    )
-    .build(bus)
-    .expect("UAC2 Line In class initialization failed");
-
-    unsafe {
-        audio_ptr.write(audio_class);
     }
 
     let usb_ptr = unsafe {
@@ -266,19 +217,11 @@ fn main() -> ! {
     }
 */
     CAMERA_PTR.store(camera_ptr, Ordering::Release);
-    AUDIO_PTR.store(audio_ptr, Ordering::Release);
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
 
-    // TIM2 owns EP0/control and UVC EP1 events at 8 kHz. OTG_HS owns
-    // UAC2 EP2 events. Both handlers have equal preemption priority so they
-    // cannot enter the shared UsbDevice concurrently.
-    configure_video_poll_timer(
-        &device.RCC,
-        &device.TIM2,
-        &mut core.NVIC,
-    );
-
+    // EP0 control and UVC EP1 are both serviced directly by OTG_HS.
     unsafe {
+        core.NVIC.set_priority(interrupt::OTG_HS, OTG_HS_PRIORITY << 4);
         NVIC::unpend(interrupt::OTG_HS);
         NVIC::unmask(interrupt::OTG_HS);
     }
@@ -304,7 +247,6 @@ fn main() -> ! {
     let mut diag_last_cycles = unsafe { bk_get_ticks() };
     let mut diag_last_frames = unsafe { bk_get_frame_count() };
     let mut keyboard_frame_seen = diag_last_frames;
-    let mut audio_pcm_producer = AudioPcmProducer::new();
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -416,7 +358,6 @@ fn main() -> ! {
         }
 
         // Feed USB audio from a precomputed 1 kHz tone, independent of BK state.
-        audio_pcm_producer.produce_tone();
 
         // Snapshot emulator throughput once per RTC second. PDP ticks, not
         // STM32 clock cycles or instruction count, define emulated time.
@@ -452,22 +393,7 @@ fn main() -> ! {
                         if !browser_open {
                             show_file_browser_line(28, &line, false);
 
-                            let (audio_underruns, audio_overflows, _, audio_incomplete, audio_submit_errors, audio_queued) =
-                                BkEmulatorAudio::diagnostics();
-
-                            line.fill(b' ');
-                            used = 0;
-                            append_diag_text(&mut line, &mut used, b"U");
-                            append_diag_number(&mut line, &mut used, audio_underruns);
-                            append_diag_text(&mut line, &mut used, b" E");
-                            append_diag_number(&mut line, &mut used, audio_incomplete);
-                            append_diag_text(&mut line, &mut used, b" O");
-                            append_diag_number(&mut line, &mut used, audio_overflows);
-                            append_diag_text(&mut line, &mut used, b" S");
-                            append_diag_number(&mut line, &mut used, audio_submit_errors);
-                            append_diag_text(&mut line, &mut used, b" Q");
-                            append_diag_number(&mut line, &mut used, audio_queued);
-                            show_file_browser_line(29, &line, false);
+                            // Row 29 intentionally left unused: audio is disabled.
                         }
 
                         diag_last_rtc_second = rtc_second;
@@ -1061,39 +987,16 @@ fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     }
 }
 
-/// DWC2 IRQ service is restricted to UAC2 endpoint EP2. Events for EP1
-/// consumed by the shared controller poll are retained for TIM2 to dispatch.
+/// DWC2 interrupt service owns EP0 control and UVC video endpoint EP1.
+/// Audio is completely absent from this experiment.
 #[interrupt]
 fn OTG_HS() {
     let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
     let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
-    let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
-    if !usb_ptr.is_null() && !camera_ptr.is_null() && !audio_ptr.is_null() {
+    if !usb_ptr.is_null() && !camera_ptr.is_null() {
         let usb = unsafe { &mut *usb_ptr };
         let camera = unsafe { &mut *camera_ptr };
-        let audio = unsafe { &mut *audio_ptr };
-        let _ = usb.poll_with_endpoint_mask(&mut [camera, audio], 1 << 2);
-    }
-}
-
-/// TIM2 owns EP0 and UVC EP1. If this poll consumes an EP2 event before
-/// OTG_HS runs, pend OTG_HS so the audio callback is still serviced promptly.
-#[interrupt]
-fn TIM2() {
-    let tim2 = unsafe { &*pac::TIM2::ptr() };
-    tim2.sr().write(|w| w.uif().clear_bit());
-
-    let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
-    let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
-    let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
-    if !usb_ptr.is_null() && !camera_ptr.is_null() && !audio_ptr.is_null() {
-        let usb = unsafe { &mut *usb_ptr };
-        let camera = unsafe { &mut *camera_ptr };
-        let audio = unsafe { &mut *audio_ptr };
-        let _ = usb.poll_with_endpoint_mask(&mut [camera, audio], 0x0003);
-        if usb.pending_endpoint_events() & (1 << 2) != 0 {
-            unsafe { NVIC::pend(interrupt::OTG_HS); }
-        }
+        let _ = usb.poll_with_endpoint_mask(&mut [camera], 0x0003);
     }
 }
 
