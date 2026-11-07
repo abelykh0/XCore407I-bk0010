@@ -186,7 +186,7 @@ impl<'a, B: UsbBus> UvcUsbClass<'a, B> {
             0,
             Some(self.interface_string),
         )?;
-        // The endpoint descriptor includes two transactions per HS microframe.
+        // The endpoint descriptor advertises three 768-byte transactions per HS microframe.
         writer.endpoint_hs_iso(&self.endpoint, ISO_PACKETS_PER_MICROFRAME - 1)?;
         Ok(())
     }
