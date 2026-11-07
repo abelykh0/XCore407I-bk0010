@@ -231,7 +231,10 @@ impl AudioPcmProducer {
             produced += 1;
         }
 
-        if self.next_sample_time2 <= current_time2 {
+        let queued_now = PCM_HEAD
+            .load(Ordering::Acquire)
+            .wrapping_sub(PCM_TAIL.load(Ordering::Acquire));
+        if queued_now >= PCM_RING_CAPACITY && self.next_sample_time2 <= current_time2 {
             // Samples up to current emulated time cannot be queued. Consume
             // their speaker transitions and advance the fractional sample
             // clock mathematically, rather than iterating over discarded PCM.
