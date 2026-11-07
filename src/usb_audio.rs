@@ -29,6 +29,10 @@ const PCM_RATE_DIVISOR: u64 = AUDIO_SAMPLE_RATE as u64;
 const PCM_RING_CAPACITY: u32 = 1_024;
 const PCM_RING_MASK: u32 = PCM_RING_CAPACITY - 1;
 const PCM_PREFILL_SAMPLES: u32 = 256;
+const PCM_TARGET_QUEUED_SAMPLES: u32 = 480;
+const PCM_RATE_SCALE: u64 = 1_000_000;
+const PCM_RATE_ADJUST_PER_SAMPLE_PPM: i32 = 250;
+const PCM_MAX_RATE_ADJUST_PPM: i32 = 150_000;
 const MAX_PRODUCE_PER_CALL: u32 = 256;
 
 unsafe extern "C" {
@@ -62,6 +66,9 @@ pub struct AudioPcmProducer {
     sample_remainder: u64,
     sample_level: bool,
     pending_edge: Option<(u64, bool)>,
+    filtered_queue_q8: u32,
+    last_control_ticks: u64,
+    rate_adjust_ppm: i32,
 }
 
 impl AudioPcmProducer {
@@ -73,6 +80,9 @@ impl AudioPcmProducer {
             sample_remainder: 0,
             sample_level: false,
             pending_edge: None,
+            filtered_queue_q8: PCM_TARGET_QUEUED_SAMPLES << 8,
+            last_control_ticks: 0,
+            rate_adjust_ppm: 0,
         }
     }
 
@@ -97,6 +107,9 @@ impl AudioPcmProducer {
         self.next_sample_time2 =
             current_ticks.saturating_sub(startup_latency).saturating_mul(2);
         self.sample_remainder = 0;
+        self.filtered_queue_q8 = PCM_TARGET_QUEUED_SAMPLES << 8;
+        self.last_control_ticks = current_ticks;
+        self.rate_adjust_ppm = 0;
     }
 
     fn apply_edges_through(&mut self, sample_time2: u64) {
@@ -145,9 +158,38 @@ impl AudioPcmProducer {
         }
 
         let current_time2 = current_ticks.saturating_mul(2);
-        let tick_rate = PCM_BK_TICKS_PER_SECOND.load(Ordering::Acquire)
+        let base_tick_rate = PCM_BK_TICKS_PER_SECOND.load(Ordering::Acquire)
             .clamp(MIN_BK_TICKS_PER_SECOND, MAX_BK_TICKS_PER_SECOND) as u64;
-        let sample_step_numerator = tick_rate * 2;
+
+        // Close the loop around the actual USB queue depth. A high queue means
+        // the PCM producer is advancing through BK time too slowly, so increase
+        // the effective ticks/sample. A low queue does the opposite. Update at
+        // approximately 1 ms intervals and filter occupancy to avoid pitch jitter.
+        let control_interval = (base_tick_rate / 1_000).max(1);
+        if current_ticks.wrapping_sub(self.last_control_ticks) >= control_interval {
+            self.last_control_ticks = current_ticks;
+            let head = PCM_HEAD.load(Ordering::Acquire);
+            let tail = PCM_TAIL.load(Ordering::Acquire);
+            let queued = head.wrapping_sub(tail).min(PCM_RING_CAPACITY);
+            let queued_q8 = queued << 8;
+            let target_q8 = PCM_TARGET_QUEUED_SAMPLES << 8;
+            if queued_q8 >= self.filtered_queue_q8 {
+                self.filtered_queue_q8 += (queued_q8 - self.filtered_queue_q8) / 8;
+            } else {
+                self.filtered_queue_q8 -= (self.filtered_queue_q8 - queued_q8) / 8;
+            }
+
+            let error_samples =
+                (self.filtered_queue_q8 as i64 - target_q8 as i64) / 256;
+            let adjustment = (error_samples as i32)
+                .saturating_mul(PCM_RATE_ADJUST_PER_SAMPLE_PPM);
+            self.rate_adjust_ppm =
+                adjustment.clamp(-PCM_MAX_RATE_ADJUST_PPM, PCM_MAX_RATE_ADJUST_PPM);
+        }
+
+        let rate_scale = (PCM_RATE_SCALE as i64 + self.rate_adjust_ppm as i64) as u64;
+        let effective_tick_rate = base_tick_rate.saturating_mul(rate_scale) / PCM_RATE_SCALE;
+        let sample_step_numerator = effective_tick_rate * 2;
         let mut produced = 0u32;
 
         while self.next_sample_time2 <= current_time2
@@ -237,10 +279,10 @@ impl BkEmulatorAudio {
 
 fn fill_packet_from_ring(last_sample: &mut i16, packet: &mut [u8]) {
     if !PCM_READY.load(Ordering::Acquire) {
-        for i in 0..SAMPLES_PER_MICROFRAME {
-            let offset = i * 2;
-            packet[offset..offset + 2].copy_from_slice(&last_sample.to_le_bytes());
-        }
+        // No valid PCM has been queued yet: transmit digital silence, not a
+        // stale speaker level left over from a previous stream epoch.
+        *last_sample = 0;
+        packet.fill(0);
         return;
     }
 
@@ -259,7 +301,7 @@ fn fill_packet_from_ring(last_sample: &mut i16, packet: &mut [u8]) {
 
     for i in available as usize..SAMPLES_PER_MICROFRAME {
         let offset = i * 2;
-        packet[offset..offset + 2].copy_from_slice(&last_sample.to_le_bytes());
+        packet[offset..offset + 2].fill(0);
     }
 
     if available != 0 {
@@ -267,6 +309,9 @@ fn fill_packet_from_ring(last_sample: &mut i16, packet: &mut [u8]) {
     }
     let missing = SAMPLES_PER_MICROFRAME as u32 - available;
     if missing != 0 {
+        // An empty ring is silence. Do not hold the previous square-wave level
+        // indefinitely, which can leave a DC offset at the audio output.
+        *last_sample = 0;
         PCM_UNDERRUNS.fetch_add(missing, Ordering::Relaxed);
     }
 }
