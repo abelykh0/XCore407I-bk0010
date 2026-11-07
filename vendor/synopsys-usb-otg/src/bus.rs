@@ -923,10 +923,15 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
                 }
 
                 #[cfg(feature = "internal-dma")]
-                if _oep != 0 {
+                {
+                    // OUT endpoint completion is polled by its assigned
+                    // context; do not depend on the masked global OEPINT bit.
                     for ep in &self.allocator.endpoints_out {
                         if let Some(ep) = ep {
                             let epnum = ep.address().index();
+                            if (endpoint_mask & (1 << epnum)) == 0 {
+                                continue;
+                            }
                             let ep_regs = regs.endpoint_out(epnum);
                             let setup_done = read_reg!(endpoint_out, ep_regs, DOEPINT, STUP);
                             let transfer_done = read_reg!(endpoint_out, ep_regs, DOEPINT, XFRC);
