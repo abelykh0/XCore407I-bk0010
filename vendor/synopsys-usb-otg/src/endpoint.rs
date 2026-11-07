@@ -283,7 +283,7 @@ impl EndpointIn {
         self.write_transfer(buf, 1, 1)
     }
 
-    /// Queue up to two high-speed isochronous packets as one transfer.
+    /// Queue up to three high-speed isochronous packets as one transfer.
     pub fn write_iso_batch(
         &self,
         buf: &[u8],
