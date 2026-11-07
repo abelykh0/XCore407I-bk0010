@@ -447,21 +447,17 @@ fn main() -> ! {
 
                             line.fill(b' ');
                             used = 0;
-                            append_diag_text(&mut line, &mut used, b"AUD U ");
+                            append_diag_text(&mut line, &mut used, b"U");
                             append_diag_number(&mut line, &mut used, audio_underruns);
-                            append_diag_text(&mut line, &mut used, b" E ");
+                            append_diag_text(&mut line, &mut used, b" E");
                             append_diag_number(&mut line, &mut used, audio_incomplete);
-                            show_file_browser_line(31, &line, false);
-
-                            line.fill(b' ');
-                            used = 0;
-                            append_diag_text(&mut line, &mut used, b"AUD O ");
+                            append_diag_text(&mut line, &mut used, b" O");
                             append_diag_number(&mut line, &mut used, audio_overflows);
-                            append_diag_text(&mut line, &mut used, b" SUB ");
+                            append_diag_text(&mut line, &mut used, b" S");
                             append_diag_number(&mut line, &mut used, audio_submit_errors);
-                            append_diag_text(&mut line, &mut used, b" Q ");
+                            append_diag_text(&mut line, &mut used, b" Q");
                             append_diag_number(&mut line, &mut used, audio_queued);
-                            show_file_browser_line(32, &line, false);
+                            show_file_browser_line(31, &line, false);
                         }
 
                         diag_last_rtc_second = rtc_second;
