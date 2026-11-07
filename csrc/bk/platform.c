@@ -475,9 +475,9 @@ int32_t bk_loop(void)
     return return_value;
 }
 
-uint32_t bk_get_ticks(void)
+uint64_t bk_get_ticks(void)
 {
-    return (uint32_t)ticks;
+    return (uint64_t)ticks;
 }
 
 uint32_t bk_get_instruction_count(void)
