@@ -38,7 +38,7 @@ static ISO_IN_TARGET_FRAME: [core::sync::atomic::AtomicU32; 9] =
 
 /// Return the register snapshot taken when an isochronous IN endpoint was
 /// reported incomplete: (DIEPCTL, DIEPTSIZ, DIEPINT, DSTS.FNSOF).
-#[cfg(feature = "internal-dma")]
+#[cfg(feature = "hs")]
 pub fn iso_incomplete_snapshot(index: usize) -> (u32, u32, u32, u32) {
     if index >= 9 {
         return (0, 0, 0, 0);
@@ -52,8 +52,8 @@ pub fn iso_incomplete_snapshot(index: usize) -> (u32, u32, u32, u32) {
     )
 }
 
-/// Non-DMA builds do not collect endpoint register snapshots.
-#[cfg(not(feature = "internal-dma"))]
+/// Full-speed builds do not collect high-speed isochronous snapshots.
+#[cfg(not(feature = "hs"))]
 pub fn iso_incomplete_snapshot(_index: usize) -> (u32, u32, u32, u32) {
     (0, 0, 0, 0)
 }
