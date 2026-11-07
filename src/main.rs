@@ -14,7 +14,7 @@ use synopsys_usb_otg::{UsbBus};
 use usb_device::device::{UsbDevice, UsbDeviceBuilder, UsbVidPid};
 use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
 use xcore407i_blinker::uvc::prepare_next_video_batch;
-use tinyusb_sys as tusb;
+use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
 use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
