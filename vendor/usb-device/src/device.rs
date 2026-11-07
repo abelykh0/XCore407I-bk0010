@@ -197,7 +197,7 @@ impl<B: UsbBus> UsbDevice<'_, B> {
         classes: &mut ClassList<'_, B>,
         endpoint_mask: u16,
     ) -> bool {
-        let bus_result = self.bus.poll();
+        let bus_result = self.bus.poll_with_endpoint_mask(endpoint_mask);
         let pr = match bus_result {
             PollResult::None if self.pending_endpoint_events() != 0 => PollResult::Data {
                 ep_out: 0,
