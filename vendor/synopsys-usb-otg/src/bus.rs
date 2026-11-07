@@ -566,7 +566,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
             write_reg!(otg_global, regs.global(), GINTMSK,
                 USBRST: 1, ENUMDNEM: 1,
                 USBSUSPM: 1, WUIM: 1,
-                IEPINT: 1, RXFLVLM: 1
+                IEPINT: 1, RXFLVLM: 1, IISOIXFRM: 1
             );
             #[cfg(feature = "internal-dma")]
             write_reg!(otg_global, regs.global(), GINTMSK,
@@ -674,13 +674,13 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
     }
 
     fn recover_iso_endpoint(&self, ep_addr: EndpointAddress) {
-        #[cfg(feature = "internal-dma")]
+        #[cfg(feature = "hs")]
         if ep_addr.is_in() && (ep_addr.index() as usize) < USB::ENDPOINT_COUNT {
             if let Some(ep) = &self.allocator.endpoints_in[ep_addr.index() as usize] {
                 ep.recover_iso_endpoint_hw();
             }
         }
-        #[cfg(not(feature = "internal-dma"))]
+        #[cfg(not(feature = "hs"))]
         let _ = ep_addr;
     }
 
@@ -745,10 +745,10 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
 
             if incomplete_iso_in != 0 {
                 write_reg!(otg_global, regs.global(), GINTSTS, IISOIXFR: 1);
-                #[cfg(feature = "internal-dma")]
+                #[cfg(feature = "hs")]
                 {
-                    // Use one controller-wide sample so every endpoint is
-                    // checked against the same current microframe.
+                    // Use one controller-wide frame-number sample so every
+                    // endpoint is checked against the same isochronous frame.
                     let current_frame =
                         read_reg!(otg_device, regs.device(), DSTS, FNSOF);
                     for ep in self.allocator.endpoints_in.iter().flatten() {
