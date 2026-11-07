@@ -45,6 +45,10 @@ uint16_t port0177716 = 0x0040;
 uint16_t port0177664 = 01330;
 uint16_t port0177714 = 0;
 
+// PDP timing: one BK frame is 60,000 emulated CPU ticks (50 Hz).
+static uint32_t bk_frame_count;
+static double bk_next_frame_tick = 60000.0;
+
 // Audio output transition queue. The emulator is the single producer
 // (thread context); USB Audio consumes transitions from the TIM2 ISR.
 #define BK_AUDIO_EDGE_CAPACITY 512u
@@ -152,6 +156,9 @@ void bk_reset(void)
     pdp.total = 0;
     pdp.look_time = 0;
     pdp.regs[PC] = MONITOR_BASE;
+    ticks = 0.0;
+    bk_frame_count = 0;
+    bk_next_frame_tick = 60000.0;
 
     for (i = 0; i < RAM_AVAILABLE; i += 4) {
         RamBuffer[i] = 0xFF;
@@ -412,13 +419,17 @@ int32_t bk_loop(void)
     if (stop_irq_pending && ((p->psw >> 5) & 7) < 5) {
         stop_irq_pending = 0;
         (void)service(004);
-        p->total++;
         return return_value;
     }
 
     result = ll_word(p, p->regs[PC], &p->ir);
     p->regs[PC] += 2;
-    if (result == OK) result = itab[p->ir >> 6].func(p);
+    if (result == OK) {
+        result = itab[p->ir >> 6].func(p);
+        // Charge the decoded instruction using the original PDP-11 timing table.
+        // This also applies when execution raises an instruction exception.
+        timing(p);
+    }
 
     if (result != OK) {
         switch (result) {
@@ -454,5 +465,39 @@ int32_t bk_loop(void)
 
     int priority = (p->psw >> 5) & 7;
     if (pending_interrupts && priority != 7) ev_fire(priority);
+
+    // Publish emulated frame boundaries from PDP ticks, not MCU time.
+    while (ticks >= bk_next_frame_tick) {
+        bk_frame_count++;
+        bk_next_frame_tick += 60000.0;
+        return_value = 1;
+    }
     return return_value;
+}
+
+uint32_t bk_get_ticks(void)
+{
+    return (uint32_t)ticks;
+}
+
+uint32_t bk_get_instruction_count(void)
+{
+    return (uint32_t)pdp.total;
+}
+
+uint32_t bk_get_frame_count(void)
+{
+    return bk_frame_count;
+}
+
+uint32_t bk_run_batch(uint32_t instruction_budget)
+{
+    uint32_t start_frame = bk_frame_count;
+    uint32_t executed = 0;
+
+    while (executed < instruction_budget && bk_frame_count == start_frame) {
+        (void)bk_loop();
+        executed++;
+    }
+    return executed;
 }
