@@ -256,6 +256,6 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
             PCM_ACTIVE.store(false, Ordering::Release);
             PCM_READY.store(false, Ordering::Release);
             self.dma_in_flight = false;
-}
+        }
     }
 }
