@@ -19,6 +19,7 @@ use xcore407i_blinker::rtc;
 use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
 };
+use xcore407i_blinker::usb_audio::{AudioPcmProducer, BkEmulatorAudio};
 
 // USB polling timer runs at 8 kHz (125 us between polls).
 const USB_POLL_TIMER_HZ: u32 = 8_000;
@@ -100,11 +101,14 @@ unsafe extern "C" {
 type BoardUsbBus = UsbBus<F407UsbHs>;
 type BoardUsbDevice = UsbDevice<'static, BoardUsbBus>;
 type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
+type BoardAudioHandler = BkEmulatorAudio;
+type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
 
 // These pointers are published once, before TIM2 is enabled. After that,
 // TIM2 is the sole owner of both mutable objects. main() must not access them.
 static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut());
 static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
+static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
 
 #[entry]
 fn main() -> ! {
@@ -173,6 +177,8 @@ fn main() -> ! {
     // The large endpoint buffers remain in their existing DMA-visible SRAM
     // allocation. The UsbDevice itself remains in CCM as in the original code.
     static mut CAMERA: MaybeUninit<BoardUvcClass> = MaybeUninit::uninit();
+    static mut AUDIO_IMPL: MaybeUninit<BoardAudioHandler> = MaybeUninit::uninit();
+    static mut AUDIO: MaybeUninit<BoardAudioClass> = MaybeUninit::uninit();
 
     #[unsafe(link_section = ".ccmram.usb_device")]
     static mut USB_DEVICE: MaybeUninit<BoardUsbDevice> = MaybeUninit::uninit();
@@ -192,6 +198,42 @@ fn main() -> ! {
         camera_ptr.write(
             UvcUsbClass::new(bus).expect("UVC USB class initialization failed")
         );
+    }
+
+    let audio_ptr = unsafe {
+        (*ptr::addr_of_mut!(AUDIO)).as_mut_ptr()
+    };
+
+    // Keep the UAC2 handler in static storage for the lifetime of the class.
+    let audio_impl_ptr = unsafe {
+        (*ptr::addr_of_mut!(AUDIO_IMPL)).as_mut_ptr()
+    };
+    unsafe {
+        audio_impl_ptr.write(BkEmulatorAudio::new());
+    }
+    let audio_impl: &'static mut BoardAudioHandler = unsafe { &mut *audio_impl_ptr };
+
+    let audio_class = usbd_uac2::UsbAudioClassConfig::new(
+        usbd_uac2::UsbSpeed::High,
+        usbd_uac2::constants::FunctionCode::SoundRecorder,
+        audio_impl,
+    )
+    .with_input_config(
+        usbd_uac2::TerminalConfig::<usb_device::endpoint::In>::builder()
+            .base_id(4)
+            .num_channels(1)
+            .format(usbd_uac2::descriptors::FormatType1 {
+                bytes_per_sample: 2,
+                bit_resolution: 16,
+            })
+            .terminal_type(usbd_uac2::constants::TerminalType::ExtLineConnector)
+            .build(),
+    )
+    .build(bus)
+    .expect("UAC2 Line In class initialization failed");
+
+    unsafe {
+        audio_ptr.write(audio_class);
     }
 
     let usb_ptr = unsafe {
@@ -220,6 +262,7 @@ fn main() -> ! {
     }
 */
     CAMERA_PTR.store(camera_ptr, Ordering::Release);
+    AUDIO_PTR.store(audio_ptr, Ordering::Release);
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
 
     // Start the independent USB service timers only after all USB objects
@@ -251,6 +294,7 @@ fn main() -> ! {
     let mut diag_last_cycles = unsafe { bk_get_ticks() };
     let mut diag_last_frames = unsafe { bk_get_frame_count() };
     let mut keyboard_frame_seen = diag_last_frames;
+    let mut audio_pcm_producer = AudioPcmProducer::new();
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -360,6 +404,9 @@ fn main() -> ! {
                 }
             }
         }
+
+        // Feed USB audio from a precomputed 1 kHz tone, independent of BK state.
+        audio_pcm_producer.produce_tone();
 
         // Snapshot emulator throughput once per RTC second. PDP ticks, not
         // STM32 clock cycles or instruction count, define emulated time.
@@ -997,10 +1044,12 @@ fn TIM2() {
 
     let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
     let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
-    if !usb_ptr.is_null() && !camera_ptr.is_null() {
+    let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
+    if !usb_ptr.is_null() && !camera_ptr.is_null() && !audio_ptr.is_null() {
         let usb = unsafe { &mut *usb_ptr };
         let camera = unsafe { &mut *camera_ptr };
-        let _ = usb.poll(&mut [camera]);
+        let audio = unsafe { &mut *audio_ptr };
+        let _ = usb.poll(&mut [camera, audio]);
     }
 }
 
