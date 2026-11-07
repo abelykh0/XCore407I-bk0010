@@ -129,7 +129,9 @@ pub trait UsbBus: Sync + Sized {
     }
 
     /// Reinitialize an isochronous IN endpoint after repeated missed frames.
-    fn recover_iso_endpoint(&self, _ep_addr: EndpointAddress) {}
+    fn recover_iso_endpoint(&self, _ep_addr: EndpointAddress) -> bool {
+        false
+    }
 
     /// Reads a single packet of data from the specified endpoint and returns the actual length of
     /// the packet.
