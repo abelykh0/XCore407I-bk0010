@@ -44,6 +44,8 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
     let mut streaming_endpoint_seen = false;
     let mut vc_header_seen = false;
     let mut function_end = descriptors.len();
+    let mut current_interface = u8::MAX;
+    let mut current_alternate = u8::MAX;
 
     while offset + 2 <= descriptors.len() {
         let length = descriptors[offset] as usize;
@@ -60,6 +62,8 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
             let alternate = descriptors[offset + 3];
             let class = descriptors[offset + 5];
             let subclass = descriptors[offset + 6];
+            current_interface = number;
+            current_alternate = alternate;
 
             if offset != 0 && number != UVC_CONTROL_INTERFACE && number != UVC_STREAMING_INTERFACE {
                 function_end = offset;
@@ -83,6 +87,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
                 _ => return None,
             }
         } else if descriptor_type == USB_DESC_CS_INTERFACE
+            && current_interface == UVC_CONTROL_INTERFACE
             && length >= 13
             && descriptors[offset + 2] == 1
         {
@@ -109,6 +114,9 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
             let transactions = (((max_packet >> 11) & 0x03) + 1) as u8;
 
             if address == UVC_STREAM_ENDPOINT {
+                if current_interface != UVC_STREAMING_INTERFACE || current_alternate != 1 {
+                    return None;
+                }
                 if attributes & 0x03 != 0x01
                     || packet_bytes != UVC_MAX_PACKET_SIZE
                     || transactions != UVC_TRANSACTIONS_PER_MICROFRAME
