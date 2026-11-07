@@ -29,17 +29,28 @@ pub struct UsbBus<USB> {
     peripheral: USB,
     regs: Mutex<UsbRegisters>,
     allocator: EndpointAllocator<USB>,
+    // Only these IN endpoints may assert the global endpoint interrupt.
+    irq_in_mask: u16,
 }
 
 impl<USB: UsbPeripheral> UsbBus<USB> {
     /// Constructs a new USB peripheral driver.
     pub fn new(peripheral: USB, ep_memory: &'static mut [u32]) -> UsbBusAllocator<Self> {
+        Self::new_with_irq_in_mask(peripheral, ep_memory, u16::MAX)
+    }
+
+    /// Construct a bus with a restricted IN endpoint interrupt mask.
+    pub fn new_with_irq_in_mask(
+        peripheral: USB,
+        ep_memory: &'static mut [u32],
+        irq_in_mask: u16,
+    ) -> UsbBusAllocator<Self> {
         let bus = UsbBus {
             peripheral,
             regs: Mutex::new(UsbRegisters::new::<USB>()),
             allocator: EndpointAllocator::new(ep_memory),
+            irq_in_mask,
         };
-
         UsbBusAllocator::new(bus)
     }
 
@@ -106,9 +117,11 @@ impl<USB: UsbPeripheral> UsbBus<USB> {
 
         for ep in &self.allocator.endpoints_in {
             if let Some(ep) = ep {
-                // enabling EP TX interrupt
-                modify_reg!(otg_device, regs.device(), DAINTMSK, |v| v
-                    | (0x0001 << ep.address().index()));
+                // Only explicitly assigned IN endpoints may assert OTG_HS.
+                if (self.irq_in_mask & (1 << ep.address().index())) != 0 {
+                    modify_reg!(otg_device, regs.device(), DAINTMSK, |v| v
+                        | (0x0001 << ep.address().index()));
+                }
 
                 ep.configure(cs);
             }
@@ -116,18 +129,7 @@ impl<USB: UsbPeripheral> UsbBus<USB> {
 
         for ep in &self.allocator.endpoints_out {
             if let Some(ep) = ep {
-                if ep.address().index() == 0 {
-                    // enabling RX interrupt from EP0
-                    modify_reg!(otg_device, regs.device(), DAINTMSK, |v| v | 0x00010000);
-                }
-
-                #[cfg(feature = "internal-dma")]
-                {
-                    modify_reg!(otg_device, regs.device(), DAINTMSK, |v| {
-                        v | (1 << (16 + ep.address().index()))
-                    });
-                }
-
+                // OUT endpoint state is sampled by the timer-owned poller.
                 ep.configure(cs);
             }
         }
@@ -572,7 +574,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
             write_reg!(otg_global, regs.global(), GINTMSK,
                 USBRST: 1, ENUMDNEM: 1,
                 USBSUSPM: 1, WUIM: 1,
-                IEPINT: 1, OEPINT: 1, IISOIXFRM: 1
+                IEPINT: 1
             );
 
             // clear pending interrupts
@@ -723,6 +725,10 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
     }
 
     fn poll(&self) -> PollResult {
+        self.poll_with_endpoint_mask(u16::MAX)
+    }
+
+    fn poll_with_endpoint_mask(&self, endpoint_mask: u16) -> PollResult {
         critical_section::with(|cs| {
             let regs = self.regs.borrow(cs);
 
@@ -743,12 +749,13 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
             let incomplete_iso_in = read_reg!(otg_global, regs.global(), GINTSTS, IISOIXFR);
             let mut ep_in_incomplete = 0u16;
 
-            if incomplete_iso_in != 0 {
+            // IISOIXFR is controller-wide. Only the timer owner (EP1 bit set)
+            // clears it and snapshots all missed IN endpoints. Audio events
+            // are retained by UsbDevice until OTG_HS dispatches EP2 callbacks.
+            if incomplete_iso_in != 0 && (endpoint_mask & 0x0002) != 0 {
                 write_reg!(otg_global, regs.global(), GINTSTS, IISOIXFR: 1);
                 #[cfg(feature = "internal-dma")]
                 {
-                    // Use one controller-wide sample so every endpoint is
-                    // checked against the same current microframe.
                     let current_frame =
                         read_reg!(otg_device, regs.device(), DSTS, FNSOF);
                     for ep in self.allocator.endpoints_in.iter().flatten() {
@@ -947,13 +954,16 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
                     }
                 }
 
-                if iep != 0 {
-                    for ep in &self.allocator.endpoints_in {
-                        if let Some(ep) = ep {
-                            let ep_regs = regs.endpoint_in(ep.address().index());
+                // Scan only endpoints assigned to this context, regardless
+                // of global IEPINT (which is masked to the IRQ-owned endpoint).
+                for ep in &self.allocator.endpoints_in {
+                    if let Some(ep) = ep {
+                        let index = ep.address().index();
+                        if (endpoint_mask & (1 << index)) != 0 {
+                            let ep_regs = regs.endpoint_in(index);
                             if read_reg!(endpoint_in, ep_regs, DIEPINT, XFRC) != 0 {
                                 write_reg!(endpoint_in, ep_regs, DIEPINT, XFRC: 1);
-                                ep_in_complete |= 1 << ep.address().index();
+                                ep_in_complete |= 1 << index;
                             }
                         }
                     }
@@ -961,13 +971,15 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
 
                 for ep in &self.allocator.endpoints_out {
                     if let Some(ep) = ep {
+                        let index = ep.address().index();
+                        if (endpoint_mask & (1 << index)) == 0 {
+                            continue;
+                        }
                         match ep.buffer_state() {
-                            EndpointBufferState::DataOut => {
-                                ep_out |= 1 << ep.address().index();
-                            }
+                            EndpointBufferState::DataOut => ep_out |= 1 << index,
                             EndpointBufferState::DataSetup => {
                                 if core_id > 0x0000_1000 {
-                                    ep_setup |= 1 << ep.address().index();
+                                    ep_setup |= 1 << index;
                                 }
                             }
                             EndpointBufferState::Empty => {}
