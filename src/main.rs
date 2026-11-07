@@ -20,13 +20,16 @@ use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
 };
 
-// UVC EP1 and control EP0 are serviced directly by OTG_HS.
+// TIM2 polls USB HS at 16 kHz. EP0 is serviced every tick; EP1 video
+// is serviced on alternate ticks (8 kHz effective polling).
 // UAC2 is not instantiated in this experiment.
-const OTG_HS_PRIORITY: u8 = 3;
+const VIDEO_POLL_TIMER_HZ: u32 = 16_000;
+const VIDEO_POLL_TIMER_PRIORITY: u8 = 3;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
 
 static TICKS: AtomicU32 = AtomicU32::new(0);
+static VIDEO_POLL_PHASE: AtomicBool = AtomicBool::new(false);
 
 // TinyUSB's no-RTOS time source. SysTick increments TICKS once per millisecond.
 #[unsafe(no_mangle)]
@@ -219,12 +222,9 @@ fn main() -> ! {
     CAMERA_PTR.store(camera_ptr, Ordering::Release);
     USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
 
-    // EP0 control and UVC EP1 are both serviced directly by OTG_HS.
-    unsafe {
-        core.NVIC.set_priority(interrupt::OTG_HS, OTG_HS_PRIORITY << 4);
-        NVIC::unpend(interrupt::OTG_HS);
-        NVIC::unmask(interrupt::OTG_HS);
-    }
+    // TIM2 owns all USB HS polling. Keep OTG_HS masked to prevent concurrent
+    // access to the shared UsbDevice; EP1 is serviced on alternate timer ticks.
+    configure_video_poll_timer(&device.RCC, &device.TIM2, &mut core.NVIC);
 
     // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
     // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
@@ -998,6 +998,57 @@ fn OTG_HS() {
     }
 }
 
+/// Configure TIM2 as a 16 kHz USB HS polling source.
+fn configure_video_poll_timer(
+    rcc: &pac::RCC,
+    tim2: &pac::TIM2,
+    nvic: &mut NVIC,
+) {
+    // APB1 timer clock is 84 MHz (SYSCLK=168 MHz, APB1=/4, timer x2).
+    let timer_ticks = 84_000_000 / VIDEO_POLL_TIMER_HZ;
+
+    rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
+    rcc.apb1rstr().modify(|_, w| w.tim2rst().set_bit());
+    rcc.apb1rstr().modify(|_, w| w.tim2rst().clear_bit());
+
+    tim2.cr1().write(|w| w.cen().clear_bit());
+    tim2.dier().write(|w| w.uie().clear_bit());
+    tim2.psc().write(|w| unsafe { w.psc().bits(0) });
+    tim2.arr().write(|w| unsafe { w.arr().bits(timer_ticks - 1) });
+    tim2.egr().write(|w| w.ug().set_bit());
+    tim2.sr().write(|w| w.uif().clear_bit());
+
+    unsafe {
+        nvic.set_priority(interrupt::TIM2, VIDEO_POLL_TIMER_PRIORITY << 4);
+        NVIC::unpend(interrupt::TIM2);
+        NVIC::unmask(interrupt::TIM2);
+    }
+
+    tim2.dier().write(|w| w.uie().set_bit());
+    tim2.cr1().write(|w| w.cen().set_bit());
+}
+
+#[interrupt]
+fn TIM2() {
+    let tim2 = unsafe { &*pac::TIM2::ptr() };
+    tim2.sr().write(|w| w.uif().clear_bit());
+
+    let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
+    let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
+    if usb_ptr.is_null() || camera_ptr.is_null() {
+        return;
+    }
+
+    // EP0 control must be polled every 62.5 us. EP1 video is polled every
+    // second tick, giving it an 8 kHz service rate while preserving 16 kHz
+    // controller polling.
+    let service_video = VIDEO_POLL_PHASE.fetch_xor(true, Ordering::AcqRel);
+    let endpoint_mask = if service_video { 0x0003 } else { 0x0001 };
+    let usb = unsafe { &mut *usb_ptr };
+    let camera = unsafe { &mut *camera_ptr };
+    let _ = usb.poll_with_endpoint_mask(&mut [camera], endpoint_mask);
+}
+
 /// Configure TIM3 as a 1 kHz scheduler tick for the TinyUSB FS host task.
 ///
 /// TinyUSB's host task dispatches callbacks and is not ISR-safe. TIM3 therefore
@@ -1096,10 +1147,10 @@ fn configure_exception_priorities(scb: &mut SCB, nvic: &mut NVIC) {
         let aircr = SCB_AIRCR.read_volatile();
         SCB_AIRCR.write_volatile((aircr & !(7 << 8)) | (0x5FA << 16));
 
-        // OTG_HS is the sole USB device service path. SysTick remains
+        // TIM2 owns USB HS polling; OTG_HS remains masked. SysTick remains
         // enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
-        nvic.set_priority(interrupt::OTG_HS, OTG_HS_PRIORITY << 4);
+        nvic.set_priority(interrupt::TIM2, VIDEO_POLL_TIMER_PRIORITY << 4);
         NVIC::mask(interrupt::TIM2);
         NVIC::unpend(interrupt::TIM2);
         NVIC::mask(interrupt::OTG_HS);
