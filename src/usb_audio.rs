@@ -209,7 +209,7 @@ impl<'a, B: UsbBus> AudioHandler<'a, B> for BkEmulatorAudio {
                 PACKET_BYTES,
             )
         };
-        fill_packet_from_ring(&mut self.last_sample, packet);
+        Self::fill_packet_from_ring(&mut self.last_sample, packet);
 
         // Persistent DMA-visible SRAM; do not modify until completion callback.
         let dma_bytes = unsafe {
