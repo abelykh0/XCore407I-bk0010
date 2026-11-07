@@ -336,8 +336,11 @@ static bool dfifo_alloc(uint8_t rhport, uint8_t ep_addr, uint16_t packet_size, u
     // Check if free space is available. This accounts for the shared 4 KiB
     // HS FIFO RAM, including RX FIFO and DMA endpoint-info words.
     if (_dcd_data.dfifo_top < fifo_size + dwc2->grxfsiz) {
+      const uint16_t free_words = (_dcd_data.dfifo_top > dwc2->grxfsiz)
+                                     ? (uint16_t)(_dcd_data.dfifo_top - dwc2->grxfsiz)
+                                     : 0;
       TU_LOG1("DWC2: EP %02X needs %u TX FIFO words, only %u free (RX=%u)\\r\\n",
-              ep_addr, fifo_size, _dcd_data.dfifo_top - dwc2->grxfsiz, dwc2->grxfsiz);
+              ep_addr, fifo_size, free_words, dwc2->grxfsiz);
       return false;
     }
     _dcd_data.dfifo_top -= fifo_size;
