@@ -6,7 +6,7 @@ use crate::uvc::{
     ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
 };
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use stm32f4::stm32f407::RCC;
 use synopsys_usb_otg::{PhyType, UsbPeripheral};
 use usb_device::bus::{InterfaceNumber, StringIndex, UsbBus, UsbBusAllocator};
@@ -21,6 +21,9 @@ use usb_device::Result;
 const VIDEO_CLASS: u8 = 0x0e;
 const VIDEO_CONTROL_SUBCLASS: u8 = 0x01;
 const VIDEO_STREAMING_SUBCLASS: u8 = 0x02;
+
+static VIDEO_SUBMIT_ERRORS: AtomicU32 = AtomicU32::new(0);
+static VIDEO_RECOVERY_FAILURES: AtomicU32 = AtomicU32::new(0);
 
 /// F407's OTG_HS controller and external USB3300 PHY.
 pub struct F407UsbHs;
@@ -114,6 +117,14 @@ impl<'a, B: UsbBus> UvcUsbClass<'a, B> {
         self.function.set_cpu_metrics(available, generate, submit);
     }
 
+    /// (video batch submission errors, endpoint recovery failures).
+    pub fn diagnostics() -> (u32, u32) {
+        (
+            VIDEO_SUBMIT_ERRORS.load(Ordering::Relaxed),
+            VIDEO_RECOVERY_FAILURES.load(Ordering::Relaxed),
+        )
+    }
+
     fn write_video_control_descriptors(&self, writer: &mut DescriptorWriter) -> Result<()> {
         writer.interface(
             self.control_interface,
@@ -202,9 +213,13 @@ impl<'a, B: UsbBus> UvcUsbClass<'a, B> {
         // Slave mode copies the batch into the endpoint TX FIFO before returning.
         // The descriptor advertises two transactions; a short final batch can
         // contain only one packet.
-        endpoint
-            .write_iso_batch(packet, packet_count, packet_count)
-            .is_ok()
+        match endpoint.write_iso_batch(packet, packet_count, packet_count) {
+            Ok(_) => true,
+            Err(_) => {
+                VIDEO_SUBMIT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                false
+            }
+        }
     }
 }
 
@@ -360,7 +375,9 @@ impl<B: UsbBus> UsbClass<B> for UvcUsbClass<'_, B> {
         // Match the C class recovery: reconfigure the stuck endpoint and
         // restart image packetization from the start of a frame.
         self.incomplete_count = 0;
-        self.endpoint.recover_iso_endpoint();
+        if !self.endpoint.recover_iso_endpoint_hw() {
+            VIDEO_RECOVERY_FAILURES.fetch_add(1, Ordering::Relaxed);
+        }
         if let Some((packet, packet_count)) = self.function.restart_after_iso_recovery() {
             if Self::submit_video_batch(&self.endpoint, packet, packet_count) {
             } else {
