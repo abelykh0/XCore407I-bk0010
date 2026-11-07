@@ -49,4 +49,16 @@
 #define CFG_TUH_ENUMERATION_BUFSIZE 256
 #define CFG_TUH_HID 4
 
+// Fail the build if a future class/configuration change exceeds the F407's
+// per-buffer USB-HS DMA budget. This is per DMA buffer, not aggregate SRAM.
+#if CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE > 4096
+#error "UVC endpoint DMA staging buffer exceeds 4 KiB"
+#endif
+#if CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX > 4096
+#error "UAC2 endpoint DMA staging buffer exceeds 4 KiB"
+#endif
+#if CFG_TUD_ENDPOINT0_BUFSIZE > 4096
+#error "EP0 staging buffer exceeds 4 KiB"
+#endif
+
 #endif
