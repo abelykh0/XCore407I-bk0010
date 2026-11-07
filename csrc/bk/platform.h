@@ -34,7 +34,7 @@ void bk_set_pc(uint16_t start);
 void bk_request_stop_irq(void);
 int32_t bk_loop(void);
 uint32_t bk_run_batch(uint32_t instruction_budget);
-uint32_t bk_get_ticks(void);
+uint64_t bk_get_ticks(void);
 uint32_t bk_get_instruction_count(void);
 uint32_t bk_get_frame_count(void);
 void sendInput(uint8_t *buffer, uint8_t size);
