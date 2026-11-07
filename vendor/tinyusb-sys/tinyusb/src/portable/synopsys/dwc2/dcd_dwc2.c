@@ -789,6 +789,21 @@ bool dcd_edpt_iso_activate(uint8_t rhport,  tusb_desc_endpoint_t const * p_endpo
 
 bool dcd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t* buffer, uint16_t total_bytes, bool is_isr) {
   (void) is_isr;
+
+  // STM32F407 OTG_HS internal DMA can access the 128 KiB SRAM window, but
+  // not CCM RAM. Keep each individual DMA transfer within the application's
+  // 4 KiB buffer budget and require a word-aligned SRAM buffer. The actual
+  // UVC transfer is 768 x 3 = 2304 bytes; audio and EP0 are smaller.
+  if (dma_device_enabled(DWC2_REG(rhport)) && total_bytes != 0) {
+    const uintptr_t dma_addr = (uintptr_t) buffer;
+    const uintptr_t sram_begin = 0x20000000u;
+    const uintptr_t sram_end = 0x20020000u;
+    if (buffer == NULL || (dma_addr & 0x3u) != 0 || total_bytes > 4096u ||
+        dma_addr < sram_begin || dma_addr > sram_end - total_bytes) {
+      return false;
+    }
+  }
+
   uint8_t const epnum = tu_edpt_number(ep_addr);
   uint8_t const dir = tu_edpt_dir(ep_addr);
   xfer_ctl_t* xfer = XFER_CTL_BASE(epnum, dir);
