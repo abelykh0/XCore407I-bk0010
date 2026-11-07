@@ -357,8 +357,6 @@ fn main() -> ! {
             }
         }
 
-        // Feed USB audio from a precomputed 1 kHz tone, independent of BK state.
-
         // Snapshot emulator throughput once per RTC second. PDP ticks, not
         // STM32 clock cycles or instruction count, define emulated time.
         let now_ms = TICKS.load(Ordering::Relaxed);
