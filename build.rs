@@ -1,12 +1,60 @@
-use std::env;
+use std::{env, fs, path::Path};
+
+use cc::Build;
+
+fn add_all_c_files_in_dir(build: &mut Build, path: impl AsRef<Path>) {
+    let pattern = path.as_ref().join("**/*.c");
+    for entry in glob::glob(pattern.to_str().expect("TinyUSB source path is not UTF-8"))
+        .expect("Failed to enumerate TinyUSB C sources")
+    {
+        let source = entry.expect("Failed to read TinyUSB source path");
+        build.file(source);
+    }
+}
+
+// Keep bindgen's view of system include paths consistent with the target C
+// compiler, especially for the Windows-hosted arm-none-eabi-gcc toolchain.
+fn compiler_include_paths() -> Vec<String> {
+    let mut command = Build::new().get_compiler().to_command();
+    command
+        .args(["-E", "-Wp,-v", "-xc", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .expect("Failed to run the target compiler to get include paths");
+    drop(child.stdin.take());
+    let output = child
+        .wait_with_output()
+        .expect("Failed to query target compiler include paths");
+
+    if !output.status.success() {
+        panic!(
+            "Target compiler failed while querying include paths: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    String::from_utf8(output.stderr)
+        .expect("Compiler include-path output was not UTF-8")
+        .lines()
+        .filter_map(|line| line.strip_prefix(' '))
+        .map(|path| format!("-I{path}"))
+        .collect()
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=csrc/bk");
+    println!("cargo:rerun-if-changed=usb/tusb_config.h");
+    println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
 
     let target = env::var("TARGET").expect("TARGET not set");
-    let mut build = cc::Build::new();
-    build
-        .target(&target)
+
+    // Existing BK emulator C implementation.
+    let mut bk = Build::new();
+    bk.target(&target)
         .include("csrc/bk")
         .flag("-std=gnu11")
         .flag("-ffunction-sections")
@@ -23,4 +71,64 @@ fn main() {
             "csrc/bk/platform.c",
         ])
         .compile("bk_cpu");
+
+    // Build TinyUSB directly from its upstream C sources. This removes the
+    // tinyusb-sys Rust wrapper while retaining the existing checked-in
+    // TinyUSB 0.21.0 source tree during the stack migration.
+    let tinyusb_root = "vendor/tinyusb-sys/tinyusb";
+    let cmsis_device = format!("{tinyusb_root}/hw/mcu/st/cmsis_device_f4/Include");
+    let cmsis_core = "vendor/tinyusb-sys/../../../Drivers/CMSIS/Include";
+    let cmsis_st_device = "vendor/tinyusb-sys/../../../Drivers/CMSIS/Device/ST/STM32F4xx/Include";
+
+    let mut tinyusb = Build::new();
+    tinyusb
+        .target(&target)
+        .flag("-std=gnu11")
+        .flag("-ffunction-sections")
+        .flag("-fdata-sections")
+        .include("usb")
+        .include(format!("{tinyusb_root}/src"))
+        .include(&cmsis_device)
+        .include(cmsis_core)
+        .include(cmsis_st_device)
+        .define("STM32F407xx", None);
+    add_all_c_files_in_dir(&mut tinyusb, format!("{tinyusb_root}/src"));
+    tinyusb.compile("tinyusb");
+
+    // Generate bindings for the application's small host/device API surface.
+    // This is binding generation only; there is no tinyusb-sys crate wrapper.
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let include_paths = compiler_include_paths();
+    let bindings = bindgen::Builder::default()
+        .header(format!("{tinyusb_root}/src/tusb.h"))
+        .rustified_enum(".*")
+        .derive_default(true)
+        .layout_tests(false)
+        .use_core()
+        .rustfmt_bindings(true)
+        .ctypes_prefix("core::ffi")
+        .clang_args(&[
+            "-target",
+            &target,
+            "-fvisibility=default",
+            "-fshort-enums",
+            "-Iusb",
+            &format!("-I{tinyusb_root}/src"),
+            &format!("-I{cmsis_device}"),
+            &format!("-I{cmsis_core}"),
+            &format!("-I{cmsis_st_device}"),
+            "-DSTM32F407xx",
+        ])
+        .clang_args(&include_paths)
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .generate()
+        .expect("Unable to generate TinyUSB bindings");
+
+    bindings
+        .write_to_file(format!("{out_dir}/tusb_bindings.rs"))
+        .expect("Failed to write TinyUSB bindings");
+
+    // Track all config and source inputs so incremental builds re-run correctly.
+    println!("cargo:rerun-if-changed={tinyusb_root}/src");
+    println!("cargo:rerun-if-changed=usb/tusb_config.h");
 }
