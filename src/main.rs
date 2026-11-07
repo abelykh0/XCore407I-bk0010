@@ -424,12 +424,12 @@ fn main() -> ! {
                         let cycles = unsafe { bk_get_ticks() };
                         let instructions = unsafe { bk_get_instruction_count() };
                         let frames = unsafe { bk_get_frame_count() };
-                        let cycles_per_second = cycles.wrapping_sub(diag_last_cycles) / elapsed;
+                        let cycles_per_second = cycles.wrapping_sub(diag_last_cycles) / elapsed as u64;
                         let instructions_per_second =
                             instructions.wrapping_sub(diag_last_instructions) / elapsed;
                         let frames_per_second = frames.wrapping_sub(diag_last_frames) / elapsed;
                         let avg_cycles_x10 = if instructions_per_second != 0 {
-                            cycles_per_second.saturating_mul(10) / instructions_per_second
+                            cycles_per_second.saturating_mul(10) / instructions_per_second as u64
                         } else {
                             0
                         };
@@ -447,7 +447,7 @@ fn main() -> ! {
                         append_diag_text(&mut line, &mut used, b"INS/S ");
                         append_diag_number(&mut line, &mut used, instructions_per_second);
                         append_diag_text(&mut line, &mut used, b" AVG ");
-                        append_diag_number(&mut line, &mut used, avg_cycles_x10 / 10);
+                        append_diag_number(&mut line, &mut used, (avg_cycles_x10 / 10) as u32);
                         if used < line.len() {
                             line[used] = b'.';
                             used += 1;
