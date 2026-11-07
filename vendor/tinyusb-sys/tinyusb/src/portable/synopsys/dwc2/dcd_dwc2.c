@@ -23,6 +23,13 @@
 // Debug level for DWC2
 #define DWC2_DEBUG    2
 
+#ifndef CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER
+  // RM0090: a 3-transaction HS isochronous IN endpoint can sustain the
+  // microframe with 2 x MPS in its TX FIFO; the third packet is refilled
+  // after the first packet has gone on the bus.
+  #define CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER 2
+#endif
+
 #include "device/dcd.h"
 #include "device/usbd.h"
 #include "device/usbd_pvt.h"
@@ -273,6 +280,13 @@ static bool dfifo_alloc(uint8_t rhport, uint8_t ep_addr, uint16_t packet_size, u
   TU_ASSERT(epnum < ep_count);
 
   uint16_t fifo_size = (uint16_t)tu_div_ceil(packet_size, 4);
+  if (dir == TUSB_DIR_IN && xfer_type == TUSB_XFER_ISOCHRONOUS) {
+    const dwc2_dsts_t dsts = {.value = dwc2->dsts};
+    if (dsts.enum_speed == DCFG_SPEED_HIGH) {
+      fifo_size = (uint16_t)(fifo_size * CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER);
+    }
+  }
+
   if (dir == TUSB_DIR_OUT) {
     // Calculate required size of RX FIFO
     dfifo_rx_t rx = _dcd_data.rx;
@@ -319,8 +333,13 @@ static bool dfifo_alloc(uint8_t rhport, uint8_t ep_addr, uint16_t packet_size, u
       fifo_size *= 2;
     }
 
-    // Check if free space is available
-    TU_ASSERT(_dcd_data.dfifo_top >= fifo_size + dwc2->grxfsiz);
+    // Check if free space is available. This accounts for the shared 4 KiB
+    // HS FIFO RAM, including RX FIFO and DMA endpoint-info words.
+    if (_dcd_data.dfifo_top < fifo_size + dwc2->grxfsiz) {
+      TU_LOG1("DWC2: EP %02X needs %u TX FIFO words, only %u free (RX=%u)\\r\\n",
+              ep_addr, fifo_size, _dcd_data.dfifo_top - dwc2->grxfsiz, dwc2->grxfsiz);
+      return false;
+    }
     _dcd_data.dfifo_top -= fifo_size;
     // TU_LOG(DWC2_DEBUG, "    TX FIFO %u: allocated %u words at offset %u\r\n", epnum, fifo_size, dfifo_top);
 
