@@ -375,7 +375,7 @@ impl<B: UsbBus> UsbClass<B> for UvcUsbClass<'_, B> {
         // Match the C class recovery: reconfigure the stuck endpoint and
         // restart image packetization from the start of a frame.
         self.incomplete_count = 0;
-        if !self.endpoint.recover_iso_endpoint_hw() {
+        if !self.endpoint.recover_iso_endpoint() {
             VIDEO_RECOVERY_FAILURES.fetch_add(1, Ordering::Relaxed);
         }
         if let Some((packet, packet_count)) = self.function.restart_after_iso_recovery() {
