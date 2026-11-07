@@ -18,7 +18,7 @@ mod target;
 /// USB peripheral driver.
 pub mod bus;
 
-pub use crate::bus::UsbBus;
+pub use crate::bus::{iso_incomplete_event_snapshot, UsbBus};
 pub use crate::endpoint::iso_incomplete_snapshot;
 
 mod ral;
