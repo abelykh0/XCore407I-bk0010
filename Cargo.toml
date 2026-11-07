@@ -16,7 +16,7 @@ libm = "0.2"
 littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"] }
 
 usb-device = { version = "0.3.2", features = ["control-buffer-512"] }
-synopsys-usb-otg = { path = "vendor/synopsys-usb-otg", version = "0.5.0", features = ["hs", "internal-dma"] }
+synopsys-usb-otg = { path = "vendor/synopsys-usb-otg", version = "0.5.0", features = ["hs"] }
 usbd-uac2 = { path = "vendor/usbd-uac2", version = "0.1.2" }
 tinyusb-sys = { path = "vendor/tinyusb-sys", default-features = false, features = ["host", "hid", "stm32f4"] }
 
