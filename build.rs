@@ -1,4 +1,4 @@
-use std::{env, path::Path};
+use std::{env, fs, path::Path};
 
 use cc::Build;
 
@@ -123,9 +123,21 @@ fn main() {
         .generate()
         .expect("Unable to generate TinyUSB bindings");
 
+    let bindings_path = format!("{out_dir}/tusb_bindings.rs");
     bindings
-        .write_to_file(format!("{out_dir}/tusb_bindings.rs"))
+        .write_to_file(&bindings_path)
         .expect("Failed to write TinyUSB bindings");
+
+    // bindgen 0.68 emits plain extern blocks, which are rejected by this
+    // crate's Rust 2024 edition. Mark generated foreign blocks unsafe as
+    // required by Rust 2024. This is valid in Rust 2021 as well.
+    let generated = fs::read_to_string(&bindings_path)
+        .expect("Failed to read generated TinyUSB bindings");
+    let generated = generated
+        .replace("extern \"C\" {", "unsafe extern \"C\" {")
+        .replace("extern \"system\" {", "unsafe extern \"system\" {");
+    fs::write(&bindings_path, generated)
+        .expect("Failed to update generated TinyUSB bindings");
 
     // Track all config and source inputs so incremental builds re-run correctly.
     println!("cargo:rerun-if-changed={tinyusb_root}/src");
