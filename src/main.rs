@@ -468,6 +468,22 @@ fn main() -> ! {
                             append_diag_text(&mut line, &mut used, b" R");
                             append_diag_number(&mut line, &mut used, video_recovery_failures);
                             show_file_browser_line(30, &line, false);
+
+                            let incomplete_mask =
+                                synopsys_usb_otg::iso_incomplete_event_snapshot() & 0xffff;
+                            let (_, video_size, _, _) =
+                                synopsys_usb_otg::iso_incomplete_snapshot(1);
+                            let (_, audio_size, _, _) =
+                                synopsys_usb_otg::iso_incomplete_snapshot(2);
+                            line.fill(b' ');
+                            used = 0;
+                            append_diag_text(&mut line, &mut used, b"I");
+                            append_diag_hex(&mut line, &mut used, incomplete_mask);
+                            append_diag_text(&mut line, &mut used, b" V");
+                            append_diag_hex(&mut line, &mut used, video_size);
+                            append_diag_text(&mut line, &mut used, b" A");
+                            append_diag_hex(&mut line, &mut used, audio_size);
+                            show_file_browser_line(31, &line, false);
                         }
 
                         diag_last_rtc_second = rtc_second;
@@ -911,6 +927,17 @@ fn append_diag_text(line: &mut [u8; 32], used: &mut usize, text: &[u8]) {
             break;
         }
         line[*used] = byte;
+        *used += 1;
+    }
+}
+
+fn append_diag_hex(line: &mut [u8; 32], used: &mut usize, value: u32) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for shift in (0..8).rev() {
+        if *used == line.len() {
+            break;
+        }
+        line[*used] = HEX[((value >> (shift * 4)) & 0x0f) as usize];
         *used += 1;
     }
 }
