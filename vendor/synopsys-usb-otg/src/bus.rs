@@ -673,15 +673,15 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
         }
     }
 
-    fn recover_iso_endpoint(&self, ep_addr: EndpointAddress) {
+    fn recover_iso_endpoint(&self, ep_addr: EndpointAddress) -> bool {
         #[cfg(feature = "hs")]
         if ep_addr.is_in() && (ep_addr.index() as usize) < USB::ENDPOINT_COUNT {
             if let Some(ep) = &self.allocator.endpoints_in[ep_addr.index() as usize] {
-                ep.recover_iso_endpoint_hw();
+                return ep.recover_iso_endpoint_hw();
             }
         }
-        #[cfg(not(feature = "hs"))]
         let _ = ep_addr;
+        false
     }
 
     fn read(&self, ep_addr: EndpointAddress, buf: &mut [u8]) -> Result<usize> {
