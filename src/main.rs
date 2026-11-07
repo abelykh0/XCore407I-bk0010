@@ -19,7 +19,7 @@ use xcore407i_blinker::rtc;
 use xcore407i_blinker::usb_uvc::{
     usb_bus, F407UsbHs, UvcUsbClass,
 };
-use xcore407i_blinker::usb_audio::BkEmulatorAudio;
+use xcore407i_blinker::usb_audio::{AudioPcmProducer, BkEmulatorAudio};
 
 // USB polling timer runs at 8 kHz (125 us between polls).
 const USB_POLL_TIMER_HZ: u32 = 8_000;
@@ -296,6 +296,7 @@ fn main() -> ! {
     let mut diag_last_instructions = unsafe { bk_get_instruction_count() };
     let mut diag_last_frames = unsafe { bk_get_frame_count() };
     let mut keyboard_frame_seen = diag_last_frames;
+    let mut audio_pcm_producer = AudioPcmProducer::new();
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -406,6 +407,10 @@ fn main() -> ! {
             }
         }
 
+        // Convert speaker transitions into a buffered PCM stream in thread
+        // context. TIM2 only consumes six prepared samples per USB microframe.
+        audio_pcm_producer.produce(unsafe { bk_get_ticks() });
+
         // Snapshot emulator throughput once per RTC second. PDP ticks, not
         // STM32 clock cycles or instruction count, define emulated time.
         let now_ms = TICKS.load(Ordering::Relaxed);
@@ -471,6 +476,29 @@ fn main() -> ! {
                         );
                         if !browser_open {
                             show_file_browser_line(29, &line, false);
+
+                            let (underruns, overflows, edge_overflows,
+                                usb_incomplete, usb_submit_errors, queued) =
+                                BkEmulatorAudio::diagnostics();
+                            line.fill(b' ');
+                            used = 0;
+                            append_diag_text(&mut line, &mut used, b"AUD U ");
+                            append_diag_number(&mut line, &mut used, underruns);
+                            append_diag_text(&mut line, &mut used, b" O ");
+                            append_diag_number(&mut line, &mut used, overflows);
+                            append_diag_text(&mut line, &mut used, b" E ");
+                            append_diag_number(&mut line, &mut used, edge_overflows);
+                            append_diag_text(&mut line, &mut used, b" Q ");
+                            append_diag_number(&mut line, &mut used, queued);
+                            show_file_browser_line(30, &line, false);
+
+                            line.fill(b' ');
+                            used = 0;
+                            append_diag_text(&mut line, &mut used, b"USB INC ");
+                            append_diag_number(&mut line, &mut used, usb_incomplete);
+                            append_diag_text(&mut line, &mut used, b" SUB ");
+                            append_diag_number(&mut line, &mut used, usb_submit_errors);
+                            show_file_browser_line(31, &line, false);
                         }
 
                         diag_last_rtc_second = rtc_second;
