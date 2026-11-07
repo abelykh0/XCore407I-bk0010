@@ -398,12 +398,12 @@ pub fn usb_bus() -> core::result::Result<&'static BoardUsbAllocator, UsbBusAlrea
         [0; EP0_OUT_WORDS + EP0_IN_WORDS];
     static mut BUS: MaybeUninit<BoardUsbAllocator> = MaybeUninit::uninit();
     let memory = unsafe { &mut *core::ptr::addr_of_mut!(EP_MEMORY) };
-    // Route only UAC2 EP2 completion interrupts to OTG_HS. UVC EP1 and
-    // EP0 control status are sampled by the TIM2 polling context.
+    // Route EP0 control and UVC EP1 completion interrupts to OTG_HS.
+    // UAC2 EP2 is not allocated in this experiment.
     let bus = synopsys_usb_otg::UsbBus::new_with_irq_in_mask(
         F407UsbHs,
         memory,
-        1 << 2,
+        0x0003,
     );
     let allocator = unsafe {
         (*core::ptr::addr_of_mut!(BUS)).write(bus);
