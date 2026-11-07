@@ -110,7 +110,7 @@ impl BkEmulatorAudio {
         Self {
             active: false,
             dma_in_flight: false,
-            last_sample: -AUDIO_AMPLITUDE,
+            last_sample: 0,
             dma_packet: DmaPacket([0; PACKET_BYTES / 4]),
         }
     }
