@@ -752,9 +752,9 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
             let incomplete_iso_in = read_reg!(otg_global, regs.global(), GINTSTS, IISOIXFR);
             let mut ep_in_incomplete = 0u16;
 
-            // IISOIXFR is controller-wide. Only the timer owner (EP1 bit set)
-            // clears it and snapshots all missed IN endpoints. Audio events
-            // are retained by UsbDevice until OTG_HS dispatches EP2 callbacks.
+            // IISOIXFR is controller-wide. In this experiment OTG_HS owns
+            // EP1 and is the only context that clears it and aborts missed
+            // isochronous IN transfers. No audio endpoint is allocated.
             if incomplete_iso_in != 0 && (endpoint_mask & 0x0002) != 0 {
                 write_reg!(otg_global, regs.global(), GINTSTS, IISOIXFR: 1);
                 #[cfg(feature = "internal-dma")]
