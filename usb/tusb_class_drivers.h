@@ -18,6 +18,8 @@ uint8_t *xcore_usbd_control_buffer(void);
 bool xcore_usbd_edpt_iso_alloc(uint8_t rhport, uint8_t ep_addr, uint16_t packet_size);
 bool xcore_usbd_edpt_iso_activate(uint8_t rhport, const void *endpoint_desc);
 void xcore_usbd_edpt_close(uint8_t rhport, uint8_t ep_addr);
+bool xcore_usbd_edpt_claim(uint8_t rhport, uint8_t ep_addr);
+bool xcore_usbd_edpt_release(uint8_t rhport, uint8_t ep_addr);
 bool xcore_usbd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16_t length);
 bool xcore_usbd_edpt_ready(uint8_t rhport, uint8_t ep_addr);
 
