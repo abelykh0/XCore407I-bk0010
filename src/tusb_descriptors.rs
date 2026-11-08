@@ -128,10 +128,6 @@ static DEVICE_DESCRIPTOR: [u8; 18] = [
     0x09, 0x12, 0x71, 0x40, 0x10, 0x00, 0, 0, 0, 1,
 ];
 
-static DEVICE_QUALIFIER_DESCRIPTOR: [u8; 10] = [
-    10, 0x06, 0x10, 0x02, 0xef, 0x02, 0x01, 64, 1, 0,
-];
-
 // usb-device emitted an empty language list because no device-level strings
 // were configured. Preserve that exact two-byte string descriptor.
 static EMPTY_LANGUAGE_DESCRIPTOR: [u16; 1] = [0x0302];
@@ -164,7 +160,10 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_qualifier_cb() -> *const u8 {
-    DEVICE_QUALIFIER_DESCRIPTOR.as_ptr()
+    // This firmware exposes only the high-speed configuration. Returning a
+    // qualifier would advertise dual-speed support and make the host request
+    // an Other-Speed Configuration descriptor that we do not provide.
+    core::ptr::null()
 }
 
 #[unsafe(no_mangle)]
