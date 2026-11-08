@@ -9,7 +9,7 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
-use crate::usb_audio::BkEmulatorAudio;
+use crate::bk_audio::BkEmulatorAudio;
 use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS};
 
 const USB_DESC_INTERFACE: u8 = 0x04;

@@ -17,16 +17,10 @@ panic-halt = "1.0.0"
 libm = "0.2"
 littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"] }
 
-usb-device = { version = "0.3.2", features = ["control-buffer-512"] }
-synopsys-usb-otg = { path = "vendor/synopsys-usb-otg", version = "0.5.0", features = ["hs", "internal-dma"] }
-usbd-uac2 = { path = "vendor/usbd-uac2", version = "0.1.2" }
 
 [features]
 # Keep a one-packet-per-microframe UVC mode available for host compatibility.
 uvc-single-transaction = []
-
-[patch.crates-io]
-usb-device = { path = "vendor/usb-device" }
 
 [profile.release]
 codegen-units = 1
