@@ -11,9 +11,8 @@ const AUDIO_SAMPLE_PERIOD_CYCLES: u32 = 3_500; // 168 MHz / 48 kHz
 const AUDIO_STARTUP_LATENCY_CYCLES: u32 = 168_000; // 1 ms edge-queue lead
 const AUDIO_AMPLITUDE: i16 = 12_000;
 
-// Word-aligned packet scratch storage. The legacy usb-device path submits it
-// directly to DMA; the TinyUSB path copies it into audiod's software FIFO,
-// then TinyUSB copies FIFO data into its own DMA-capable endpoint buffer.
+// Word-aligned packet scratch storage. TinyUSB copies this packet into its
+// audio FIFO before submitting it through the DWC2 endpoint DMA path.
 
 unsafe extern "C" {
     fn bk_audio_start() -> u8;
@@ -34,8 +33,6 @@ pub struct BkEmulatorAudio {
 }
 
 impl BkEmulatorAudio {
-    const RATES: [RangeEntry<u32>; 1] = [RangeEntry::new_fixed(AUDIO_SAMPLE_RATE)];
-
     pub const fn new() -> Self {
         Self {
             next_sample_cycle: 0,
@@ -119,7 +116,6 @@ impl BkEmulatorAudio {
     pub fn tinyusb_transfer_retired(&mut self) {
         self.dma_in_flight = false;
     }
-
 }
 
 impl Default for BkEmulatorAudio {
