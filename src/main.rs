@@ -341,10 +341,6 @@ fn main() -> ! {
             for _ in 0..16 {
                 unsafe { bk_loop(); }
 
-                // Service the PCM producer after every emulator quantum,
-                // regardless of whether video rendering produced a batch.
-                xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
-
                 // Keep video-buffer replenishment independent of audio work.
                 while prepare_next_video_batch(&mut video_renderer) {}
             }
