@@ -327,7 +327,7 @@ fn main() -> ! {
         // batches. This prevents an empty-buffer busy loop from repeatedly
         // entering PendSV and consuming the CPU budget needed for 25-fps UVC.
         if !browser_open && video_batch_produced {
-            unsafe { (0xE000_ED04 as *mut u32).write_volatile(1 << 28); } // ICSR.PENDSVSET
+            unsafe { core::ptr::write_volatile(0xE000_ED04 as *mut u32, 1 << 28); } // ICSR.PENDSVSET
         }
     }
 }
@@ -962,8 +962,8 @@ fn configure_exception_priorities(scb: &mut SCB) {
 
     unsafe {
         // PRIGROUP=0: all implemented priority bits are preemption priority.
-        let aircr = SCB_AIRCR.read_volatile();
-        SCB_AIRCR.write_volatile((aircr & !(7 << 8)) | (0x5FA << 16));
+        let aircr = core::ptr::read_volatile(SCB_AIRCR);
+        core::ptr::write_volatile(SCB_AIRCR, (aircr & !(7 << 8)) | (0x5FA << 16));
 
         // USB controller interrupts preempt the emulator loop. SysTick
         // remains enabled at priority 1 for TinyUSB's millisecond timebase.
@@ -1123,11 +1123,11 @@ fn configure_board_pins(
         let pupdr = gpioc.add(0x0c).cast::<u32>();
 
         // Drive low before switching the pin from its reset input state.
-        bsrr.write_volatile(1 << (1 + 16));
-        moder.write_volatile((moder.read_volatile() & !(0b11 << 2)) | (0b01 << 2));
-        otyper.write_volatile(otyper.read_volatile() & !(1 << 1));
-        ospeedr.write_volatile(ospeedr.read_volatile() & !(0b11 << 2));
-        pupdr.write_volatile(pupdr.read_volatile() & !(0b11 << 2));
+        core::ptr::write_volatile(bsrr, 1 << (1 + 16));
+        core::ptr::write_volatile(moder, (core::ptr::read_volatile(moder) & !(0b11 << 2)) | (0b01 << 2));
+        core::ptr::write_volatile(otyper, core::ptr::read_volatile(otyper) & !(1 << 1));
+        core::ptr::write_volatile(ospeedr, core::ptr::read_volatile(ospeedr) & !(0b11 << 2));
+        core::ptr::write_volatile(pupdr, core::ptr::read_volatile(pupdr) & !(0b11 << 2));
     }
 
     // USB3300 ULPI: all data/control pins use AF10 except PA4 SOF (AF12).
