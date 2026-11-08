@@ -9,6 +9,7 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
+use crate::usb_audio::BkEmulatorAudio;
 use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
@@ -637,30 +638,380 @@ pub extern "C" fn xcore_tud_uvc_task(rhport: u8) {
     }
 }
 
+const UAC_CONTROL_INTERFACE: u8 = 2;
+const UAC_STREAM_INTERFACE: u8 = 3;
+const UAC_STREAM_ENDPOINT: u8 = 0x82;
+const UAC_PACKET_BYTES: u16 = 12;
+const UAC_FUNCTION_LENGTH: usize = 101;
+const UAC_CLOCK_ENTITY: u8 = 1;
+const UAC_SAMPLE_RATE: u32 = 48_000;
+const UAC_CLASS_CUR: u8 = 1;
+const UAC_CLASS_RANGE: u8 = 2;
+const UAC_CLOCK_FREQ_CONTROL: u8 = 1;
+const UAC_CLOCK_VALID_CONTROL: u8 = 2;
+
+static AUDIO_STATE_READY: AtomicBool = AtomicBool::new(false);
+static AUDIO_ENDPOINT_ALLOCATED: AtomicBool = AtomicBool::new(false);
+static mut AUDIO_STATE: MaybeUninit<BkEmulatorAudio> = MaybeUninit::uninit();
+static mut AUDIO_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
+static mut AUDIO_ALT_RESPONSE: u8 = 0;
+static mut AUDIO_ALT_SETTING: u8 = 0;
+
+fn audio_state_ptr() -> Option<*mut BkEmulatorAudio> {
+    if !AUDIO_STATE_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    Some(core::ptr::addr_of_mut!(AUDIO_STATE).cast::<BkEmulatorAudio>())
+}
+
+fn initialize_audio_state() -> bool {
+    if AUDIO_STATE_READY.load(Ordering::Acquire) {
+        return true;
+    }
+    unsafe {
+        core::ptr::addr_of_mut!(AUDIO_STATE)
+            .cast::<BkEmulatorAudio>()
+            .write(BkEmulatorAudio::new());
+    }
+    AUDIO_STATE_READY.store(true, Ordering::Release);
+    true
+}
+
+/// Validate the UAC2 function emitted by the existing usbd-uac2 adapter.
+/// The descriptor bytes and interface/endpoint numbering are intentionally
+/// kept unchanged during this stack migration.
+fn parse_uac2_function(descriptors: &[u8]) -> Option<(usize, usize)> {
+    if descriptors.len() < UAC_FUNCTION_LENGTH
+        || descriptors[0] != 9
+        || descriptors[1] != USB_DESC_INTERFACE
+        || descriptors[2] != UAC_CONTROL_INTERFACE
+        || descriptors[3] != 0
+        || descriptors[4] != 0
+        || descriptors[5] != 0x01
+        || descriptors[6] != 0x01
+        || descriptors[7] != 0x20
+    {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    let mut ac_header = false;
+    let mut clock = false;
+    let mut usb_stream_terminal = false;
+    let mut external_input_terminal = false;
+    let mut stream_alt0 = false;
+    let mut stream_alt1 = false;
+    let mut as_general = false;
+    let mut pcm_format = false;
+    let mut endpoint_offset = None;
+    let mut cs_endpoint = false;
+    let mut function_end = 0usize;
+    let mut current_interface = u8::MAX;
+    let mut current_alt = u8::MAX;
+
+    while offset + 2 <= UAC_FUNCTION_LENGTH {
+        let len = descriptors[offset] as usize;
+        let dtype = descriptors[offset + 1];
+        if len < 2 || offset.checked_add(len)? > UAC_FUNCTION_LENGTH {
+            return None;
+        }
+        if dtype == USB_DESC_INTERFACE {
+            if len != 9 { return None; }
+            let number = descriptors[offset + 2];
+            let alternate = descriptors[offset + 3];
+            if offset != 0 && number != UAC_CONTROL_INTERFACE && number != UAC_STREAM_INTERFACE {
+                function_end = offset;
+                break;
+            }
+            current_interface = number;
+            current_alt = alternate;
+            if number == UAC_CONTROL_INTERFACE {
+                if alternate != 0 || descriptors[offset + 4] != 0
+                    || descriptors[offset + 5] != 1 || descriptors[offset + 6] != 1
+                    || descriptors[offset + 7] != 0x20
+                { return None; }
+            } else if number == UAC_STREAM_INTERFACE {
+                if descriptors[offset + 5] != 1 || descriptors[offset + 6] != 2
+                    || descriptors[offset + 7] != 0x20
+                { return None; }
+                match alternate {
+                    0 if descriptors[offset + 4] == 0 && !stream_alt0 => stream_alt0 = true,
+                    1 if descriptors[offset + 4] == 1 && !stream_alt1 => stream_alt1 = true,
+                    _ => return None,
+                }
+            } else {
+                return None;
+            }
+        } else if dtype == USB_DESC_CS_INTERFACE && current_interface == UAC_CONTROL_INTERFACE {
+            match descriptors[offset + 2] {
+                1 => {
+                    if len != 9 || ac_header || descriptors[offset + 3] != 0
+                        || descriptors[offset + 4] != 2 || descriptors[offset + 5] != 7
+                        || u16::from_le_bytes([descriptors[offset + 6], descriptors[offset + 7]]) != 46
+                        || descriptors[offset + 8] != 0
+                    { return None; }
+                    ac_header = true;
+                }
+                0x0a => {
+                    if len != 8 || clock || descriptors[offset + 3] != UAC_CLOCK_ENTITY
+                        || descriptors[offset + 4] != 1 || descriptors[offset + 5] != 5
+                    { return None; }
+                    clock = true;
+                }
+                2 => {
+                    if len != 17 || external_input_terminal
+                        || descriptors[offset + 3] != 5
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != 0x0603
+                        || descriptors[offset + 7] != UAC_CLOCK_ENTITY
+                        || descriptors[offset + 8] != 1
+                    { return None; }
+                    external_input_terminal = true;
+                }
+                3 => {
+                    if len != 12 || usb_stream_terminal
+                        || descriptors[offset + 3] != 4
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != 0x0101
+                        || descriptors[offset + 6] != 5
+                        || descriptors[offset + 7] != UAC_CLOCK_ENTITY
+                    { return None; }
+                    usb_stream_terminal = true;
+                }
+                _ => return None,
+            }
+        } else if dtype == USB_DESC_CS_INTERFACE && current_interface == UAC_STREAM_INTERFACE && current_alt == 1 {
+            match descriptors[offset + 2] {
+                1 => {
+                    if len != 16 || as_general || descriptors[offset + 3] != 4
+                        || descriptors[offset + 5] != 1
+                        || u32::from_le_bytes([
+                            descriptors[offset + 6], descriptors[offset + 7],
+                            descriptors[offset + 8], descriptors[offset + 9],
+                        ]) != 1
+                        || descriptors[offset + 10] != 1
+                        || u32::from_le_bytes([
+                            descriptors[offset + 11], descriptors[offset + 12],
+                            descriptors[offset + 13], descriptors[offset + 14],
+                        ]) != 1
+                    { return None; }
+                    as_general = true;
+                }
+                2 => {
+                    if len != 6 || pcm_format || descriptors[offset + 3] != 1
+                        || descriptors[offset + 4] != 2 || descriptors[offset + 5] != 16
+                    { return None; }
+                    pcm_format = true;
+                }
+                _ => return None,
+            }
+        } else if dtype == USB_DESC_ENDPOINT && current_interface == UAC_STREAM_INTERFACE && current_alt == 1 {
+            if len != 7 || endpoint_offset.is_some()
+                || descriptors[offset + 2] != UAC_STREAM_ENDPOINT
+                || descriptors[offset + 3] != 0x05
+                || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != UAC_PACKET_BYTES
+                || descriptors[offset + 6] != 1
+            { return None; }
+            endpoint_offset = Some(offset);
+        } else if dtype == 0x25 && current_interface == UAC_STREAM_INTERFACE && current_alt == 1 {
+            if len != 8 || descriptors[offset + 2] != 1
+                || descriptors[offset + 3] != 0
+                || descriptors[offset + 4] != 0
+                || descriptors[offset + 5] != 0
+            { return None; }
+            cs_endpoint = true;
+        }
+        offset += len;
+    }
+
+    if function_end == 0 { function_end = offset; }
+    if function_end != UAC_FUNCTION_LENGTH
+        || !ac_header || !clock || !usb_stream_terminal || !external_input_terminal
+        || !stream_alt0 || !stream_alt1 || !as_general || !pcm_format || !cs_endpoint
+    { return None; }
+    Some((function_end, endpoint_offset?))
+}
+
+fn submit_audio_packet(rhport: u8) -> bool {
+    let Some(state) = audio_state_ptr() else { return false; };
+    let packet = unsafe { (&mut *state).tinyusb_prepare_packet() };
+    let Some((buffer, length)) = packet else { return true; };
+    if !unsafe { xcore_usbd_edpt_claim(rhport, UAC_STREAM_ENDPOINT) } {
+        unsafe { (&mut *state).tinyusb_transfer_retired(); }
+        return false;
+    }
+    let submitted = unsafe {
+        xcore_usbd_edpt_xfer(rhport, UAC_STREAM_ENDPOINT, buffer, length)
+    };
+    if !submitted {
+        unsafe {
+            xcore_usbd_edpt_release(rhport, UAC_STREAM_ENDPOINT);
+            (&mut *state).tinyusb_transfer_retired();
+        }
+    }
+    submitted
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_open(
-    _rhport: u8,
-    _interface_desc: *const c_void,
-    _max_len: u16,
+    rhport: u8,
+    interface_desc: *const c_void,
+    max_len: u16,
 ) -> u16 {
-    0
+    if interface_desc.is_null() || max_len as usize < UAC_FUNCTION_LENGTH {
+        return 0;
+    }
+    let descriptors = unsafe {
+        core::slice::from_raw_parts(interface_desc.cast::<u8>(), max_len as usize)
+    };
+    let Some((length, endpoint_offset)) = parse_uac2_function(descriptors) else {
+        return 0;
+    };
+    if !initialize_audio_state() { return 0; }
+    let endpoint_desc = unsafe { descriptors.as_ptr().add(endpoint_offset) };
+    if !AUDIO_ENDPOINT_ALLOCATED.load(Ordering::Acquire) {
+        if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, UAC_STREAM_ENDPOINT, UAC_PACKET_BYTES) } {
+            return 0;
+        }
+        AUDIO_ENDPOINT_ALLOCATED.store(true, Ordering::Release);
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            endpoint_desc,
+            core::ptr::addr_of_mut!(AUDIO_ENDPOINT_DESCRIPTOR).cast::<u8>(),
+            7,
+        );
+    }
+    length as u16
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_audio_reset(_rhport: u8) {
+    if let Some(state) = audio_state_ptr() {
+        unsafe { (&mut *state).tinyusb_set_active(false); }
+    }
+    unsafe { AUDIO_ALT_SETTING = 0; }
+    AUDIO_ENDPOINT_ALLOCATED.store(false, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_control_xfer(
-    _rhport: u8,
-    _stage: u8,
-    _request: *const c_void,
+    rhport: u8,
+    stage: u8,
+    request_ptr: *const c_void,
 ) -> bool {
-    false
+    if request_ptr.is_null() { return false; }
+    let request = unsafe { core::ptr::read_unaligned(request_ptr.cast::<UsbControlRequest>()) };
+    let request_type = request.request_type;
+    let code = request.request;
+    let value = u16::from_le(request.value);
+    let index = u16::from_le(request.index);
+    let length = u16::from_le(request.length);
+    let interface = index as u8;
+
+    if (request_type & REQUEST_TYPE_MASK) == REQUEST_TYPE_STANDARD
+        && (request_type & REQUEST_RECIPIENT_MASK) == REQUEST_RECIPIENT_INTERFACE
+    {
+        if stage != CONTROL_STAGE_SETUP { return true; }
+        match code {
+            REQUEST_GET_INTERFACE => {
+                let alt = match interface {
+                    UAC_CONTROL_INTERFACE => 0,
+                    UAC_STREAM_INTERFACE => unsafe { AUDIO_ALT_SETTING },
+                    _ => return false,
+                };
+                unsafe {
+                    AUDIO_ALT_RESPONSE = alt;
+                    xcore_tud_control_xfer(rhport, request_ptr,
+                        core::ptr::addr_of_mut!(AUDIO_ALT_RESPONSE).cast::<c_void>(), 1)
+                }
+            }
+            REQUEST_SET_INTERFACE => {
+                if length != 0 || (value >> 8) != 0 { return false; }
+                let alternate = value as u8;
+                if interface == UAC_CONTROL_INTERFACE {
+                    if alternate != 0 { return false; }
+                    return unsafe { xcore_tud_control_status(rhport, request_ptr) };
+                }
+                if interface != UAC_STREAM_INTERFACE || alternate > 1 { return false; }
+                if alternate == 1 {
+                    let desc = core::ptr::addr_of!(AUDIO_ENDPOINT_DESCRIPTOR).cast::<c_void>();
+                    if !unsafe { xcore_usbd_edpt_iso_activate(rhport, desc) } { return false; }
+                }
+                unsafe { AUDIO_ALT_SETTING = alternate; }
+                if let Some(state) = audio_state_ptr() {
+                    unsafe { (&mut *state).tinyusb_set_active(alternate == 1); }
+                } else { return false; }
+                if alternate == 0 {
+                    unsafe { xcore_usbd_edpt_close(rhport, UAC_STREAM_ENDPOINT); }
+                } else if !submit_audio_packet(rhport) {
+                    return false;
+                }
+                unsafe { xcore_tud_control_status(rhport, request_ptr) }
+            }
+            _ => false,
+        }
+    } else if (request_type & REQUEST_TYPE_MASK) == REQUEST_TYPE_CLASS
+        && (request_type & REQUEST_RECIPIENT_MASK) == REQUEST_RECIPIENT_INTERFACE
+    {
+        let entity = (index >> 8) as u8;
+        let selector = (value >> 8) as u8;
+        let channel = value as u8;
+        if interface != UAC_CONTROL_INTERFACE || entity != UAC_CLOCK_ENTITY || channel != 0 {
+            return false;
+        }
+        if stage == CONTROL_STAGE_SETUP && (request_type & REQUEST_DIRECTION_IN) != 0 {
+            match (code, selector) {
+                (UAC_CLASS_CUR, UAC_CLOCK_FREQ_CONTROL) => {
+                    let response = UAC_SAMPLE_RATE.to_le_bytes();
+                    let n = (length as usize).min(response.len());
+                    unsafe {
+                        return xcore_tud_control_xfer(rhport, request_ptr,
+                            response.as_ptr() as *mut c_void, n as u16);
+                    }
+                }
+                (UAC_CLASS_CUR, UAC_CLOCK_VALID_CONTROL) => {
+                    static mut VALID: u8 = 1;
+                    unsafe {
+                        return xcore_tud_control_xfer(rhport, request_ptr,
+                            core::ptr::addr_of_mut!(VALID).cast::<c_void>(), length.min(1));
+                    }
+                }
+                (UAC_CLASS_RANGE, UAC_CLOCK_FREQ_CONTROL) => {
+                    static mut RANGE: [u8; 14] = [
+                        1, 0, 0x80, 0xbb, 0, 0x80, 0xbb, 0, 0, 0, 0, 0, 0, 0,
+                    ];
+                    let n = (length as usize).min(14);
+                    unsafe {
+                        return xcore_tud_control_xfer(rhport, request_ptr,
+                            core::ptr::addr_of_mut!(RANGE).cast::<u8>().cast::<c_void>(), n as u16);
+                    }
+                }
+                _ => false,
+            }
+        } else if stage == CONTROL_STAGE_SETUP && (request_type & REQUEST_DIRECTION_IN) == 0 {
+            // The clock is fixed at 48 kHz and its descriptor advertises
+            // read-only frequency/validity controls.
+            false
+        } else {
+            true
+        }
+    } else {
+        false
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_xfer(
-    _rhport: u8,
-    _ep_addr: u8,
-    _result: i32,
+    rhport: u8,
+    ep_addr: u8,
+    result: i32,
     _xferred_bytes: u32,
 ) -> bool {
-    false
+    if ep_addr != UAC_STREAM_ENDPOINT { return false; }
+    let Some(state) = audio_state_ptr() else { return false; };
+    unsafe { (&mut *state).tinyusb_transfer_retired(); }
+    if result == 0 && unsafe { AUDIO_ALT_SETTING } == 1 {
+        submit_audio_packet(rhport)
+    } else {
+        true
+    }
 }
