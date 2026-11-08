@@ -1,5 +1,4 @@
-#include <stdint.h>
-#include "defines.h"
+#include "platform.h"
 
 float ticks = 0.0f;    /* legacy floating-point timing accumulator */
 static uint32_t pdp_cycle_count;
