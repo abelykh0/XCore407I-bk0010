@@ -731,7 +731,10 @@ fn initialize_audio_state() -> bool {
 /// Called by TinyUSB after it has applied SET_INTERFACE to the audio stream.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) -> bool {
-    if interface != UAC_STREAM_INTERFACE || alternate > 1 {
+    if interface != UAC_STREAM_INTERFACE {
+        return true;
+    }
+    if alternate > 1 {
         return false;
     }
     cortex_m::interrupt::free(|_| {
