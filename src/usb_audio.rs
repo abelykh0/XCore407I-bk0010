@@ -81,6 +81,54 @@ impl BkEmulatorAudio {
         }
     }
 
+    /// Start or stop capture from the TinyUSB UAC2 alternate-setting callback.
+    /// The DMA packet remains owned until its transfer callback.
+    pub fn tinyusb_set_active(&mut self, active: bool) {
+        if active {
+            if !self.active {
+                self.sample_level = unsafe { bk_audio_start() != 0 };
+                self.pending_edge = None;
+                self.next_sample_cycle = Self::cycle_counter()
+                    .wrapping_sub(AUDIO_STARTUP_LATENCY_CYCLES);
+                self.dma_in_flight = false;
+                self.active = true;
+            }
+        } else {
+            self.active = false;
+            self.dma_in_flight = false;
+            self.pending_edge = None;
+            unsafe { bk_audio_stop(); }
+        }
+    }
+
+    /// Fill the persistent six-sample DMA packet and mark it in flight.
+    /// The caller submits the returned pointer to EP 0x82 and must not reuse
+    /// the buffer until tinyusb_transfer_retired is called.
+    pub fn tinyusb_prepare_packet(&mut self) -> Option<(*mut u8, u16)> {
+        if !self.active || self.dma_in_flight {
+            return None;
+        }
+        let packet = self.dma_packet.0.as_mut_ptr().cast::<u8>();
+        for sample_offset in 0..SAMPLES_PER_MICROFRAME {
+            let sample_cycle = self.next_sample_cycle;
+            self.apply_edges_through(sample_cycle);
+            let sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
+            unsafe {
+                packet.add(sample_offset * 2)
+                    .cast::<i16>()
+                    .write_unaligned(sample.to_le());
+            }
+            self.next_sample_cycle = self.next_sample_cycle
+                .wrapping_add(AUDIO_SAMPLE_PERIOD_CYCLES);
+        }
+        self.dma_in_flight = true;
+        Some((packet, PACKET_BYTES as u16))
+    }
+
+    pub fn tinyusb_transfer_retired(&mut self) {
+        self.dma_in_flight = false;
+    }
+
 }
 
 impl Default for BkEmulatorAudio {
