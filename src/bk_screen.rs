@@ -59,21 +59,7 @@ impl BkScreen {
         let offset = (addr - VIDEO_START) as usize;
         let y = shifted_row(offset / BYTES_PER_ROW);
         let byte_x = offset % BYTES_PER_ROW;
-        if mode_register == 0 {
-            let x = byte_x * 8;
-            for i in 0..8 {
-                let color = if byte & (1 << i) == 0 { 0x00 } else { 0x3f };
-                crate::camera::set_pixel(x + i, y, color);
-            }
-        } else {
-            let x = byte_x * 4;
-            for i in 0..4 {
-                let color = match (byte >> (i * 2)) & 0x03 {
-                    0 => 0x00, 1 => 0x30, 2 => 0x0c, _ => 0x03,
-                };
-                crate::camera::set_pixel(x + i, y, color);
-            }
-        }
+        crate::camera::set_bk_video_byte(byte_x, y, byte, mode_register == 0);
         true
     }
 
