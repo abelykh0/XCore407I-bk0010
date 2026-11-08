@@ -162,7 +162,7 @@ fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
 
 /// Fill the entire canvas with one uniform palette color.
 ///
-/// `color` is a palette index (0..63), matching `set_demo_pixel()`.
+/// `color` is a palette index (0..63), matching `set_pixel()`.
 /// In color mode the corresponding Cb/Cr pair is written for every pixel;
 /// in B/W mode the corresponding luma value is written for every pixel.
 pub fn clear_demo_canvas(color: u8) {
@@ -313,17 +313,36 @@ pub(crate) fn rotate_bk_canvas_rows(rows: usize) {
 
 /// Change one logical color pixel. Every source pixel expands to a 2x2 block
 /// in the 512x512 NV12 stream, as in the original C color mode.
-pub fn set_demo_pixel(x: usize, y: usize, color: u8) {
+#[inline]
+pub fn set_pixel(x: usize, y: usize, color: u8) {
     let mode = camera_mode();
-    let width = canvas_width_for(mode);
-    if x < width && y < CANVAS_HEIGHT {
+    let width = if mode == CameraMode::Monochrome { WIDTH } else { WIDTH / 2 };
+    if x >= width || y >= CANVAS_HEIGHT {
+        return;
+    }
+
+    let palette_index = (color & 0x3f) as usize;
+    unsafe {
         if mode == CameraMode::Monochrome {
-            write_canvas(y * width + x, GRAYSCALE[(color & 0x3f) as usize]);
+            let offset = y * WIDTH + x;
+            let value = GRAYSCALE[palette_index];
+            if offset < CANVAS_MAIN_BYTES {
+                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset).write(value);
+            } else {
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                    .cast::<u8>().add(offset - CANVAS_MAIN_BYTES).write(value);
+            }
         } else {
-            let uv = UV_PALETTE[(color & 0x3f) as usize];
-            let offset = (y * width + x) * 2;
-            write_canvas(offset, uv[0]);
-            write_canvas(offset + 1, uv[1]);
+            let offset = (y * (WIDTH / 2) + x) * 2;
+            let [u, v] = UV_PALETTE[palette_index];
+            let destination = if offset < CANVAS_MAIN_BYTES {
+                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
+            } else {
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                    .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
+            };
+            destination.write(u);
+            destination.add(1).write(v);
         }
     }
 }
@@ -402,7 +421,7 @@ pub fn show_usb_status(message: &[u8]) {
                 } else {
                     BACKGROUND
                 };
-                set_demo_pixel(
+                set_pixel(
                     character_index * 8 + column,
                     text_row * 8 + row,
                     color,
@@ -438,7 +457,7 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
                 } else {
                     background
                 };
-                set_demo_pixel(column * 8 + x, row * 8 + y, color);
+                set_pixel(column * 8 + x, row * 8 + y, color);
             }
         }
     }
@@ -508,7 +527,7 @@ pub fn show_keyboard_input(message: &[u8]) {
             let bits = FONT8X8[glyph + row];
             for x in 0..8 {
                 let color = if bits & (0x80 >> x) != 0 { FOREGROUND } else { BACKGROUND };
-                set_demo_pixel(column * 8 + x, TEXT_ROW * 8 + row, color);
+                set_pixel(column * 8 + x, TEXT_ROW * 8 + row, color);
             }
         }
     }
@@ -549,7 +568,7 @@ fn draw_text_pixels(text: &[u8; 10], left: usize, top: usize, foreground: u8, ba
                 } else {
                     background
                 };
-                set_demo_pixel(left + character_index * 8 + column, top + row, color);
+                set_pixel(left + character_index * 8 + column, top + row, color);
             }
         }
     }
