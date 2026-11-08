@@ -6,8 +6,6 @@
  */
 #include <stdint.h>
 
-// TEMPORARY A/B TEST: bypass speaker-edge capture to measure its CPU cost.
-#define BK_AUDIO_CAPTURE_TEST_BYPASS 1u
 #include <stddef.h>
 #include "platform.h"
 
@@ -312,7 +310,7 @@ int sl_byte(pdp_regs *p, c_addr addr, d_byte value)
             break;
         case 0177716:
             port0177716 = (uint16_t)((port0177716 & 0xFF00u) | value);
-            if (bk_audio_enabled && !BK_AUDIO_CAPTURE_TEST_BYPASS) {
+            if (bk_audio_enabled) {
                 bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
             }
             break;
