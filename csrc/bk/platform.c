@@ -64,8 +64,6 @@ static void bk_audio_record_level(uint8_t level)
     if (level == bk_audio_level) return;
     bk_audio_level = level;
 
-    if (!bk_audio_enabled) return;
-
     uint16_t head = bk_audio_edge_head;
     uint16_t tail = bk_audio_edge_tail;
     if ((uint16_t)(head - tail) >= BK_AUDIO_EDGE_CAPACITY) {
@@ -303,7 +301,11 @@ int sl_byte(pdp_regs *p, c_addr addr, d_byte value)
             break;
         case 0177716:
             port0177716 = (uint16_t)((port0177716 & 0xFF00u) | value);
-            bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            if (bk_audio_enabled) {
+                if (bk_audio_enabled) {
+                bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            }
+            }
             break;
         case 0177717:
             port0177716 = (uint16_t)((port0177716 & 0x00FFu) | ((uint16_t)value << 8));
