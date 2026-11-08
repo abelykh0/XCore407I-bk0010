@@ -53,7 +53,7 @@ impl BkScreen {
     }
 
     /// Write one packed video byte directly to the camera canvas.
-    /// Camera mode must agree with mode_register: zero for monochrome, nonzero for color.
+    /// mode_register is zero for monochrome and nonzero for color.
     pub fn sl_byte(&self, addr: u32, byte: u8, mode_register: u8) -> bool {
         if !(VIDEO_START..=VIDEO_END).contains(&addr) { return false; }
         let offset = (addr - VIDEO_START) as usize;
