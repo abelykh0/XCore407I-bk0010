@@ -58,6 +58,7 @@ struct ParsedUvcFunction {
 }
 
 static UVC_STATE_READY: AtomicBool = AtomicBool::new(false);
+static UVC_ENDPOINT_ALLOCATED: AtomicBool = AtomicBool::new(false);
 static mut UVC_STATE: MaybeUninit<UvcClass> = MaybeUninit::uninit();
 static mut UVC_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
 static mut UVC_ALT_RESPONSE: u8 = 0;
@@ -74,6 +75,8 @@ unsafe extern "C" {
     fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
     fn xcore_usbd_edpt_iso_activate(rhport: u8, endpoint_desc: *const c_void) -> bool;
     fn xcore_usbd_edpt_close(rhport: u8, ep_addr: u8);
+    fn xcore_usbd_edpt_claim(rhport: u8, ep_addr: u8) -> bool;
+    fn xcore_usbd_edpt_release(rhport: u8, ep_addr: u8) -> bool;
     fn xcore_usbd_edpt_xfer(rhport: u8, ep_addr: u8, buffer: *mut u8, length: u16) -> bool;
     fn xcore_usbd_edpt_ready(rhport: u8, ep_addr: u8) -> bool;
 }
@@ -392,8 +395,11 @@ pub extern "C" fn xcore_tud_uvc_open(
 
     let endpoint_desc = unsafe { descriptors.as_ptr().add(parsed.endpoint_offset) };
     let packet_size = u16::from_le_bytes(unsafe { [*endpoint_desc.add(4), *endpoint_desc.add(5)] }) & 0x07ff;
-    if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, UVC_STREAM_ENDPOINT, packet_size) } {
-        return 0;
+    if !UVC_ENDPOINT_ALLOCATED.load(Ordering::Acquire) {
+        if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, UVC_STREAM_ENDPOINT, packet_size) } {
+            return 0;
+        }
+        UVC_ENDPOINT_ALLOCATED.store(true, Ordering::Release);
     }
     unsafe {
         core::ptr::copy_nonoverlapping(
@@ -410,7 +416,7 @@ pub extern "C" fn xcore_tud_uvc_reset(rhport: u8) {
     let _ = with_uvc_state(|state| {
         let _ = state.set_interface(UVC_STREAMING_INTERFACE, 0);
     });
-    unsafe { xcore_usbd_edpt_close(rhport, UVC_STREAM_ENDPOINT); }
+    UVC_ENDPOINT_ALLOCATED.store(false, Ordering::Release);
 }
 
 fn submit_uvc_batch(rhport: u8, batch: (&'static [u8], u8)) -> bool {
@@ -418,14 +424,21 @@ fn submit_uvc_batch(rhport: u8, batch: (&'static [u8], u8)) -> bool {
     if bytes.is_empty() || bytes.len() > u16::MAX as usize {
         return false;
     }
-    unsafe {
+    if !unsafe { xcore_usbd_edpt_claim(rhport, UVC_STREAM_ENDPOINT) } {
+        return false;
+    }
+    let submitted = unsafe {
         xcore_usbd_edpt_xfer(
             rhport,
             UVC_STREAM_ENDPOINT,
             bytes.as_ptr() as *mut u8,
             bytes.len() as u16,
         )
+    };
+    if !submitted {
+        unsafe { xcore_usbd_edpt_release(rhport, UVC_STREAM_ENDPOINT); }
     }
+    submitted
 }
 
 #[unsafe(no_mangle)]
