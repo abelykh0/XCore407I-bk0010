@@ -150,6 +150,7 @@ void bk_reset(void)
     pdp.ir = 0;
     pdp.ea_addr = 0;
     pdp.total = 0;
+    ticks = 0.0;
     pdp.look_time = 0;
     pdp.regs[PC] = MONITOR_BASE;
 
@@ -418,7 +419,11 @@ int32_t bk_loop(void)
 
     result = ll_word(p, p->regs[PC], &p->ir);
     p->regs[PC] += 2;
-    if (result == OK) result = itab[p->ir >> 6].func(p);
+    if (result == OK) {
+        // Account the PDP instruction's emulated cycle cost before executing it.
+        timing(p);
+        result = itab[p->ir >> 6].func(p);
+    }
 
     if (result != OK) {
         switch (result) {
