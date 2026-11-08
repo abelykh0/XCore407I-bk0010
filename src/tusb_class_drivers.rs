@@ -6,6 +6,7 @@
 //! activation and the complete control/data paths are ready.
 
 use core::ffi::c_void;
+use crate::camera::{HEIGHT, WIDTH};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
@@ -18,6 +19,11 @@ const UVC_STREAMING_INTERFACE: u8 = 1;
 const UVC_STREAM_ENDPOINT: u8 = 0x81;
 const UVC_MAX_PACKET_SIZE: u16 = 768;
 const UVC_TRANSACTIONS_PER_MICROFRAME: u8 = 3;
+const UVC_VS_TOTAL_LENGTH: u16 = 77;
+const UVC_NV12_GUID: [u8; 16] = [
+    0x4e, 0x56, 0x31, 0x32, 0x00, 0x00, 0x10, 0x00,
+    0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+];
 
 /// Validate and measure the complete UVC function beginning at interface 0.
 ///
@@ -43,6 +49,9 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
     let mut streaming_alt1_seen = false;
     let mut streaming_endpoint_seen = false;
     let mut vc_header_seen = false;
+    let mut vs_header_seen = false;
+    let mut nv12_format_seen = false;
+    let mut frame_seen = false;
     let mut function_end = descriptors.len();
     let mut current_interface = u8::MAX;
     let mut current_alternate = u8::MAX;
@@ -76,12 +85,15 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
 
             match (number, alternate, subclass) {
                 (UVC_CONTROL_INTERFACE, 0, USB_SUBCLASS_VIDEO_CONTROL) => {
+                    if descriptors[offset + 4] != 0 { return None; }
                     control_interface_seen = true;
                 }
                 (UVC_STREAMING_INTERFACE, 0, USB_SUBCLASS_VIDEO_STREAMING) => {
+                    if descriptors[offset + 4] != 0 { return None; }
                     streaming_alt0_seen = true;
                 }
                 (UVC_STREAMING_INTERFACE, 1, USB_SUBCLASS_VIDEO_STREAMING) => {
+                    if descriptors[offset + 4] != 1 { return None; }
                     streaming_alt1_seen = true;
                 }
                 _ => return None,
@@ -100,6 +112,64 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
                 return None;
             }
             vc_header_seen = true;
+        } else if descriptor_type == USB_DESC_CS_INTERFACE
+            && current_interface == UVC_STREAMING_INTERFACE
+            && current_alternate == 0
+        {
+            match descriptors[offset + 2] {
+                // VideoStreaming input header emitted by UvcUsbClass.
+                1 => {
+                    if length != 14
+                        || descriptors[offset + 3] != 1
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]])
+                            != UVC_VS_TOTAL_LENGTH
+                        || descriptors[offset + 6] != UVC_STREAM_ENDPOINT
+                    {
+                        return None;
+                    }
+                    vs_header_seen = true;
+                }
+                // Uncompressed format descriptor: exactly one NV12 format.
+                4 => {
+                    if length != 27
+                        || descriptors[offset + 3] != 1
+                        || descriptors[offset + 4] != 1
+                        || descriptors[offset + 5..offset + 21] != UVC_NV12_GUID
+                        || descriptors[offset + 21] != 12
+                    {
+                        return None;
+                    }
+                    nv12_format_seen = true;
+                }
+                // Uncompressed frame descriptor for the configured camera.
+                5 => {
+                    if length != 30
+                        || descriptors[offset + 3] != 1
+                        || descriptors[offset + 4] != 0
+                        || u16::from_le_bytes([descriptors[offset + 5], descriptors[offset + 6]])
+                            != WIDTH as u16
+                        || u16::from_le_bytes([descriptors[offset + 7], descriptors[offset + 8]])
+                            != HEIGHT as u16
+                    {
+                        return None;
+                    }
+                    let frame_bytes = u32::from_le_bytes([
+                        descriptors[offset + 17],
+                        descriptors[offset + 18],
+                        descriptors[offset + 19],
+                        descriptors[offset + 20],
+                    ]);
+                    if frame_bytes != crate::camera::FRAME_BYTES as u32 {
+                        return None;
+                    }
+                    frame_seen = true;
+                }
+                // Color-matching descriptor used by this NV12 function.
+                0x0d => {
+                    if length != 6 { return None; }
+                }
+                _ => return None,
+            }
         } else if descriptor_type == USB_DESC_ENDPOINT {
             if length < 7 {
                 return None;
@@ -135,6 +205,9 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
         && streaming_alt1_seen
         && streaming_endpoint_seen
         && vc_header_seen
+        && vs_header_seen
+        && nv12_format_seen
+        && frame_seen
     {
         Some(function_end)
     } else {
