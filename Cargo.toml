@@ -17,11 +17,6 @@ panic-halt = "1.0.0"
 libm = "0.2"
 littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"] }
 
-
-[features]
-# Keep a one-packet-per-microframe UVC mode available for host compatibility.
-uvc-single-transaction = []
-
 [profile.release]
 codegen-units = 1
 debug = 2
