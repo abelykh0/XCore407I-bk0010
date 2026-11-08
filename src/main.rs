@@ -79,7 +79,7 @@ unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
-    fn bk_try_send_input_byte(value: u8) -> bool;
+    fn bk_try_send_input_byte(value: u8) -> u8;
     fn bk_set_pc(start: u16);
     fn bk_request_stop_irq();
     static mut RamBuffer: [u8; 0x4000];
@@ -1020,7 +1020,7 @@ fn PendSV() {
     } else if elapsed >= PDP_CYCLES_PER_FRAME {
         if let Some(key) = keyboard_queue_peek() {
             // Leave the byte at the queue head if the BK keyboard port is busy.
-            if unsafe { bk_try_send_input_byte(key) } {
+            if unsafe { bk_try_send_input_byte(key) } != 0 {
                 keyboard_queue_pop();
             }
         }
