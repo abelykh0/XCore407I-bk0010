@@ -21,6 +21,9 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static PCM_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
+static PCM_UNDERRUN_WINDOW: AtomicU32 = AtomicU32::new(0);
+static PCM_RENDERED_WINDOW: AtomicU32 = AtomicU32::new(0);
+static PCM_RENDER_CALLS_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
 static PCM_MIN_TRACKING: AtomicBool = AtomicBool::new(false);
 static PCM_MAX_OCCUPANCY: AtomicU16 = AtomicU16::new(0);
@@ -89,6 +92,9 @@ impl BkEmulatorAudio {
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
                 PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
+                PCM_UNDERRUN_WINDOW.store(0, Ordering::Relaxed);
+                PCM_RENDERED_WINDOW.store(0, Ordering::Relaxed);
+                PCM_RENDER_CALLS_WINDOW.store(0, Ordering::Relaxed);
                 PCM_MIN_OCCUPANCY.store(PCM_RING_CAPACITY, Ordering::Relaxed);
                 PCM_MIN_TRACKING.store(false, Ordering::Relaxed);
                 PCM_MAX_OCCUPANCY.store(0, Ordering::Relaxed);
@@ -109,6 +115,7 @@ impl BkEmulatorAudio {
         if !self.active {
             return 0;
         }
+        PCM_RENDER_CALLS_WINDOW.fetch_add(1, Ordering::Relaxed);
 
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_HALF_CYCLES);
         let mut rendered = 0usize;
@@ -142,8 +149,20 @@ impl BkEmulatorAudio {
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_HALF_CYCLES);
             rendered += 1;
         }
+        PCM_RENDERED_WINDOW.fetch_add(rendered as u32, Ordering::Relaxed);
         rendered
     }
+}
+
+/// Take one-second producer/consumer counters. The main loop calls this once
+/// per performance interval; USB underruns are counted separately from lifetime
+/// totals so the displayed rate directly exposes a sustained clock mismatch.
+pub fn take_interval_diagnostics() -> (u32, u32, u32) {
+    (
+        PCM_RENDERED_WINDOW.swap(0, Ordering::AcqRel),
+        PCM_RENDER_CALLS_WINDOW.swap(0, Ordering::AcqRel),
+        PCM_UNDERRUN_WINDOW.swap(0, Ordering::AcqRel),
+    )
 }
 
 /// Return cumulative edge-queue overflows, PCM zero-fill samples, and minimum
@@ -193,6 +212,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     PCM_TAIL.store(tail, Ordering::Release);
     if missing != 0 {
         PCM_UNDERRUN_SAMPLES.fetch_add(missing, Ordering::Relaxed);
+        PCM_UNDERRUN_WINDOW.fetch_add(missing, Ordering::Relaxed);
     }
     PACKET_BYTES as u16
 }
