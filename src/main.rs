@@ -67,7 +67,7 @@ static KEYBOARD_LOCKS: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
 static mut KEYBOARD_LED_REPORT: u8 = 0;
-// Characters decoded by TinyUSB are handed to the emulator from the main loop.
+// Decoded HID characters enter a FIFO; PendSV consumes it at PDP frame cadence.
 const KEYBOARD_QUEUE_CAPACITY: u16 = 128;
 const KEYBOARD_QUEUE_MASK: u16 = KEYBOARD_QUEUE_CAPACITY - 1;
 static mut KEYBOARD_QUEUE: [u8; KEYBOARD_QUEUE_CAPACITY as usize] = [0; KEYBOARD_QUEUE_CAPACITY as usize];
