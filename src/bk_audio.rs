@@ -8,11 +8,11 @@ use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 const SAMPLES_PER_MICROFRAME: usize = 6;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
-const AUDIO_SAMPLE_PERIOD_CYCLES: u32 = 3_500; // 168 MHz / 48 kHz
-const AUDIO_STARTUP_LATENCY_CYCLES: u32 = 168_000; // Keep a 1 ms render lead.
-const AUDIO_PREFILL_CYCLES: u32 = 1_008_000; // Queue 6 ms before starting USB consumption.
+const AUDIO_SAMPLE_PERIOD_HALF_CYCLES: u32 = 125; // 60,000 PDP cycles / 960 samples = 62.5 cycles/sample.
+const AUDIO_STARTUP_LATENCY_HALF_CYCLES: u32 = 6_000; // 3,000 PDP cycles = 1 ms.
+const AUDIO_PREFILL_HALF_CYCLES: u32 = 36_000; // 18,000 PDP cycles = 6 ms.
 const AUDIO_AMPLITUDE: i16 = 12_000;
-const PCM_RING_CAPACITY: u16 = 512;
+const PCM_RING_CAPACITY: u16 = 2048;
 const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
 const PCM_MIN_TRACKING_START: u16 = 48; // Ignore startup occupancy until 1 ms is buffered.
 const _: () = assert!(PCM_RING_CAPACITY.is_power_of_two());
@@ -28,13 +28,15 @@ static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY a
 
 unsafe extern "C" {
     fn bk_audio_start() -> u8;
+    fn bk_timing_cycles() -> u32;
     fn bk_audio_stop();
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
     fn bk_audio_get_edge_overflows() -> u32;
 }
 
 pub struct BkEmulatorAudio {
-    next_sample_cycle: u32,
+    // Half-cycle units preserve the exact 62.5 PDP-cycle sample interval.
+    next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
     active: bool,
@@ -43,7 +45,7 @@ pub struct BkEmulatorAudio {
 impl BkEmulatorAudio {
     pub const fn new() -> Self {
         Self {
-            next_sample_cycle: 0,
+            next_sample_phase: 0,
             sample_level: false,
             pending_edge: None,
             active: false,
@@ -51,11 +53,11 @@ impl BkEmulatorAudio {
     }
 
     #[inline(always)]
-    fn cycle_counter() -> u32 {
-        cortex_m::peripheral::DWT::cycle_count()
+    fn cycle_phase() -> u32 {
+        unsafe { bk_timing_cycles() }.wrapping_mul(2)
     }
 
-    fn apply_edges_through(&mut self, sample_cycle: u32) {
+    fn apply_edges_through(&mut self, sample_phase: u32) {
         loop {
             if self.pending_edge.is_none() {
                 let mut cycles = 0u32;
@@ -67,7 +69,7 @@ impl BkEmulatorAudio {
             }
 
             let (edge_cycle, edge_level) = self.pending_edge.unwrap();
-            if sample_cycle.wrapping_sub(edge_cycle) as i32 >= 0 {
+            if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(2)) as i32 >= 0 {
                 self.sample_level = edge_level;
                 self.pending_edge = None;
             } else {
@@ -82,8 +84,8 @@ impl BkEmulatorAudio {
             if !self.active {
                 self.sample_level = unsafe { bk_audio_start() != 0 };
                 self.pending_edge = None;
-                self.next_sample_cycle = Self::cycle_counter()
-                    .wrapping_sub(AUDIO_STARTUP_LATENCY_CYCLES + AUDIO_PREFILL_CYCLES);
+                self.next_sample_phase = Self::cycle_phase()
+                    .wrapping_sub(AUDIO_STARTUP_LATENCY_HALF_CYCLES + AUDIO_PREFILL_HALF_CYCLES);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
                 PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
@@ -108,7 +110,7 @@ impl BkEmulatorAudio {
             return 0;
         }
 
-        let render_until = Self::cycle_counter().wrapping_sub(AUDIO_STARTUP_LATENCY_CYCLES);
+        let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_HALF_CYCLES);
         let mut rendered = 0usize;
         while rendered < max_samples {
             let head = PCM_HEAD.load(Ordering::Relaxed);
@@ -117,12 +119,12 @@ impl BkEmulatorAudio {
                 break;
             }
 
-            let sample_cycle = self.next_sample_cycle;
-            if (render_until.wrapping_sub(sample_cycle) as i32) < 0 {
+            let sample_phase = self.next_sample_phase;
+            if (render_until.wrapping_sub(sample_phase) as i32) < 0 {
                 break;
             }
 
-            self.apply_edges_through(sample_cycle);
+            self.apply_edges_through(sample_phase);
             let sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
@@ -136,8 +138,8 @@ impl BkEmulatorAudio {
                 PCM_MIN_TRACKING.store(true, Ordering::Release);
             }
             PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
-            self.next_sample_cycle = self.next_sample_cycle
-                .wrapping_add(AUDIO_SAMPLE_PERIOD_CYCLES);
+            self.next_sample_phase = self.next_sample_phase
+                .wrapping_add(AUDIO_SAMPLE_PERIOD_HALF_CYCLES);
             rendered += 1;
         }
         rendered
