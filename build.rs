@@ -48,6 +48,8 @@ fn compiler_include_paths() -> Vec<String> {
 fn main() {
     println!("cargo:rerun-if-changed=csrc/bk");
     println!("cargo:rerun-if-changed=usb/tusb_config.h");
+    println!("cargo:rerun-if-changed=usb/tusb_class_drivers.c");
+    println!("cargo:rerun-if-changed=usb/tusb_class_drivers.h");
     println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
 
     let target = env::var("TARGET").expect("TARGET not set");
