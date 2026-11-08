@@ -645,6 +645,7 @@ const UAC_PACKET_BYTES: u16 = 12;
 const UAC_FUNCTION_LENGTH: usize = 110;
 const UAC_CLOCK_ENTITY: u8 = 1;
 const UAC_SAMPLE_RATE: u32 = 48_000;
+static UAC_FREQ_RESPONSE: [u8; 4] = [0x80, 0xbb, 0, 0];
 const UAC_CLASS_CUR: u8 = 1;
 const UAC_CLASS_RANGE: u8 = 2;
 const UAC_CLOCK_FREQ_CONTROL: u8 = 1;
@@ -932,18 +933,21 @@ pub extern "C" fn xcore_tud_audio_control_xfer(
                     return unsafe { xcore_tud_control_status(rhport, request_ptr) };
                 }
                 if interface != UAC_STREAM_INTERFACE || alternate > 1 { return false; }
-                if alternate == 1 {
-                    let desc = core::ptr::addr_of!(AUDIO_ENDPOINT_DESCRIPTOR).cast::<c_void>();
-                    if !unsafe { xcore_usbd_edpt_iso_activate(rhport, desc) } { return false; }
-                }
-                unsafe { AUDIO_ALT_SETTING = alternate; }
-                if let Some(state) = audio_state_ptr() {
-                    unsafe { (&mut *state).tinyusb_set_active(alternate == 1); }
-                } else { return false; }
-                if alternate == 0 {
-                    unsafe { xcore_usbd_edpt_close(rhport, UAC_STREAM_ENDPOINT); }
-                } else if !submit_audio_packet(rhport) {
-                    return false;
+                let previous = unsafe { AUDIO_ALT_SETTING };
+                if previous != alternate {
+                    if alternate == 1 {
+                        let desc = core::ptr::addr_of!(AUDIO_ENDPOINT_DESCRIPTOR).cast::<c_void>();
+                        if !unsafe { xcore_usbd_edpt_iso_activate(rhport, desc) } { return false; }
+                    }
+                    unsafe { AUDIO_ALT_SETTING = alternate; }
+                    if let Some(state) = audio_state_ptr() {
+                        unsafe { (&mut *state).tinyusb_set_active(alternate == 1); }
+                    } else { return false; }
+                    if alternate == 0 {
+                        unsafe { xcore_usbd_edpt_close(rhport, UAC_STREAM_ENDPOINT); }
+                    } else if !submit_audio_packet(rhport) {
+                        return false;
+                    }
                 }
                 unsafe { xcore_tud_control_status(rhport, request_ptr) }
             }
@@ -961,11 +965,10 @@ pub extern "C" fn xcore_tud_audio_control_xfer(
         if stage == CONTROL_STAGE_SETUP && (request_type & REQUEST_DIRECTION_IN) != 0 {
             match (code, selector) {
                 (UAC_CLASS_CUR, UAC_CLOCK_FREQ_CONTROL) => {
-                    let response = UAC_SAMPLE_RATE.to_le_bytes();
-                    let n = (length as usize).min(response.len());
+                    let n = (length as usize).min(UAC_FREQ_RESPONSE.len());
                     unsafe {
                         return xcore_tud_control_xfer(rhport, request_ptr,
-                            response.as_ptr() as *mut c_void, n as u16);
+                            UAC_FREQ_RESPONSE.as_ptr() as *mut c_void, n as u16);
                     }
                 }
                 (UAC_CLASS_CUR, UAC_CLOCK_VALID_CONTROL) => {
