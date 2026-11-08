@@ -13,4 +13,5 @@ pub mod usb_uvc;
 pub mod usb_audio;
 pub mod tusb;
 pub mod tusb_class_drivers;
+pub mod tusb_descriptors;
 pub mod uvc;
