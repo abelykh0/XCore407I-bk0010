@@ -162,15 +162,14 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
 
 
 #if CFG_TUD_AUDIO
-// The clock source is fixed at 48 kHz. Keep these responses byte-for-byte
-// equivalent to the former custom UAC2 implementation.
+// The clock source is fixed at 24 kHz.
 bool tud_audio_get_req_entity_cb(uint8_t rhport,
                                  tusb_control_request_t const *request) {
-  static const uint8_t frequency_cur[4] = {0x80, 0xbb, 0x00, 0x00};
+  static const uint8_t frequency_cur[4] = {0xc0, 0x5d, 0x00, 0x00};
   static const uint8_t frequency_range[14] = {
     1, 0,                         // one subrange
-    0x80, 0xbb, 0x00, 0x00,       // minimum: 48000 Hz
-    0x80, 0xbb, 0x00, 0x00,       // maximum: 48000 Hz
+    0xc0, 0x5d, 0x00, 0x00,       // minimum: 24000 Hz
+    0xc0, 0x5d, 0x00, 0x00,       // maximum: 24000 Hz
     0x00, 0x00, 0x00, 0x00        // resolution: fixed
   };
   static const uint8_t clock_valid = 1;
