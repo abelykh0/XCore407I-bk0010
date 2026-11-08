@@ -1,29 +1,19 @@
 #![no_std]
 #![no_main]
 
-use core::mem::MaybeUninit;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, NVIC, SCB};
 use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 use stm32f4xx_hal::gpio::{GpioExt, Speed};
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use synopsys_usb_otg::{UsbBus};
-use usb_device::device::{UsbDevice, UsbDeviceBuilder, UsbVidPid};
 use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
-use xcore407i_blinker::usb_uvc::{
-    usb_bus, F407UsbHs, UvcUsbClass,
-};
-use xcore407i_blinker::usb_audio::BkEmulatorAudio;
 
-// USB polling timer runs at 16 kHz (62.5 us between polls).
-const USB_POLL_TIMER_HZ: u32 = 16_000;
-const TIM2_PRIORITY: u8 = 0;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
 
@@ -90,18 +80,6 @@ unsafe extern "C" {
     static mut RamBuffer: [u8; 0x4000];
 }
 
-type BoardUsbBus = UsbBus<F407UsbHs>;
-type BoardUsbDevice = UsbDevice<'static, BoardUsbBus>;
-type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
-type BoardAudioHandler = BkEmulatorAudio;
-type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
-
-// These pointers are published once, before TIM2 is enabled. After that,
-// TIM2 is the sole owner of both mutable objects. main() must not access them.
-static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut());
-static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
-static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
-
 #[entry]
 fn main() -> ! {
     let mut device = pac::Peripherals::take().unwrap();
@@ -164,106 +142,31 @@ fn main() -> ! {
         );
     }
 
-    let bus = usb_bus().expect("USB bus initialization failed");
-
-    // The large endpoint buffers remain in their existing DMA-visible SRAM
-    // allocation. The UsbDevice itself remains in CCM as in the original code.
-    static mut CAMERA: MaybeUninit<BoardUvcClass> = MaybeUninit::uninit();
-    static mut AUDIO_IMPL: MaybeUninit<BoardAudioHandler> = MaybeUninit::uninit();
-    static mut AUDIO: MaybeUninit<BoardAudioClass> = MaybeUninit::uninit();
-
-    #[unsafe(link_section = ".ccmram.usb_device")]
-    static mut USB_DEVICE: MaybeUninit<BoardUsbDevice> = MaybeUninit::uninit();
-
-    // Main owns the renderer; TIM2 callbacks only consume prepared batches.
+    // The main loop owns the renderer; TinyUSB UVC completion callbacks
+    // consume already-prepared batches directly from the OTG_HS ISR.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
     while prepare_next_video_batch(&mut video_renderer) {}
 
-    // Construct in place and publish raw pointers. No long-lived &mut reference
-    // is kept in main; the TIM2 ISR creates the only mutable references.
-    let camera_ptr = unsafe {
-        (*ptr::addr_of_mut!(CAMERA)).as_mut_ptr()
+    // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
+    // independently initialized on rhport 0.
+    device.RCC.ahb1enr().modify(|_, w| {
+        w.otghsen().set_bit().otghsulpien().set_bit()
+    });
+    let _ = device.RCC.ahb1enr().read().bits();
+
+    unsafe {
+        core.NVIC.set_priority(interrupt::OTG_HS, 0);
+        NVIC::unpend(interrupt::OTG_HS);
+    }
+
+    let hs_device_init = tusb::tusb_rhport_init_t {
+        role: tusb::tusb_role_t::TUSB_ROLE_DEVICE,
+        speed: tusb::tusb_speed_t::TUSB_SPEED_HIGH,
     };
-
-    unsafe {
-        camera_ptr.write(
-            UvcUsbClass::new(bus).expect("UVC USB class initialization failed")
-        );
+    if !unsafe { tusb::tusb_rhport_init(1, &hs_device_init) } {
+        panic!("TinyUSB OTG_HS device initialization failed");
     }
-
-    let audio_ptr = unsafe {
-        (*ptr::addr_of_mut!(AUDIO)).as_mut_ptr()
-    };
-
-    // Keep the UAC2 handler in static storage for the lifetime of the class.
-    let audio_impl_ptr = unsafe {
-        (*ptr::addr_of_mut!(AUDIO_IMPL)).as_mut_ptr()
-    };
-    unsafe {
-        audio_impl_ptr.write(BkEmulatorAudio::new());
-    }
-    let audio_impl: &'static mut BoardAudioHandler = unsafe { &mut *audio_impl_ptr };
-
-    let audio_class = usbd_uac2::UsbAudioClassConfig::new(
-        usbd_uac2::UsbSpeed::High,
-        usbd_uac2::constants::FunctionCode::SoundRecorder,
-        audio_impl,
-    )
-    .with_input_config(
-        usbd_uac2::TerminalConfig::<usb_device::endpoint::In>::builder()
-            .base_id(4)
-            .num_channels(1)
-            .format(usbd_uac2::descriptors::FormatType1 {
-                bytes_per_sample: 2,
-                bit_resolution: 16,
-            })
-            .terminal_type(usbd_uac2::constants::TerminalType::ExtLineConnector)
-            .build(),
-    )
-    .build(bus)
-    .expect("UAC2 Line In class initialization failed");
-
-    unsafe {
-        audio_ptr.write(audio_class);
-    }
-
-    let usb_ptr = unsafe {
-        (*ptr::addr_of_mut!(USB_DEVICE)).as_mut_ptr()
-    };
-
-    unsafe {
-        usb_ptr.write(
-            UsbDeviceBuilder::new(
-                bus,
-                // Development VID/PID; USB class descriptors identify this as UVC.
-                UsbVidPid(0x1209, 0x4071),
-            )
-            .composite_with_iads()
-            .max_packet_size_0(64)
-            .unwrap()
-            .build(),
-        );
-    }
-/*
-    // Experiment: keep UVC registered and polled, but suppress all video payload
-    // submissions to isolate video endpoint traffic from audio scheduling.
-    unsafe {
-        (&mut *camera_ptr).set_video_payloads_enabled(true);
-        (&mut *camera_ptr).set_repeat_video_batch(false);
-    }
-*/
-    CAMERA_PTR.store(camera_ptr, Ordering::Release);
-    AUDIO_PTR.store(audio_ptr, Ordering::Release);
-    USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
-
-    // Start the independent USB service timers only after all USB objects
-    // are initialized and published. TIM2 services the HS USB device at 16 kHz.
-    configure_usb_poll_timer(
-        &device.RCC,
-        &device.TIM2,
-        &mut core.NVIC,
-    );
 
     // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
     // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
@@ -293,6 +196,13 @@ fn main() -> ! {
                     );
                 }
             }
+        }
+
+        // Drain TinyUSB device control/bus events in thread context. ISO data
+        // endpoints are re-armed directly by their class xfer_isr callbacks.
+        unsafe {
+            let _ = tusb::tud_task_ext(0, false);
+            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
@@ -519,6 +429,11 @@ fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
 #[interrupt]
 fn OTG_FS() {
     unsafe { tusb::hcd_int_handler(0, true); }
+}
+
+#[interrupt]
+fn OTG_HS() {
+    unsafe { tusb::tusb_int_handler(1, true); }
 }
 
 #[unsafe(no_mangle)]
@@ -908,24 +823,6 @@ fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     }
 }
 
-/// TIM2 services the USB HS device at 10 kHz (100 us between polls).
-/// Video rendering is performed by the main-loop producer, not by callbacks.
-#[interrupt]
-fn TIM2() {
-    let tim2 = unsafe { &*pac::TIM2::ptr() };
-    tim2.sr().write(|w| w.uif().clear_bit());
-
-    let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
-    let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
-    let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
-    if !usb_ptr.is_null() && !camera_ptr.is_null() && !audio_ptr.is_null() {
-        let usb = unsafe { &mut *usb_ptr };
-        let camera = unsafe { &mut *camera_ptr };
-        let audio = unsafe { &mut *audio_ptr };
-        let _ = usb.poll(&mut [camera, audio]);
-    }
-}
-
 /// Configure TIM3 as a 1 kHz scheduler tick for the TinyUSB FS host task.
 ///
 /// TinyUSB's host task dispatches callbacks and is not ISR-safe. TIM3 therefore
@@ -1024,62 +921,14 @@ fn configure_exception_priorities(scb: &mut SCB) {
         let aircr = SCB_AIRCR.read_volatile();
         SCB_AIRCR.write_volatile((aircr & !(7 << 8)) | (0x5FA << 16));
 
-        // TIM2 is priority 0 (highest): USB HS polling must not be delayed
-        // by the 1 ms timebase. SysTick remains enabled at priority 1 so it
-        // can preempt lower-priority work and continue advancing TinyUSB time.
+        // USB controller interrupts preempt the emulator loop. SysTick
+        // remains enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
 
-        // This Synopsys driver is polled; it does not provide an OTG_HS NVIC
-        // handler. Keep OTG_HS disabled so the core's GINT output cannot vector
-        // into the default handler. UsbBus::poll reads and services GINTSTS.
+        // Keep OTG_HS masked until TinyUSB's DCD initialization enables it.
         NVIC::mask(interrupt::OTG_HS);
         NVIC::unpend(interrupt::OTG_HS);
     }
-}
-
-/// Configure TIM2 for a 100 us update period and enable its NVIC line.
-fn configure_usb_poll_timer(
-    rcc: &pac::RCC,
-    tim2: &pac::TIM2,
-    nvic: &mut NVIC,
-) {
-    // TIM2CLK = 84 MHz, PSC = 0, ARR = 8399 => 10,000 updates/second.
-    let timer_ticks = 84_000_000 / USB_POLL_TIMER_HZ;
-
-    // Enable TIM2 on APB1.
-    rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
-
-    // Reset TIM2 to its known reset state.
-    rcc.apb1rstr().modify(|_, w| w.tim2rst().set_bit());
-    rcc.apb1rstr().modify(|_, w| w.tim2rst().clear_bit());
-
-    // Stop timer and disable update interrupt while configuring.
-    tim2.cr1().write(|w| w.cen().clear_bit());
-    tim2.dier().write(|w| w.uie().clear_bit());
-
-    // PSC and CNT are zero after the peripheral reset.
-    // ARR = 8399 gives a 100 us update period at 84 MHz.
-    tim2.arr().write(|w| unsafe {
-        w.arr().bits(timer_ticks - 1)
-    });
-
-    // Generate an update event to load the prescaler and auto-reload.
-    tim2.egr().write(|w| w.ug().set_bit());
-
-    // Clear the update flag generated by UG.
-    tim2.sr().write(|w| w.uif().clear_bit());
-
-    // Configure NVIC priority and clear any pending interrupt.
-    unsafe {
-        nvic.set_priority(interrupt::TIM2, TIM2_PRIORITY << 4);
-        NVIC::unmask(interrupt::TIM2);
-    }
-
-    NVIC::unpend(interrupt::TIM2);
-
-    // Enable update interrupt and start the timer.
-    tim2.dier().write(|w| w.uie().set_bit());
-    tim2.cr1().write(|w| w.cen().set_bit());
 }
 
 fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
