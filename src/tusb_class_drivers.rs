@@ -30,29 +30,6 @@ const UVC_NV12_GUID: [u8; 16] = [
     0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
 ];
 
-const CONTROL_STAGE_SETUP: u8 = 0;
-const CONTROL_STAGE_DATA: u8 = 1;
-const CONTROL_STAGE_ACK: u8 = 2;
-const REQUEST_GET_INTERFACE: u8 = 10;
-const REQUEST_SET_INTERFACE: u8 = 11;
-const REQUEST_SET_CUR: u8 = 0x01;
-const REQUEST_TYPE_MASK: u8 = 0x60;
-const REQUEST_TYPE_STANDARD: u8 = 0x00;
-const REQUEST_TYPE_CLASS: u8 = 0x20;
-const REQUEST_RECIPIENT_MASK: u8 = 0x1f;
-const REQUEST_RECIPIENT_INTERFACE: u8 = 0x01;
-const REQUEST_DIRECTION_IN: u8 = 0x80;
-
-#[repr(C, packed)]
-#[derive(Clone, Copy)]
-struct UsbControlRequest {
-    request_type: u8,
-    request: u8,
-    value: u16,
-    index: u16,
-    length: u16,
-}
-
 #[derive(Clone, Copy)]
 struct ParsedUvcFunction {
     length: usize,
@@ -63,17 +40,8 @@ static UVC_STATE_READY: AtomicBool = AtomicBool::new(false);
 static UVC_ENDPOINT_ALLOCATED: AtomicBool = AtomicBool::new(false);
 static mut UVC_STATE: MaybeUninit<UvcClass> = MaybeUninit::uninit();
 static mut UVC_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
-static mut UVC_ALT_RESPONSE: u8 = 0;
 
 unsafe extern "C" {
-    fn xcore_tud_control_xfer(
-        rhport: u8,
-        request: *const UsbControlRequest,
-        buffer: *mut c_void,
-        length: u16,
-    ) -> bool;
-    fn xcore_tud_control_status(rhport: u8, request: *const UsbControlRequest) -> bool;
-    fn xcore_usbd_control_buffer() -> *mut u8;
     fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
     fn xcore_usbd_edpt_iso_activate(rhport: u8, endpoint_desc: *const c_void) -> bool;
     fn xcore_usbd_edpt_close(rhport: u8, ep_addr: u8);
@@ -474,160 +442,94 @@ fn submit_uvc_batch_isr(rhport: u8, batch: (&'static [u8], u8)) -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_uvc_control_xfer(
-    rhport: u8,
-    stage: u8,
-    request_ptr: *const UsbControlRequest,
-) -> bool {
-    // Temporarily run without globally masking interrupts while debugging UVC control.
-    // cortex_m::interrupt::free(|_| {
-    if request_ptr.is_null() {
+pub extern "C" fn xcore_tud_uvc_endpoint_descriptor() -> *const c_void {
+    core::ptr::addr_of!(UVC_ENDPOINT_DESCRIPTOR).cast::<u8>().cast::<c_void>()
+}
+
+/// C class-driver helpers: request decoding and EP0 stages live in TinyUSB's C layer.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_get_interface(interface: u8, alternate: *mut u8) -> bool {
+    if alternate.is_null() || (interface != UVC_CONTROL_INTERFACE && interface != UVC_STREAMING_INTERFACE) {
         return false;
     }
-    let request = unsafe {
-        core::ptr::read_unaligned(request_ptr)
+    let value = if interface == UVC_STREAMING_INTERFACE {
+        let Some(value) = with_uvc_state(|state| state.alternate_setting()) else {
+            return false;
+        };
+        value
+    } else {
+        0
     };
-    let request_type = request.request_type;
-    let request_code = request.request;
-    let value = u16::from_le(request.value);
-    let index = u16::from_le(request.index);
-    let length = u16::from_le(request.length);
-    let interface = index as u8;
+    unsafe { alternate.write(value); }
+    true
+}
 
-    if (request_type & REQUEST_TYPE_MASK) == REQUEST_TYPE_STANDARD
-        && (request_type & REQUEST_RECIPIENT_MASK) == REQUEST_RECIPIENT_INTERFACE
-    {
-        if stage != CONTROL_STAGE_SETUP {
-            return true;
-        }
-        match request_code {
-            REQUEST_GET_INTERFACE => {
-                if interface != UVC_CONTROL_INTERFACE && interface != UVC_STREAMING_INTERFACE {
-                    return false;
-                }
-                let alternate = if interface == UVC_STREAMING_INTERFACE {
-                    let Some(alt) = with_uvc_state(|state| state.alternate_setting()) else {
-                        return false;
-                    };
-                    alt
-                } else {
-                    0
-                };
-                unsafe {
-                    UVC_ALT_RESPONSE = alternate;
-                    xcore_tud_control_xfer(
-                        rhport,
-                        request_ptr,
-                        core::ptr::addr_of_mut!(UVC_ALT_RESPONSE).cast::<c_void>(),
-                        1,
-                    )
-                }
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_set_interface(alternate: u8) -> bool {
+    with_uvc_state(|state| state.set_interface(UVC_STREAMING_INTERFACE, alternate).is_ok())
+        .unwrap_or(false)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_start_stream(rhport: u8) -> bool {
+    let first = with_uvc_state(|state| state.start_stream_batch()).flatten();
+    match first {
+        Some(batch) => submit_uvc_batch(rhport, batch),
+        None => true,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_class_control_in(
+    request_type: u8,
+    request_code: u8,
+    value: u16,
+    index: u16,
+    length: u16,
+    data_out: *mut *const u8,
+    length_out: *mut u16,
+) -> bool {
+    if data_out.is_null() || length_out.is_null() {
+        return false;
+    }
+    let Some(state) = uvc_state_ptr() else {
+        return false;
+    };
+    let response = unsafe {
+        (&mut *state).control(request_type, request_code, value, index, length, &[])
+    };
+    match response {
+        Ok(ControlResponse::Data(data)) => {
+            unsafe {
+                data_out.write(data.as_ptr());
+                length_out.write(data.len() as u16);
             }
-            REQUEST_SET_INTERFACE => {
-                if length != 0 || (value >> 8) != 0 {
-                    return false;
-                }
-                if interface == UVC_CONTROL_INTERFACE {
-                    if (value as u8) != 0 {
-                        return false;
-                    }
-                    return unsafe { xcore_tud_control_status(rhport, request_ptr) };
-                }
-                if interface != UVC_STREAMING_INTERFACE || value as u8 > 1 {
-                    return false;
-                }
-                let alternate = value as u8;
-                if alternate == 1 {
-                    let endpoint_desc = core::ptr::addr_of!(UVC_ENDPOINT_DESCRIPTOR).cast::<c_void>();
-                    if !unsafe { xcore_usbd_edpt_iso_activate(rhport, endpoint_desc) } {
-                        return false;
-                    }
-                }
-                let changed = with_uvc_state(|state| {
-                    state.set_interface(UVC_STREAMING_INTERFACE, alternate).is_ok()
-                }).unwrap_or(false);
-                if !changed {
-                    if alternate == 1 {
-                        unsafe { xcore_usbd_edpt_close(rhport, UVC_STREAM_ENDPOINT); }
-                    }
-                    return false;
-                }
-                if alternate == 0 {
-                    unsafe { xcore_usbd_edpt_close(rhport, UVC_STREAM_ENDPOINT); }
-                } else {
-                    let first = with_uvc_state(|state| state.start_stream_batch()).flatten();
-                    if let Some(batch) = first {
-                        if !submit_uvc_batch(rhport, batch) {
-                            return false;
-                        }
-                    }
-                }
-                unsafe { xcore_tud_control_status(rhport, request_ptr) }
-            }
-            _ => false,
-        }
-    } else if (request_type & REQUEST_TYPE_MASK) == REQUEST_TYPE_CLASS {
-        if stage == CONTROL_STAGE_SETUP {
-            if (request_type & REQUEST_DIRECTION_IN) != 0 {
-                let Some(state) = uvc_state_ptr() else {
-                    return false;
-                };
-                let response = unsafe {
-                    (&mut *state).control(request_type, request_code, value, index, length, &[])
-                };
-                match response {
-                    Ok(ControlResponse::Data(data)) => unsafe {
-                        xcore_tud_control_xfer(
-                            rhport,
-                            request_ptr,
-                            data.as_ptr() as *mut c_void,
-                            data.len() as u16,
-                        )
-                    },
-                    _ => false,
-                }
-            } else if request_code == REQUEST_SET_CUR && length <= crate::uvc::PROBE_LENGTH as u16 {
-                let buffer = unsafe { xcore_usbd_control_buffer() };
-                if buffer.is_null() {
-                    return false;
-                }
-                unsafe {
-                    xcore_tud_control_xfer(
-                        rhport,
-                        request_ptr,
-                        buffer.cast::<c_void>(),
-                        length,
-                    )
-                }
-            } else {
-                false
-            }
-        } else if stage == CONTROL_STAGE_DATA && (request_type & REQUEST_DIRECTION_IN) == 0 {
-            if length > crate::uvc::PROBE_LENGTH as u16 {
-                return false;
-            }
-            let buffer = unsafe { xcore_usbd_control_buffer() };
-            if buffer.is_null() {
-                return false;
-            }
-            let data = unsafe { core::slice::from_raw_parts(buffer, length as usize) };
-            let Some(state) = uvc_state_ptr() else {
-                return false;
-            };
-            matches!(
-                unsafe {
-                    (&mut *state).control(request_type, request_code, value, index, length, data)
-                },
-                Ok(ControlResponse::Ack)
-            )
-        } else {
             true
         }
-    } else {
-        false
+        _ => false,
     }
+}
 
-    // })
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_class_control_out(
+    request_type: u8,
+    request_code: u8,
+    value: u16,
+    index: u16,
+    length: u16,
+    data: *const u8,
+) -> bool {
+    if data.is_null() || length > crate::uvc::PROBE_LENGTH as u16 {
+        return false;
+    }
+    let Some(state) = uvc_state_ptr() else {
+        return false;
+    };
+    let data = unsafe { core::slice::from_raw_parts(data, length as usize) };
+    matches!(
+        unsafe { (&mut *state).control(request_type, request_code, value, index, length, data) },
+        Ok(ControlResponse::Ack)
+    )
 }
 
 #[unsafe(no_mangle)]
