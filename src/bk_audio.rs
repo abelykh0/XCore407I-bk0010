@@ -21,6 +21,7 @@ static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static PCM_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
 static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
+static PCM_MAX_OCCUPANCY: AtomicU16 = AtomicU16::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
@@ -85,6 +86,7 @@ impl BkEmulatorAudio {
                 PCM_HEAD.store(0, Ordering::Release);
                 PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
                 PCM_MIN_OCCUPANCY.store(PCM_RING_CAPACITY, Ordering::Relaxed);
+                PCM_MAX_OCCUPANCY.store(0, Ordering::Relaxed);
                 self.active = true;
             }
         } else if self.active {
@@ -125,6 +127,8 @@ impl BkEmulatorAudio {
                     .add((head & PCM_RING_MASK) as usize)
                     .write(sample);
             }
+            let new_occupancy = head.wrapping_add(1).wrapping_sub(tail);
+            PCM_MAX_OCCUPANCY.fetch_max(new_occupancy, Ordering::Relaxed);
             PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
             self.next_sample_cycle = self.next_sample_cycle
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_CYCLES);
@@ -135,12 +139,13 @@ impl BkEmulatorAudio {
 }
 
 /// Return cumulative edge-queue overflows, PCM zero-fill samples, and minimum
-/// observed PCM occupancy (in samples) since the current stream started.
-pub fn diagnostics() -> (u32, u32, u16) {
+/// observed minimum and maximum PCM occupancy (in samples) since stream start.
+pub fn diagnostics() -> (u32, u32, u16, u16) {
     (
         unsafe { bk_audio_get_edge_overflows() },
         PCM_UNDERRUN_SAMPLES.load(Ordering::Relaxed),
         PCM_MIN_OCCUPANCY.load(Ordering::Relaxed),
+        PCM_MAX_OCCUPANCY.load(Ordering::Relaxed),
     )
 }
 
