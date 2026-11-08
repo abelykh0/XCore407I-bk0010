@@ -168,15 +168,6 @@ fn main() -> ! {
         panic!("TinyUSB OTG_HS device initialization failed");
     }
 
-    // TinyUSB initializes and unmasks the DWC2 global interrupt inside the
-    // peripheral, but NVIC delivery is a separate Cortex-M enable. We masked
-    // OTG_HS during early system setup, so explicitly enable it only after
-    // the device controller is fully initialized.
-    unsafe {
-        NVIC::unpend(interrupt::OTG_HS);
-        NVIC::unmask(interrupt::OTG_HS);
-    }
-
     // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
     // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
     configure_usb_host_task_timer(
