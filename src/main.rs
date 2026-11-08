@@ -1003,16 +1003,16 @@ fn PendSV() {
     let now = unsafe { bk_timing_cycles() };
     let last_ptr = core::ptr::addr_of_mut!(LAST_KEYBOARD_CYCLE);
     let initialized_ptr = core::ptr::addr_of_mut!(KEYBOARD_CYCLE_INITIALIZED);
-    let initialized = unsafe { initialized_ptr.read_volatile() };
+    let initialized = unsafe { core::ptr::read_volatile(initialized_ptr) };
     if !initialized {
         unsafe {
-            last_ptr.write_volatile(now);
-            initialized_ptr.write_volatile(true);
+            core::ptr::write_volatile(last_ptr, now);
+            core::ptr::write_volatile(initialized_ptr, true);
         }
         return;
     }
 
-    let last = unsafe { last_ptr.read_volatile() };
+    let last = unsafe { core::ptr::read_volatile(last_ptr) };
     let elapsed = now.wrapping_sub(last);
     if (elapsed as i32) < 0 {
         // The emulator cycle counter was reset; rebase the frame interval.
