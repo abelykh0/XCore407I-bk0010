@@ -25,6 +25,8 @@
 #define CFG_TUD_DWC2_DMA_ENABLE 1
 // Reserve two max-packet slots for a three-transaction HS ISO IN endpoint.
 #define CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER 2
+// This DWC2 port implements the ISO endpoint preallocate/activate API.
+#define TUP_DCD_EDPT_ISO_ALLOC
 #define CFG_TUH_DWC2_DMA_ENABLE 0
 
 #define CFG_TUD_ENDPOINT0_SIZE 64
@@ -45,11 +47,11 @@
 
 // Device audio class is enabled during the UAC2 port; its function-specific
 // packet/FIFO sizing will be set alongside the migrated audio descriptors.
-// UAC2 is handled by the application's custom class driver, not TinyUSB's built-in audiod.
-#define CFG_TUD_AUDIO 0
+// Use TinyUSB's built-in UAC2 class driver. UVC remains application-defined.
+#define CFG_TUD_AUDIO 1
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT 0
-#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 12
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 14
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ 96
 #define CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL 0
 
