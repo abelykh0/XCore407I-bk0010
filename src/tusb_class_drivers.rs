@@ -642,7 +642,7 @@ const UAC_CONTROL_INTERFACE: u8 = 2;
 const UAC_STREAM_INTERFACE: u8 = 3;
 const UAC_STREAM_ENDPOINT: u8 = 0x82;
 const UAC_PACKET_BYTES: u16 = 12;
-const UAC_FUNCTION_LENGTH: usize = 101;
+const UAC_FUNCTION_LENGTH: usize = 110;
 const UAC_CLOCK_ENTITY: u8 = 1;
 const UAC_SAMPLE_RATE: u32 = 48_000;
 const UAC_CLASS_CUR: u8 = 1;
@@ -1009,7 +1009,8 @@ pub extern "C" fn xcore_tud_audio_xfer(
     if ep_addr != UAC_STREAM_ENDPOINT { return false; }
     let Some(state) = audio_state_ptr() else { return false; };
     unsafe { (&mut *state).tinyusb_transfer_retired(); }
-    if result == 0 && unsafe { AUDIO_ALT_SETTING } == 1 {
+    let _ = result;
+    if unsafe { AUDIO_ALT_SETTING } == 1 {
         submit_audio_packet(rhport)
     } else {
         true
