@@ -17,10 +17,6 @@ static bool xcore_driver_deinit(void) {
   return true;
 }
 
-static void xcore_driver_reset(uint8_t rhport) {
-  (void) rhport;
-}
-
 static void xcore_uvc_reset(uint8_t rhport) {
   xcore_tud_uvc_reset(rhport);
 }
