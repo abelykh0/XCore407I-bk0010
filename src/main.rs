@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, NVIC, SCB};
 use cortex_m_rt::{entry, exception};
 use panic_halt as _;
@@ -68,14 +68,18 @@ static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
 static mut KEYBOARD_LED_REPORT: u8 = 0;
 // Characters decoded by TinyUSB are handed to the emulator from the main loop.
-static mut KEYBOARD_INPUT_BUFFER: [u8; 32] = [0; 32];
-static KEYBOARD_INPUT_LEN: AtomicU8 = AtomicU8::new(0);
+const KEYBOARD_QUEUE_CAPACITY: u16 = 128;
+const KEYBOARD_QUEUE_MASK: u16 = KEYBOARD_QUEUE_CAPACITY - 1;
+static mut KEYBOARD_QUEUE: [u8; KEYBOARD_QUEUE_CAPACITY as usize] = [0; KEYBOARD_QUEUE_CAPACITY as usize];
+static KEYBOARD_QUEUE_HEAD: AtomicU16 = AtomicU16::new(0);
+static KEYBOARD_QUEUE_TAIL: AtomicU16 = AtomicU16::new(0);
+const PDP_CYCLES_PER_FRAME: u32 = 60_000;
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
-    fn sendInput(buffer: *mut u8, size: u8);
+    fn bk_try_send_input_byte(value: u8) -> bool;
     fn bk_set_pc(start: u16);
     fn bk_request_stop_irq();
     static mut RamBuffer: [u8; 0x4000];
@@ -231,7 +235,7 @@ fn main() -> ! {
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
-            KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+            keyboard_queue_discard();
             match list_root_files(&mut *browser_paths, &mut *browser_path_lengths) {
                 Ok(count) => {
                     browser_count = count;
@@ -291,23 +295,6 @@ fn main() -> ! {
                     browser_count,
                     browser_selected,
                 );
-            }
-        }
-
-        // Run one emulator iteration in thread context. Video batches are
-        // rendered from the canvas below, never from the USB timer ISR.
-        if !browser_open {
-            let input_len = KEYBOARD_INPUT_LEN.swap(0, Ordering::AcqRel);
-            if input_len > 0 {
-                let mut buffer = [0u8; 32];
-                unsafe {
-                    ptr::copy_nonoverlapping(
-                        core::ptr::addr_of!(KEYBOARD_INPUT_BUFFER).cast::<u8>(),
-                        buffer.as_mut_ptr(),
-                        input_len as usize,
-                    );
-                    sendInput(buffer.as_mut_ptr(), input_len);
-                }
             }
         }
 
@@ -492,6 +479,31 @@ pub extern "C" fn tuh_mount_cb(_dev_addr: u8) { USB_FS_STATUS.store(3, Ordering:
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_umount_cb(_dev_addr: u8) { USB_FS_STATUS.store(5, Ordering::Release); }
 
+fn keyboard_queue_push(bytes: &[u8]) {
+    for &byte in bytes {
+        let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Acquire);
+        if head.wrapping_sub(tail) >= KEYBOARD_QUEUE_CAPACITY { break; }
+        unsafe { core::ptr::addr_of_mut!(KEYBOARD_QUEUE).cast::<u8>()
+            .add((head & KEYBOARD_QUEUE_MASK) as usize).write(byte); }
+        KEYBOARD_QUEUE_HEAD.store(head.wrapping_add(1), Ordering::Release);
+    }
+}
+fn keyboard_queue_peek() -> Option<u8> {
+    let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
+    if tail == KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire) { return None; }
+    Some(unsafe { core::ptr::addr_of!(KEYBOARD_QUEUE).cast::<u8>()
+        .add((tail & KEYBOARD_QUEUE_MASK) as usize).read() })
+}
+fn keyboard_queue_pop() {
+    let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
+    KEYBOARD_QUEUE_TAIL.store(tail.wrapping_add(1), Ordering::Release);
+}
+fn keyboard_queue_discard() {
+    let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire);
+    KEYBOARD_QUEUE_TAIL.store(head, Ordering::Release);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8, _len: u16) {
     // HID interface protocol 1 is a boot keyboard; ignore unrelated HID
@@ -502,7 +514,7 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
-    KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+    keyboard_queue_discard();
     unsafe {
         PREVIOUS_KEYS = [0; 6];
         PREVIOUS_MODIFIERS = 0;
@@ -531,7 +543,7 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
         KEYBOARD_LOCKS.store(0, Ordering::Release);
-        KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+        keyboard_queue_discard();
         unsafe {
             PREVIOUS_KEYS = [0; 6];
             PREVIOUS_MODIFIERS = 0;
@@ -723,14 +735,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
 
     // Only decoded key bytes go to the emulator; display labels are not BK input.
     if emulator_used != 0 {
-        unsafe {
-            ptr::copy_nonoverlapping(
-                emulator_input.as_ptr(),
-                core::ptr::addr_of_mut!(KEYBOARD_INPUT_BUFFER).cast::<u8>(),
-                emulator_used,
-            );
-        }
-        KEYBOARD_INPUT_LEN.store(emulator_used as u8, Ordering::Release);
+        keyboard_queue_push(&emulator_input[..emulator_used]);
     }
 }
 
@@ -986,10 +991,19 @@ fn SysTick() {
 
 #[exception]
 fn PendSV() {
-    // Run a bounded quantum. OTG_HS and SysTick preempt this lowest-priority
-    // handler; video generation and TinyUSB task processing remain in thread mode.
-    for _ in 0..16 {
-        unsafe { bk_loop(); }
+    static mut NEXT_KEYBOARD_CYCLE: u32 = 0;
+    for _ in 0..16 { unsafe { bk_loop(); } }
+    let now = unsafe { bk_timing_cycles() };
+    let deadline_ptr = core::ptr::addr_of_mut!(NEXT_KEYBOARD_CYCLE);
+    let deadline = unsafe { deadline_ptr.read_volatile() };
+    if deadline == 0 {
+        unsafe { deadline_ptr.write_volatile(now.wrapping_add(PDP_CYCLES_PER_FRAME)); }
+    } else if now.wrapping_sub(deadline) as i32 >= 0 {
+        if let Some(key) = keyboard_queue_peek() {
+            if unsafe { bk_try_send_input_byte(key) } { keyboard_queue_pop(); }
+        }
+        // Avoid catching up with a burst after a long scheduling delay.
+        unsafe { deadline_ptr.write_volatile(now.wrapping_add(PDP_CYCLES_PER_FRAME)); }
     }
 }
 
