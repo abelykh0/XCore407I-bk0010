@@ -479,7 +479,8 @@ pub extern "C" fn xcore_tud_uvc_control_xfer(
     stage: u8,
     request_ptr: *const c_void,
 ) -> bool {
-    cortex_m::interrupt::free(|_| {
+    // Temporarily run without globally masking interrupts while debugging UVC control.
+    // cortex_m::interrupt::free(|_| {
     if request_ptr.is_null() {
         return false;
     }
@@ -626,7 +627,7 @@ pub extern "C" fn xcore_tud_uvc_control_xfer(
         false
     }
 
-    })
+    // })
 }
 
 #[unsafe(no_mangle)]
