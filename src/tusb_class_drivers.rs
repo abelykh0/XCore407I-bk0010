@@ -14,6 +14,7 @@ use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
+const USB_DESC_INTERFACE_ASSOCIATION: u8 = 0x0b;
 const USB_DESC_CS_INTERFACE: u8 = 0x24;
 const USB_CLASS_VIDEO: u8 = 0x0e;
 const USB_SUBCLASS_VIDEO_CONTROL: u8 = 0x01;
@@ -145,6 +146,14 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
         let descriptor_type = descriptors[offset + 1];
         if length < 2 || offset.checked_add(length)? > descriptors.len() {
             return None;
+        }
+
+        // The UVC function ends before the next IAD. The configuration
+        // parser has already skipped the UVC IAD before calling this driver;
+        // do not consume the following UAC2 IAD or bind its interfaces to UVC.
+        if descriptor_type == USB_DESC_INTERFACE_ASSOCIATION {
+            function_end = offset;
+            break;
         }
 
         if descriptor_type == USB_DESC_INTERFACE {
