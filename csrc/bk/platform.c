@@ -52,6 +52,7 @@ uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 static volatile uint16_t bk_audio_edge_head;
 static volatile uint16_t bk_audio_edge_tail;
 static volatile uint8_t bk_audio_enabled;
+static volatile uint32_t bk_audio_edge_overflows;
 static uint8_t bk_audio_level;
 static uint32_t bk_audio_edge_cycles[BK_AUDIO_EDGE_CAPACITY];
 static uint8_t bk_audio_edge_levels[BK_AUDIO_EDGE_CAPACITY];
@@ -62,15 +63,17 @@ static void bk_audio_record_level(uint8_t level)
 {
     level = level ? 1u : 0u;
     if (level == bk_audio_level) return;
-    bk_audio_level = level;
 
     uint16_t head = bk_audio_edge_head;
     uint16_t tail = bk_audio_edge_tail;
     if ((uint16_t)(head - tail) >= BK_AUDIO_EDGE_CAPACITY) {
-        // Drop the newest edge rather than corrupting unread queue entries.
+        // Preserve the last successfully queued level so a later write can
+        // retry recording the current speaker state after space becomes free.
+        bk_audio_edge_overflows++;
         return;
     }
 
+    bk_audio_level = level;
     uint16_t slot = head & BK_AUDIO_EDGE_MASK;
     bk_audio_edge_cycles[slot] = DWT_CYCCNT;
     bk_audio_edge_levels[slot] = level;
@@ -82,6 +85,7 @@ uint8_t bk_audio_start(void)
 {
     // Called from the USB ISR; the emulator producer is paused while this runs.
     bk_audio_edge_tail = bk_audio_edge_head;
+    bk_audio_edge_overflows = 0;
     bk_audio_level = (port0177716 & 0x0040u) ? 1u : 0u;
     __asm volatile("dmb" ::: "memory");
     bk_audio_enabled = 1u;
@@ -92,6 +96,11 @@ void bk_audio_stop(void)
 {
     bk_audio_enabled = 0u;
     __asm volatile("dmb" ::: "memory");
+}
+
+uint32_t bk_audio_get_edge_overflows(void)
+{
+    return bk_audio_edge_overflows;
 }
 
 uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
