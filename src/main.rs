@@ -330,10 +330,9 @@ fn main() -> ! {
         if !browser_open {
             for _ in 0..16 {
                 unsafe { bk_loop(); }
-                // Keep the PCM producer scheduled at instruction granularity.
-                // A video batch can take long enough to drain the 10.7 ms
-                // ring reserve if audio is serviced only once per outer loop.
-                xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
+                // Speaker transitions are captured at the port write sites.
+                // PCM rendering is independent of instruction execution;
+                // service it after video work, not after every PDP instruction.
                 while prepare_next_video_batch(&mut video_renderer) {
                     xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
                 }
