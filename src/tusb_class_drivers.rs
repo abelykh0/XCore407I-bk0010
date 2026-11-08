@@ -9,7 +9,7 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
-use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS, MAX_PACKET_SIZE};
+use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
@@ -78,11 +78,15 @@ unsafe extern "C" {
     fn xcore_usbd_edpt_ready(rhport: u8, ep_addr: u8) -> bool;
 }
 
-fn with_uvc_state<R>(f: impl FnOnce(&mut UvcClass) -> R) -> Option<R> {
+fn uvc_state_ptr() -> Option<*mut UvcClass> {
     if !UVC_STATE_READY.load(Ordering::Acquire) {
         return None;
     }
-    let state = core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>();
+    Some(core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>())
+}
+
+fn with_uvc_state<R>(f: impl FnOnce(&mut UvcClass) -> R) -> Option<R> {
+    let state = uvc_state_ptr()?;
     Some(unsafe { f(&mut *state) })
 }
 
@@ -518,11 +522,14 @@ pub extern "C" fn xcore_tud_uvc_control_xfer(
     } else if (request_type & REQUEST_TYPE_MASK) == REQUEST_TYPE_CLASS {
         if stage == CONTROL_STAGE_SETUP {
             if (request_type & REQUEST_DIRECTION_IN) != 0 {
-                let response = with_uvc_state(|state| {
-                    state.control(request_type, request_code, value, index, length, &[])
-                });
+                let Some(state) = uvc_state_ptr() else {
+                    return false;
+                };
+                let response = unsafe {
+                    (&mut *state).control(request_type, request_code, value, index, length, &[])
+                };
                 match response {
-                    Some(Ok(ControlResponse::Data(data))) => unsafe {
+                    Ok(ControlResponse::Data(data)) => unsafe {
                         xcore_tud_control_xfer(
                             rhport,
                             request_ptr,
@@ -557,11 +564,14 @@ pub extern "C" fn xcore_tud_uvc_control_xfer(
                 return false;
             }
             let data = unsafe { core::slice::from_raw_parts(buffer, length as usize) };
+            let Some(state) = uvc_state_ptr() else {
+                return false;
+            };
             matches!(
-                with_uvc_state(|state| {
-                    state.control(request_type, request_code, value, index, length, data)
-                }),
-                Some(Ok(ControlResponse::Ack))
+                unsafe {
+                    (&mut *state).control(request_type, request_code, value, index, length, data)
+                },
+                Ok(ControlResponse::Ack)
             )
         } else {
             true
