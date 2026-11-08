@@ -296,7 +296,11 @@ fn main() -> ! {
         // Run one emulator iteration in thread context. Video batches are
         // rendered from the canvas below, never from the USB timer ISR.
         if !browser_open {
-            unsafe { bk_loop(); }
+            // Execute a small batch of PDP instructions before returning to
+            // USB/video servicing in the main loop.
+            for _ in 0..16 {
+                unsafe { bk_loop(); }
+            }
 
             let input_len = KEYBOARD_INPUT_LEN.swap(0, Ordering::AcqRel);
             if input_len > 0 {
