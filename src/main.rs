@@ -129,7 +129,7 @@ fn main() -> ! {
     core.SYST.enable_counter();
 
     // Prepare and initialize OTG_FS host. A failed attempt is retried from
-    // the main loop after a short delay; OTG_HS remains owned by the UVC driver.
+    // the main loop after a short delay; OTG_HS is initialized separately as a TinyUSB device.
     unsafe {
         core.NVIC.set_priority(interrupt::OTG_FS, 0x3 << 4);
         NVIC::unpend(interrupt::OTG_FS);
@@ -839,7 +839,7 @@ fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
     }
 
     // Enable the peripheral clock, then reset only OTG_FS. OTG_HS is
-    // independent and must remain untouched because it carries UVC.
+    // independent and carries the TinyUSB composite UVC/UAC2 device.
     rcc.ahb2enr().modify(|_, w| w.otgfsen().set_bit());
     let _ = rcc.ahb2enr().read().bits();
 
