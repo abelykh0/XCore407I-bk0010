@@ -162,14 +162,15 @@ void tud_umount_cb(void) {
 }
 #endif
 
-bool xcore_tud_control_xfer(uint8_t rhport, const void *request,
+bool xcore_tud_control_xfer(uint8_t rhport,
+                            tusb_control_request_t const *request,
                             void *buffer, uint16_t length) {
-  return tud_control_xfer(rhport, (tusb_control_request_t const *) request,
-                           buffer, length);
+  return tud_control_xfer(rhport, request, buffer, length);
 }
 
-bool xcore_tud_control_status(uint8_t rhport, const void *request) {
-  return tud_control_status(rhport, (tusb_control_request_t const *) request);
+bool xcore_tud_control_status(uint8_t rhport,
+                              tusb_control_request_t const *request) {
+  return tud_control_status(rhport, request);
 }
 
 uint8_t *xcore_usbd_control_buffer(void) {
