@@ -19,6 +19,10 @@ const SYSTICK_PRIORITY: u8 = 1;
 
 static TICKS: AtomicU32 = AtomicU32::new(0);
 
+// Keyboard frame pacing state shared with the PendSV handler.
+static LAST_KEYBOARD_CYCLE: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_CYCLE_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 // TinyUSB's no-RTOS time source. SysTick increments TICKS once per millisecond.
 #[unsafe(no_mangle)]
 pub extern "C" fn tusb_time_millis_api() -> u32 {
@@ -991,9 +995,6 @@ fn SysTick() {
 
 #[exception]
 fn PendSV() {
-    static mut LAST_KEYBOARD_CYCLE: u32 = 0;
-    static mut KEYBOARD_CYCLE_INITIALIZED: bool = false;
-
     // Run a bounded emulator quantum. USB and SysTick interrupts preempt this
     // lowest-priority handler.
     for _ in 0..16 {
@@ -1001,22 +1002,17 @@ fn PendSV() {
     }
 
     let now = unsafe { bk_timing_cycles() };
-    let last_ptr = core::ptr::addr_of_mut!(LAST_KEYBOARD_CYCLE);
-    let initialized_ptr = core::ptr::addr_of_mut!(KEYBOARD_CYCLE_INITIALIZED);
-    let initialized = unsafe { core::ptr::read_volatile(initialized_ptr) };
-    if !initialized {
-        unsafe {
-            core::ptr::write_volatile(last_ptr, now);
-            core::ptr::write_volatile(initialized_ptr, true);
-        }
+    if !KEYBOARD_CYCLE_INITIALIZED.load(Ordering::Relaxed) {
+        LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
+        KEYBOARD_CYCLE_INITIALIZED.store(true, Ordering::Relaxed);
         return;
     }
 
-    let last = unsafe { core::ptr::read_volatile(last_ptr) };
+    let last = LAST_KEYBOARD_CYCLE.load(Ordering::Relaxed);
     let elapsed = now.wrapping_sub(last);
     if (elapsed as i32) < 0 {
         // The emulator cycle counter was reset; rebase the frame interval.
-        unsafe { core::ptr::write_volatile(last_ptr, now); }
+        LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
     } else if elapsed >= PDP_CYCLES_PER_FRAME {
         if let Some(key) = keyboard_queue_peek() {
             // Leave the byte at the queue head if the BK keyboard port is busy.
@@ -1025,7 +1021,7 @@ fn PendSV() {
             }
         }
         // At most one byte per 60,000 PDP cycles, including after delays.
-        unsafe { core::ptr::write_volatile(last_ptr, now); }
+        LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
     }
 }
 
