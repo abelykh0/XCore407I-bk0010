@@ -310,9 +310,15 @@ fn main() -> ! {
             }
         }
 
-        // Replenish the USB video buffers before scheduling emulator work.
-        // The producer stays in thread context and gets first access to CPU time.
-        while prepare_next_video_batch(&mut video_renderer) {}
+        // Replenish USB video buffers before scheduling emulator work.
+        // Only schedule a bounded emulator quantum when we actually produced
+        // video data. In particular, do not pend PendSV on every empty-buffer
+        // main-loop spin: that can run the emulator continuously while the
+        // USB controller owns both buffers and starve the video producer.
+        let mut video_batch_produced = false;
+        while prepare_next_video_batch(&mut video_renderer) {
+            video_batch_produced = true;
+        }
 
         let now_ms = TICKS.load(Ordering::Relaxed);
         let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
@@ -329,9 +335,10 @@ fn main() -> ! {
             performance_last_cycles = now_cycles;
         }
 
-        // Pend a low-priority emulator quantum only after USB tasks and video
-        // buffer production have had a chance to run in thread context.
-        if !browser_open {
+        // Run emulator work only in proportion to newly prepared video
+        // batches. This prevents an empty-buffer busy loop from repeatedly
+        // entering PendSV and consuming the CPU budget needed for 25-fps UVC.
+        if !browser_open && video_batch_produced {
             unsafe { (0xE000_ED04 as *mut u32).write_volatile(1 << 28); } // ICSR.PENDSVSET
         }
     }
