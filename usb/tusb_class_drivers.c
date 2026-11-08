@@ -125,6 +125,15 @@ bool tud_audio_set_itf_cb(uint8_t rhport,
   return true;
 }
 
+// Stop the old stream before audiod replaces/closes its active endpoint.
+// If the host switches alt 1 -> alt 1, the final SET_INTERFACE callback
+// starts the new stream again after TinyUSB has reactivated the endpoint.
+bool tud_audio_set_itf_close_ep_cb(uint8_t rhport,
+                                   tusb_control_request_t const *request) {
+  (void) rhport;
+  return xcore_tud_audio_set_interface(TU_U16_LOW(request->wIndex), 0);
+}
+
 // Called from the audio endpoint completion ISR. Fill TinyUSB's FIFO; its
 // own driver copies the queued samples into its DMA-capable linear buffer.
 bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
