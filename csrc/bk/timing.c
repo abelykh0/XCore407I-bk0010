@@ -1,6 +1,6 @@
 #include "defines.h"
 
-double ticks = 0;    /* in clock ticks, integral */
+float ticks = 0.0f;    /* single-precision emulated clock ticks */
 
 #define REGREG 12
 
@@ -275,5 +275,5 @@ register pdp_regs *p;
 /* Return the accumulated PDP clock ticks modulo 2^32 for interval sampling. */
 uint32_t bk_timing_cycles(void)
 {
-    return (uint32_t)(uint64_t)ticks;
+    return (uint32_t)ticks;
 }
