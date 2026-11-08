@@ -330,9 +330,9 @@ fn main() -> ! {
         if !browser_open {
             for _ in 0..16 {
                 unsafe { bk_loop(); }
-                service_keyboard_frame_pacing();
                 while prepare_next_video_batch(&mut video_renderer) {}
             }
+            service_keyboard_frame_pacing();
         }
     }
 }
