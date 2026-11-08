@@ -168,6 +168,19 @@ fn main() -> ! {
         panic!("TinyUSB OTG_HS device initialization failed");
     }
 
+    // TinyUSB's DCD enables the OTG_HS NVIC line during initialization.
+    // Keep it masked and service the DWC2 device interrupt status from TIM2,
+    // matching the old stack's timer-driven 16 kHz polling model.
+    unsafe {
+        NVIC::mask(interrupt::OTG_HS);
+        NVIC::unpend(interrupt::OTG_HS);
+    }
+    configure_usb_device_poll_timer(
+        &device.RCC,
+        &device.TIM2,
+        &mut core.NVIC,
+    );
+
     // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
     // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
     configure_usb_host_task_timer(
@@ -872,6 +885,49 @@ fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
         NVIC::mask(interrupt::OTG_FS);
         false
     }
+}
+
+/// Configure TIM2 as a 16 kHz polling source for the TinyUSB OTG_HS device.
+///
+/// The OTG_HS NVIC line remains masked. Each timer interrupt invokes TinyUSB's
+/// DCD interrupt handler directly, matching the old stack's timer-driven
+/// servicing model while keeping tud_task_ext() in the main loop.
+fn configure_usb_device_poll_timer(
+    rcc: &pac::RCC,
+    tim2: &pac::TIM2,
+    nvic: &mut NVIC,
+) {
+    // TIM2CLK = 84 MHz. PSC=0 and ARR=5249 produce exactly 16 kHz.
+    rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
+
+    rcc.apb1rstr().modify(|_, w| w.tim2rst().set_bit());
+    rcc.apb1rstr().modify(|_, w| w.tim2rst().clear_bit());
+
+    tim2.cr1().write(|w| w.cen().clear_bit());
+    tim2.dier().write(|w| w.uie().clear_bit());
+    tim2.psc().write(|w| unsafe { w.psc().bits(0) });
+    tim2.arr().write(|w| unsafe { w.arr().bits(5249) });
+    tim2.egr().write(|w| w.ug().set_bit());
+    tim2.sr().write(|w| w.uif().clear_bit());
+
+    unsafe {
+        nvic.set_priority(interrupt::TIM2, 0);
+        NVIC::unpend(interrupt::TIM2);
+        NVIC::unmask(interrupt::TIM2);
+    }
+
+    tim2.dier().write(|w| w.uie().set_bit());
+    tim2.cr1().write(|w| w.cen().set_bit());
+}
+
+#[interrupt]
+fn TIM2() {
+    let tim2 = unsafe { &*pac::TIM2::ptr() };
+    tim2.sr().write(|w| w.uif().clear_bit());
+
+    // Process DWC2 device events in interrupt context, but defer TinyUSB's
+    // device task and class-event dispatch to the main loop.
+    unsafe { tusb::tusb_int_handler(1, true); }
 }
 
 fn configure_usb_host_task_timer(
