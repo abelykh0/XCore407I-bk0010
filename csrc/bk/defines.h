@@ -142,7 +142,7 @@ int ev_fire(int priority);
 typedef struct _event {
 	int (*handler)(d_word info); /* handler function */
 	d_word info;			     /* info or vector number */
-	double when;			     /* when to fire this event */
+	float when;			     /* when to fire this event */
 } event;
 
 
