@@ -20,8 +20,9 @@ const AUDIO_SAMPLE_PERIOD_CYCLES: u32 = 3_500; // 168 MHz / 48 kHz
 const AUDIO_STARTUP_LATENCY_CYCLES: u32 = 168_000; // 1 ms edge-queue lead
 const AUDIO_AMPLITUDE: i16 = 12_000;
 
-// Persistent, word-aligned source buffer in normal SRAM (not CCM).
-// OTG_HS DMA reads this buffer until the transfer-complete callback.
+// Word-aligned packet scratch storage. The legacy usb-device path submits it
+// directly to DMA; the TinyUSB path copies it into audiod's software FIFO,
+// then TinyUSB copies FIFO data into its own DMA-capable endpoint buffer.
 
 unsafe extern "C" {
     fn bk_audio_start() -> u8;
@@ -81,8 +82,7 @@ impl BkEmulatorAudio {
         }
     }
 
-    /// Start or stop capture from the TinyUSB UAC2 alternate-setting callback.
-    /// The DMA packet remains owned until its transfer callback.
+    /// Start or stop capture from TinyUSB's UAC2 alternate-setting callback.
     pub fn tinyusb_set_active(&mut self, active: bool) {
         if active {
             if !self.active {
@@ -101,9 +101,9 @@ impl BkEmulatorAudio {
         }
     }
 
-    /// Fill the persistent six-sample DMA packet and mark it in flight.
-    /// The caller submits the returned pointer to EP 0x82 and must not reuse
-    /// the buffer until tinyusb_transfer_retired is called.
+    /// Fill the six-sample packet scratch buffer.
+    /// TinyUSB's callback copies it into the audio FIFO and immediately retires
+    /// this scratch buffer; TinyUSB owns the subsequent DMA transfer.
     pub fn tinyusb_prepare_packet(&mut self) -> Option<(*mut u8, u16)> {
         if !self.active || self.dma_in_flight {
             return None;
