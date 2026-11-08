@@ -1016,7 +1016,7 @@ fn PendSV() {
     let elapsed = now.wrapping_sub(last);
     if (elapsed as i32) < 0 {
         // The emulator cycle counter was reset; rebase the frame interval.
-        unsafe { last_ptr.write_volatile(now); }
+        unsafe { core::ptr::write_volatile(last_ptr, now); }
     } else if elapsed >= PDP_CYCLES_PER_FRAME {
         if let Some(key) = keyboard_queue_peek() {
             // Leave the byte at the queue head if the BK keyboard port is busy.
@@ -1025,7 +1025,7 @@ fn PendSV() {
             }
         }
         // At most one byte per 60,000 PDP cycles, including after delays.
-        unsafe { last_ptr.write_volatile(now); }
+        unsafe { core::ptr::write_volatile(last_ptr, now); }
     }
 }
 
