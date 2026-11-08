@@ -302,9 +302,7 @@ int sl_byte(pdp_regs *p, c_addr addr, d_byte value)
         case 0177716:
             port0177716 = (uint16_t)((port0177716 & 0xFF00u) | value);
             if (bk_audio_enabled) {
-                if (bk_audio_enabled) {
                 bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
-            }
             }
             break;
         case 0177717:
@@ -347,7 +345,9 @@ int sl_word(pdp_regs *p, c_addr addr, d_word value)
             break;
         case 0177716:
             port0177716 = value;
-            bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            if (bk_audio_enabled) {
+                bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            }
             break;
         default: break;
         }
