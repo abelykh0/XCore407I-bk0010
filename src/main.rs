@@ -344,6 +344,10 @@ fn main() -> ! {
                 // Keep video-buffer replenishment independent of audio work.
                 while prepare_next_video_batch(&mut video_renderer) {}
             }
+            // Refill PCM once per 16-instruction quantum. Avoid the expensive
+            // per-instruction renderer call while shortening the gap between
+            // producer runs when video work delays the next main-loop pass.
+            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
             service_keyboard_frame_pacing();
         }
     }
