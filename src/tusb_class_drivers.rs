@@ -642,9 +642,9 @@ const UAC_CONTROL_INTERFACE: u8 = 2;
 const UAC_STREAM_INTERFACE: u8 = 3;
 const UAC_STREAM_ENDPOINT: u8 = 0x82;
 const UAC_PACKET_BYTES: u16 = 12;
+const UAC_ENDPOINT_MAX_PACKET_SIZE: u16 = 14;
 const UAC_FUNCTION_LENGTH: usize = 110;
 const UAC_CLOCK_ENTITY: u8 = 1;
-const UAC_SAMPLE_RATE: u32 = 48_000;
 static UAC_FREQ_RESPONSE: [u8; 4] = [0x80, 0xbb, 0, 0];
 const UAC_CLASS_CUR: u8 = 1;
 const UAC_CLASS_RANGE: u8 = 2;
@@ -808,7 +808,7 @@ fn parse_uac2_function(descriptors: &[u8]) -> Option<(usize, usize)> {
             if len != 7 || endpoint_offset.is_some()
                 || descriptors[offset + 2] != UAC_STREAM_ENDPOINT
                 || descriptors[offset + 3] != 0x05
-                || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != UAC_PACKET_BYTES
+                || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != UAC_ENDPOINT_MAX_PACKET_SIZE
                 || descriptors[offset + 6] != 1
             { return None; }
             endpoint_offset = Some(offset);
@@ -869,7 +869,7 @@ pub extern "C" fn xcore_tud_audio_open(
     if !initialize_audio_state() { return 0; }
     let endpoint_desc = unsafe { descriptors.as_ptr().add(endpoint_offset) };
     if !AUDIO_ENDPOINT_ALLOCATED.load(Ordering::Acquire) {
-        if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, UAC_STREAM_ENDPOINT, UAC_PACKET_BYTES) } {
+        if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, UAC_STREAM_ENDPOINT, UAC_ENDPOINT_MAX_PACKET_SIZE) } {
             return 0;
         }
         AUDIO_ENDPOINT_ALLOCATED.store(true, Ordering::Release);
