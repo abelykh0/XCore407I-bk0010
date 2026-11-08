@@ -340,12 +340,13 @@ fn main() -> ! {
         if !browser_open {
             for _ in 0..16 {
                 unsafe { bk_loop(); }
-                // Speaker transitions are captured at the port write sites.
-                // PCM rendering is independent of instruction execution;
-                // service it after video work, not after every PDP instruction.
-                while prepare_next_video_batch(&mut video_renderer) {
-                    xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
-                }
+
+                // Service the PCM producer after every emulator quantum,
+                // regardless of whether video rendering produced a batch.
+                xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
+
+                // Keep video-buffer replenishment independent of audio work.
+                while prepare_next_video_batch(&mut video_renderer) {}
             }
             service_keyboard_frame_pacing();
         }
