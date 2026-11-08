@@ -385,22 +385,22 @@ static int bk_tty_finish(d_word info)
     return service(060);
 }
 
+uint8_t bk_try_send_input_byte(uint8_t symbol)
+{
+    if (port0177660 & 0x80u) return 0u;
+    if (symbol == 0x0Du) symbol = 0x0Au;
+    port0177660 |= 0x80u;
+    port0177662 = symbol & 0x7Fu;
+    (void)ev_register(TTY_PRI, bk_tty_finish, 0, symbol);
+    return 1u;
+}
+
 void sendInput(uint8_t *buffer, uint8_t size)
 {
     uint8_t i;
     if (buffer == NULL) return;
-
     for (i = 0; i < size; ++i) {
-        while (port0177660 & 0x80u) {
-            bk_loop();
-        }
-
-        uint8_t symbol = buffer[i];
-        if (symbol == 0x0D) symbol = 0x0A;
-
-        port0177660 |= 0x80u;
-        port0177662 = symbol & 0x7Fu;
-        (void)ev_register(TTY_PRI, bk_tty_finish, 0, symbol);
+        while (!bk_try_send_input_byte(buffer[i])) bk_loop();
     }
 }
 
