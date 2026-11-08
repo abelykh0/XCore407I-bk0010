@@ -144,7 +144,7 @@ fn main() -> ! {
     }
 
     // The main loop owns the renderer; TinyUSB UVC completion callbacks
-    // consume already-prepared batches from the 16 kHz TIM2 polling ISR.
+    // consume prepared batches from the OTG_HS device interrupt.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
     while prepare_next_video_batch(&mut video_renderer) {}
@@ -899,15 +899,6 @@ fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
         NVIC::mask(interrupt::OTG_FS);
         false
     }
-}
-
-/// TinyUSB OTG_HS device-controller interrupt.
-///
-/// The DCD ISR handles DWC2 events and ISO endpoint completions. Deferred
-/// device/class task processing remains in thread context in the main loop.
-#[interrupt]
-fn OTG_HS() {
-    unsafe { tusb::tusb_int_handler(1, true); }
 }
 
 fn configure_usb_host_task_timer(
