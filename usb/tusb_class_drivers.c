@@ -2,18 +2,13 @@
 //
 // TinyUSB application class-driver registration.
 //
-// UVC and UAC2 are implemented as custom class drivers so their existing
-// high-speed ISO endpoint and DMA behavior can be preserved.
+// UVC remains application-defined for its three-transaction high-bandwidth
+// endpoint. UAC2 is delegated to TinyUSB's built-in audio class driver.
 
 #include "tusb.h"
 #include "device/usbd_pvt.h"
 #include "tusb_class_drivers.h"
 
-#if CFG_TUD_AUDIO
-static bool xcore_tud_audio_set_interface(uint8_t interface, uint8_t alternate);
-static uint16_t xcore_tud_audio_fill_packet(uint8_t *buffer, uint16_t capacity);
-static void xcore_tud_audio_stop(void);
-#endif
 
 static void xcore_driver_init(void) {
 }
