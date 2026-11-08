@@ -143,7 +143,7 @@ fn main() -> ! {
     }
 
     // The main loop owns the renderer; TinyUSB UVC completion callbacks
-    // consume already-prepared batches directly from the OTG_HS ISR.
+    // consume already-prepared batches from the 16 kHz TIM2 polling ISR.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
     while prepare_next_video_batch(&mut video_renderer) {}
