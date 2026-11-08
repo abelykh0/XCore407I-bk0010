@@ -4,7 +4,7 @@
 //! worker converts them to 48 kHz PCM in a ring buffer. The USB completion ISR
 //! only copies six already-rendered samples from that ring.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 
 const SAMPLES_PER_MICROFRAME: usize = 6;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
@@ -18,12 +18,15 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
+static PCM_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
+static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
     fn bk_audio_start() -> u8;
     fn bk_audio_stop();
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
+    fn bk_audio_get_edge_overflows() -> u32;
 }
 
 pub struct BkEmulatorAudio {
@@ -79,6 +82,8 @@ impl BkEmulatorAudio {
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_CYCLES);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
+                PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
+                PCM_MIN_OCCUPANCY.store(PCM_RING_CAPACITY, Ordering::Relaxed);
                 self.active = true;
             }
         } else if self.active {
@@ -128,6 +133,16 @@ impl BkEmulatorAudio {
     }
 }
 
+/// Return cumulative edge-queue overflows, PCM zero-fill samples, and minimum
+/// observed PCM occupancy (in samples) since the current stream started.
+pub fn diagnostics() -> (u32, u32, u16) {
+    (
+        unsafe { bk_audio_get_edge_overflows() },
+        PCM_UNDERRUN_SAMPLES.load(Ordering::Relaxed),
+        PCM_MIN_OCCUPANCY.load(Ordering::Relaxed),
+    )
+}
+
 /// Copy one USB microframe of pre-rendered PCM. Missing samples are zero-filled.
 pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     if buffer.is_null() || capacity < PACKET_BYTES as u16 {
@@ -136,6 +151,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
+    let occupancy = head.wrapping_sub(tail);
+    PCM_MIN_OCCUPANCY.fetch_min(occupancy, Ordering::Relaxed);
+    let mut missing = 0u32;
     for index in 0..SAMPLES_PER_MICROFRAME {
         let sample = if tail != head {
             let value = unsafe {
@@ -147,6 +165,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             tail = tail.wrapping_add(1);
             value
         } else {
+            missing += 1;
             0
         };
         unsafe {
@@ -156,6 +175,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         }
     }
     PCM_TAIL.store(tail, Ordering::Release);
+    if missing != 0 {
+        PCM_UNDERRUN_SAMPLES.fetch_add(missing, Ordering::Relaxed);
+    }
     PACKET_BYTES as u16
 }
 
