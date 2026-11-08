@@ -45,6 +45,9 @@ uint16_t port0177714 = 0;       // Parallel Port / Peripheral Device Register
 uint16_t port0177716 = 0x0040;  // System Port Register / Control Register (bit 6 - speaker)
 uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 
+// DWT cycle counter register (168 MHz core clock, enabled by Rust startup).
+#define BK_DWT_CYCCNT (*(volatile uint32_t *)0xE0001004u)
+
 // Audio output transition queue. The emulator is the single producer
 // (thread context); the USB Audio endpoint callback consumes transitions.
 #define BK_AUDIO_EDGE_CAPACITY 512u
@@ -73,8 +76,9 @@ static void bk_audio_record_level(uint8_t level)
 
     bk_audio_level = level;
     uint16_t slot = head & BK_AUDIO_EDGE_MASK;
-    // Timestamp in the emulator's PDP-cycle domain, not the MCU clock domain.
-    bk_audio_edge_cycles[slot] = bk_timing_cycles();
+    // Timestamp at the speaker-register write on the same 168 MHz DWT clock
+    // used by the PCM renderer's fixed 48 kHz sample schedule.
+    bk_audio_edge_cycles[slot] = BK_DWT_CYCCNT;
     bk_audio_edge_levels[slot] = level;
     __asm volatile("dmb" ::: "memory");
     bk_audio_edge_head = (uint16_t)(head + 1u);
