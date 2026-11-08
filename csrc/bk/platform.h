@@ -33,6 +33,7 @@ void bk_reset(void);
 void bk_set_pc(uint16_t start);
 void bk_request_stop_irq(void);
 int32_t bk_loop(void);
+uint8_t bk_try_send_input_byte(uint8_t value);
 void sendInput(uint8_t *buffer, uint8_t size);
 
 #endif
