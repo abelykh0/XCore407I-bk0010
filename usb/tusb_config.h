@@ -45,9 +45,10 @@
 #define CFG_TUD_VIDEO_STREAMING 0
 #define CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE 2304
 
-// Device audio class is enabled during the UAC2 port; its function-specific
-// packet/FIFO sizing will be set alongside the migrated audio descriptors.
-// Use TinyUSB's built-in UAC2 class driver. UVC remains application-defined.
+// TinyUSB's built-in UAC2 class driver owns audio controls, alternate
+// settings, endpoint activation, and its internal software FIFO.
+// The application supplies 12-byte packets (six mono 16-bit samples) per HS
+// microframe; 14 bytes is the descriptor's maximum packet size.
 #define CFG_TUD_AUDIO 1
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT 0
