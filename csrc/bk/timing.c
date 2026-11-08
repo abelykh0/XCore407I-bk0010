@@ -11,7 +11,7 @@ void bk_timing_reset(void)
 
 void bk_timing_add_cycles(uint32_t cycles)
 {
-    bk_timing_add_cycles((uint32_t)((float)cycles));
+    ticks += (float)cycles;
     pdp_cycle_count += cycles;
 }
 
