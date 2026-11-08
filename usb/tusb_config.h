@@ -47,8 +47,8 @@
 
 // TinyUSB's built-in UAC2 class driver owns audio controls, alternate
 // settings, endpoint activation, and its internal software FIFO.
-// The application supplies 12-byte packets (six mono 16-bit samples) per HS
-// microframe; 14 bytes is the descriptor's maximum packet size.
+// The application supplies 6-byte packets (three mono 16-bit samples) per HS
+// microframe at 24 kHz; 14 bytes remains the descriptor's maximum packet size.
 #define CFG_TUD_AUDIO 1
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT 0
