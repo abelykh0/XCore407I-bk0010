@@ -856,7 +856,7 @@ pub extern "C" fn xcore_tud_audio_open(
     interface_desc: *const c_void,
     max_len: u16,
 ) -> u16 {
-    if interface_desc.is_null() || max_len as usize < UAC_FUNCTION_LENGTH {
+    if interface_desc.is_null() || (max_len as usize) < UAC_FUNCTION_LENGTH {
         return 0;
     }
     let descriptors = unsafe {
@@ -977,7 +977,7 @@ pub extern "C" fn xcore_tud_audio_control_xfer(
                 }
                 (UAC_CLASS_RANGE, UAC_CLOCK_FREQ_CONTROL) => {
                     static mut RANGE: [u8; 14] = [
-                        1, 0, 0x80, 0xbb, 0, 0x80, 0xbb, 0, 0, 0, 0, 0, 0, 0,
+                        1, 0, 0x80, 0xbb, 0, 0, 0x80, 0xbb, 0, 0, 0, 0, 0, 0,
                     ];
                     let n = (length as usize).min(14);
                     unsafe {
