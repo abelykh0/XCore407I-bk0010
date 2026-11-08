@@ -641,7 +641,6 @@ pub extern "C" fn xcore_tud_uvc_task(rhport: u8) {
 const UAC_CONTROL_INTERFACE: u8 = 2;
 const UAC_STREAM_INTERFACE: u8 = 3;
 const UAC_STREAM_ENDPOINT: u8 = 0x82;
-const UAC_PACKET_BYTES: u16 = 12;
 const UAC_ENDPOINT_MAX_PACKET_SIZE: u16 = 14;
 const UAC_FUNCTION_LENGTH: usize = 110;
 const UAC_CLOCK_ENTITY: u8 = 1;
@@ -744,6 +743,7 @@ fn parse_uac2_function(descriptors: &[u8]) -> Option<(usize, usize)> {
                 return None;
             }
         } else if dtype == USB_DESC_CS_INTERFACE && current_interface == UAC_CONTROL_INTERFACE {
+            if len < 3 { return None; }
             match descriptors[offset + 2] {
                 1 => {
                     if len != 9 || ac_header || descriptors[offset + 3] != 0
@@ -780,6 +780,7 @@ fn parse_uac2_function(descriptors: &[u8]) -> Option<(usize, usize)> {
                 _ => return None,
             }
         } else if dtype == USB_DESC_CS_INTERFACE && current_interface == UAC_STREAM_INTERFACE && current_alt == 1 {
+            if len < 3 { return None; }
             match descriptors[offset + 2] {
                 1 => {
                     if len != 16 || as_general || descriptors[offset + 3] != 4
