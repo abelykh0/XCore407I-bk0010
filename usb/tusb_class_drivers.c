@@ -23,20 +23,6 @@ static void xcore_uvc_reset(uint8_t rhport) {
 
 static bool xcore_uvc_control(uint8_t rhport, uint8_t stage,
                               tusb_control_request_t const *request) {
-  enum {
-    XCORE_REQ_TYPE_MASK = 0x60,
-    XCORE_REQ_TYPE_STANDARD = 0x00,
-    XCORE_REQ_TYPE_CLASS = 0x20,
-    XCORE_REQ_RECIPIENT_MASK = 0x1f,
-    XCORE_REQ_RECIPIENT_INTERFACE = 0x01,
-    XCORE_REQ_DIRECTION_IN = 0x80,
-    XCORE_REQ_GET_INTERFACE = 0x0a,
-    XCORE_REQ_SET_INTERFACE = 0x0b,
-    XCORE_REQ_SET_CUR = 0x01,
-    XCORE_CONTROL_STAGE_SETUP = 0,
-    XCORE_CONTROL_STAGE_DATA = 1,
-  };
-
   if (request == NULL) {
     return false;
   }
@@ -48,13 +34,13 @@ static bool xcore_uvc_control(uint8_t rhport, uint8_t stage,
   const uint16_t length = request->wLength;
   const uint8_t interface = (uint8_t) index;
 
-  if ((request_type & XCORE_REQ_TYPE_MASK) == XCORE_REQ_TYPE_STANDARD &&
-      (request_type & XCORE_REQ_RECIPIENT_MASK) == XCORE_REQ_RECIPIENT_INTERFACE) {
-    if (stage != XCORE_CONTROL_STAGE_SETUP) {
+  if (((request_type >> 5) & 0x03) == TUSB_REQ_TYPE_STANDARD &&
+      (request_type & 0x1f) == TUSB_REQ_RCPT_INTERFACE) {
+    if (stage != CONTROL_STAGE_SETUP) {
       return true;
     }
 
-    if (request_code == XCORE_REQ_GET_INTERFACE) {
+    if (request_code == TUSB_REQ_GET_INTERFACE) {
       uint8_t alternate = 0;
       if (!xcore_tud_uvc_get_interface(interface, &alternate)) {
         return false;
@@ -62,7 +48,7 @@ static bool xcore_uvc_control(uint8_t rhport, uint8_t stage,
       return tud_control_xfer(rhport, request, &alternate, sizeof(alternate));
     }
 
-    if (request_code == XCORE_REQ_SET_INTERFACE) {
+    if (request_code == TUSB_REQ_SET_INTERFACE) {
       if (length != 0 || (value >> 8) != 0) {
         return false;
       }
@@ -103,12 +89,12 @@ static bool xcore_uvc_control(uint8_t rhport, uint8_t stage,
     return false;
   }
 
-  if ((request_type & XCORE_REQ_TYPE_MASK) != XCORE_REQ_TYPE_CLASS) {
+  if (((request_type >> 5) & 0x03) != TUSB_REQ_TYPE_CLASS) {
     return false;
   }
 
-  if (stage == XCORE_CONTROL_STAGE_SETUP) {
-    if ((request_type & XCORE_REQ_DIRECTION_IN) != 0) {
+  if (stage == CONTROL_STAGE_SETUP) {
+    if ((request_type & TUSB_DIR_IN_MASK) != 0) {
       const uint8_t *response = NULL;
       uint16_t response_length = 0;
       if (!xcore_tud_uvc_class_control_in(request_type, request_code, value,
@@ -119,14 +105,14 @@ static bool xcore_uvc_control(uint8_t rhport, uint8_t stage,
       return tud_control_xfer(rhport, request, (void *) response, response_length);
     }
 
-    if (request_code != XCORE_REQ_SET_CUR || length > 34) {
+    if (request_code != VIDEO_REQUEST_SET_CUR || length > 34) {
       return false;
     }
     return tud_control_xfer(rhport, request, usbd_get_ctrl_buf(), length);
   }
 
-  if (stage == XCORE_CONTROL_STAGE_DATA &&
-      (request_type & XCORE_REQ_DIRECTION_IN) == 0) {
+  if (stage == CONTROL_STAGE_DATA &&
+      (request_type & TUSB_DIR_IN_MASK) == 0) {
     if (length > 34) {
       return false;
     }
