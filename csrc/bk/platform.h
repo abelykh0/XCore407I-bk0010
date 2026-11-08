@@ -22,6 +22,10 @@ extern uint16_t port0177716;
 extern uint16_t port0177664;
 extern uint16_t port0177714;
 
+void bk_timing_reset(void);
+void bk_timing_add_cycles(uint32_t cycles);
+uint32_t bk_timing_cycles(void);
+
 uint8_t bk_audio_start(void);
 void bk_audio_stop(void);
 uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level);
