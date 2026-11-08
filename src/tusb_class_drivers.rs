@@ -68,11 +68,11 @@ static mut UVC_ALT_RESPONSE: u8 = 0;
 unsafe extern "C" {
     fn xcore_tud_control_xfer(
         rhport: u8,
-        request: *const c_void,
+        request: *const UsbControlRequest,
         buffer: *mut c_void,
         length: u16,
     ) -> bool;
-    fn xcore_tud_control_status(rhport: u8, request: *const c_void) -> bool;
+    fn xcore_tud_control_status(rhport: u8, request: *const UsbControlRequest) -> bool;
     fn xcore_usbd_control_buffer() -> *mut u8;
     fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
     fn xcore_usbd_edpt_iso_activate(rhport: u8, endpoint_desc: *const c_void) -> bool;
@@ -477,7 +477,7 @@ fn submit_uvc_batch_isr(rhport: u8, batch: (&'static [u8], u8)) -> bool {
 pub extern "C" fn xcore_tud_uvc_control_xfer(
     rhport: u8,
     stage: u8,
-    request_ptr: *const c_void,
+    request_ptr: *const UsbControlRequest,
 ) -> bool {
     // Temporarily run without globally masking interrupts while debugging UVC control.
     // cortex_m::interrupt::free(|_| {
@@ -485,7 +485,7 @@ pub extern "C" fn xcore_tud_uvc_control_xfer(
         return false;
     }
     let request = unsafe {
-        core::ptr::read_unaligned(request_ptr.cast::<UsbControlRequest>())
+        core::ptr::read_unaligned(request_ptr)
     };
     let request_type = request.request_type;
     let request_code = request.request;
