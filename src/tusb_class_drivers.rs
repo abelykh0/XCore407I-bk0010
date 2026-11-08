@@ -79,6 +79,7 @@ unsafe extern "C" {
     fn xcore_usbd_edpt_claim(rhport: u8, ep_addr: u8) -> bool;
     fn xcore_usbd_edpt_release(rhport: u8, ep_addr: u8) -> bool;
     fn xcore_usbd_edpt_xfer(rhport: u8, ep_addr: u8, buffer: *mut u8, length: u16) -> bool;
+    fn xcore_usbd_edpt_xfer_isr(rhport: u8, ep_addr: u8, buffer: *mut u8, length: u16) -> bool;
     fn xcore_usbd_edpt_ready(rhport: u8, ep_addr: u8) -> bool;
 }
 
