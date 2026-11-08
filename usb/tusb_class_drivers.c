@@ -107,8 +107,22 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport,
 bool tud_audio_set_itf_cb(uint8_t rhport,
                           tusb_control_request_t const *request) {
   (void) rhport;
-  return xcore_tud_audio_set_interface(TU_U16_LOW(request->wIndex),
-                                       TU_U16_LOW(request->wValue));
+  const uint8_t interface = TU_U16_LOW(request->wIndex);
+  const uint8_t alternate = TU_U16_LOW(request->wValue);
+  if (!xcore_tud_audio_set_interface(interface, alternate)) {
+    return false;
+  }
+
+  // audiod has already queued its initial ZLP. Prime the FIFO now so the
+  // first completed microframe can immediately schedule real audio samples.
+  if (interface == 3 && alternate == 1) {
+    uint8_t packet[12] __attribute__((aligned(4)));
+    const uint16_t length = xcore_tud_audio_fill_packet(packet, sizeof(packet));
+    if (length != 0 && tud_audio_n_write(0, packet, length) != length) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Called from the audio endpoint completion ISR. Fill TinyUSB's FIFO; its
