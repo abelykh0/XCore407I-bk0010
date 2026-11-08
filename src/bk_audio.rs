@@ -110,7 +110,7 @@ impl BkEmulatorAudio {
         }
     }
 
-    /// Render at most max_samples whose emulated timestamps are due.
+    /// Render at most max_samples whose fixed-rate DWT timestamps are due.
     /// This runs in the main loop, never in the USB interrupt.
     pub fn render_available(&mut self, max_samples: usize) -> usize {
         if !self.active {
