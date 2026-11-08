@@ -355,8 +355,31 @@ pub fn set_pixel(x: usize, y: usize, color: u8) {
 #[inline]
 pub(crate) fn set_bk_video_byte(byte_x: usize, y: usize, byte: u8, monochrome: bool) -> bool {
     let mode = camera_mode();
-    if (mode == CameraMode::Monochrome) != monochrome || y >= CANVAS_HEIGHT {
+    if y >= CANVAS_HEIGHT {
         return false;
+    }
+
+    // During a deferred camera-mode transition, preserve set_pixel()'s
+    // original behavior until the new mode becomes active.
+    if (mode == CameraMode::Monochrome) != monochrome {
+        if monochrome {
+            let x = byte_x * 8;
+            if x >= canvas_width_for(mode) { return false; }
+            for i in 0..8 {
+                let color = if byte & (1 << i) != 0 { 0x3f } else { 0x00 };
+                set_pixel(x + i, y, color);
+            }
+        } else {
+            let x = byte_x * 4;
+            if x >= canvas_width_for(mode) { return false; }
+            for i in 0..4 {
+                let color = match (byte >> (i * 2)) & 0x03 {
+                    0 => 0x00, 1 => 0x30, 2 => 0x0c, _ => 0x03,
+                };
+                set_pixel(x + i, y, color);
+            }
+        }
+        return true;
     }
 
     let offset = if monochrome {
