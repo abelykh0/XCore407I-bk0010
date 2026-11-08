@@ -539,6 +539,20 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
     }
 }
 
+/// Display audio-path counters on row 29:
+/// E=edge queue overflows, U=PCM zero-fill samples, M=minimum ring occupancy.
+pub fn show_audio_status(edge_overflows: u32, underrun_samples: u32, min_occupancy: u16) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+    line[pos] = b'E'; pos += 1;
+    append_decimal(&mut line, &mut pos, edge_overflows);
+    append_bytes(&mut line, &mut pos, b" U");
+    append_decimal(&mut line, &mut pos, underrun_samples);
+    append_bytes(&mut line, &mut pos, b" M");
+    append_decimal(&mut line, &mut pos, min_occupancy as u32);
+    show_file_browser_line(29, &line[..pos], false);
+}
+
 /// Update the fixed performance row in the camera image. The caller limits
 /// this to one update per second so the overlay does not add per-frame work.
 pub fn show_performance_status(cycles_per_second: u32, frames_per_second_tenths: u32) {
