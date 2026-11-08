@@ -10,6 +10,7 @@ const SAMPLES_PER_MICROFRAME: usize = 6;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
 const AUDIO_SAMPLE_PERIOD_CYCLES: u32 = 3_500; // 168 MHz / 48 kHz
 const AUDIO_STARTUP_LATENCY_CYCLES: u32 = 168_000; // Keep a 1 ms render lead.
+const AUDIO_PREFILL_CYCLES: u32 = 1_008_000; // Queue 6 ms before starting USB consumption.
 const AUDIO_AMPLITUDE: i16 = 12_000;
 const PCM_RING_CAPACITY: u16 = 512;
 const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
@@ -79,7 +80,7 @@ impl BkEmulatorAudio {
                 self.sample_level = unsafe { bk_audio_start() != 0 };
                 self.pending_edge = None;
                 self.next_sample_cycle = Self::cycle_counter()
-                    .wrapping_sub(AUDIO_STARTUP_LATENCY_CYCLES);
+                    .wrapping_sub(AUDIO_STARTUP_LATENCY_CYCLES + AUDIO_PREFILL_CYCLES);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
                 PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
