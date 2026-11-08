@@ -34,6 +34,11 @@ static bool xcore_uvc_xfer(uint8_t rhport, uint8_t ep_addr,
   return xcore_tud_uvc_xfer(rhport, ep_addr, (int32_t) result, xferred_bytes);
 }
 
+static bool xcore_uvc_xfer_isr(uint8_t rhport, uint8_t ep_addr,
+                               xfer_result_t result, uint32_t xferred_bytes) {
+  return xcore_tud_uvc_xfer_isr(rhport, ep_addr, (int32_t) result, xferred_bytes);
+}
+
 static uint16_t xcore_uvc_open(uint8_t rhport,
                                tusb_desc_interface_t const *desc_intf,
                                uint16_t max_len) {
@@ -48,6 +53,11 @@ static bool xcore_audio_control(uint8_t rhport, uint8_t stage,
 static bool xcore_audio_xfer(uint8_t rhport, uint8_t ep_addr,
                              xfer_result_t result, uint32_t xferred_bytes) {
   return xcore_tud_audio_xfer(rhport, ep_addr, (int32_t) result, xferred_bytes);
+}
+
+static bool xcore_audio_xfer_isr(uint8_t rhport, uint8_t ep_addr,
+                                 xfer_result_t result, uint32_t xferred_bytes) {
+  return xcore_tud_audio_xfer_isr(rhport, ep_addr, (int32_t) result, xferred_bytes);
 }
 
 static void xcore_audio_reset(uint8_t rhport) {
@@ -69,7 +79,7 @@ static usbd_class_driver_t const xcore_class_drivers[] = {
     .open = xcore_uvc_open,
     .control_xfer_cb = xcore_uvc_control,
     .xfer_cb = xcore_uvc_xfer,
-    .xfer_isr = NULL,
+    .xfer_isr = xcore_uvc_xfer_isr,
     .sof = NULL,
   },
   {
@@ -80,7 +90,7 @@ static usbd_class_driver_t const xcore_class_drivers[] = {
     .open = xcore_audio_open,
     .control_xfer_cb = xcore_audio_control,
     .xfer_cb = xcore_audio_xfer,
-    .xfer_isr = NULL,
+    .xfer_isr = xcore_audio_xfer_isr,
     .sof = NULL,
   },
 };
@@ -129,6 +139,11 @@ bool xcore_usbd_edpt_release(uint8_t rhport, uint8_t ep_addr) {
 bool xcore_usbd_edpt_xfer(uint8_t rhport, uint8_t ep_addr,
                           uint8_t *buffer, uint16_t length) {
   return usbd_edpt_xfer(rhport, ep_addr, buffer, length, false);
+}
+
+bool xcore_usbd_edpt_xfer_isr(uint8_t rhport, uint8_t ep_addr,
+                              uint8_t *buffer, uint16_t length) {
+  return usbd_edpt_xfer(rhport, ep_addr, buffer, length, true);
 }
 
 bool xcore_usbd_edpt_ready(uint8_t rhport, uint8_t ep_addr) {
