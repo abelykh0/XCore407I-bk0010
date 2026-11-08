@@ -103,7 +103,7 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
 
     // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
     push_bytes(&mut descriptor, &mut offset, &[
-        8, 0x0b, 2, 2, 1, 0, 0x20, 0,
+        8, 0x0b, 2, 2, 1, 1, 0x20, 0,
         9, 0x04, 2, 0, 0, 1, 1, 0x20, 0,
         9, 0x24, 1, 0, 2, 7, 46, 0, 0,
         8, 0x24, 0x0a, 1, 1, 5, 0, 0,
