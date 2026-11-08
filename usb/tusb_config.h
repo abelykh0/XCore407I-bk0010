@@ -36,10 +36,11 @@
 // MPS (1536 bytes) in the video TX FIFO; the DWC2 can refill the third packet
 // after the first packet is sent. This is distinct from SRAM DMA buffers.
 //
-// The UVC class staging buffer holds one 2304-byte transfer, not a full frame.
-// Each individual SRAM DMA buffer remains <= 4096 bytes and 4-byte aligned.
-#define CFG_TUD_VIDEO 1
-#define CFG_TUD_VIDEO_STREAMING 1
+// UVC is implemented by the application's XCore UVC class driver.
+// Do not also register TinyUSB's built-in video class driver or allocate
+// its unused streaming staging buffer.
+#define CFG_TUD_VIDEO 0
+#define CFG_TUD_VIDEO_STREAMING 0
 #define CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE 2304
 
 // Device audio class is enabled during the UAC2 port; its function-specific
