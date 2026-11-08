@@ -214,6 +214,7 @@ fn main() -> ! {
         // endpoints are re-armed directly by their class xfer_isr callbacks.
         unsafe {
             let _ = tusb::tud_task_ext(0, false);
+            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
         }
 
