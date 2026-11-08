@@ -302,15 +302,11 @@ fn main() -> ! {
             }
         }
 
-        // Replenish USB video buffers before scheduling emulator work.
-        // Only schedule a bounded emulator quantum when we actually produced
-        // video data. In particular, do not pend PendSV on every empty-buffer
-        // main-loop spin: that can run the emulator continuously while the
-        // USB controller owns both buffers and starve the video producer.
-        let mut video_batch_produced = false;
-        while prepare_next_video_batch(&mut video_renderer) {
-            video_batch_produced = true;
-        }
+        // Replenish USB video buffers before emulator work. The producer
+        // also runs between individual PDP instructions below, so a newly
+        // freed DMA buffer is refilled promptly instead of waiting for a
+        // complete emulator quantum to finish.
+        while prepare_next_video_batch(&mut video_renderer) {}
 
         let now_ms = TICKS.load(Ordering::Relaxed);
         let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
@@ -327,11 +323,16 @@ fn main() -> ! {
             performance_last_cycles = now_cycles;
         }
 
-        // Run emulator work only in proportion to newly prepared video
-        // batches. This prevents an empty-buffer busy loop from repeatedly
-        // entering PendSV and consuming the CPU budget needed for 25-fps UVC.
-        if !browser_open && video_batch_produced {
-            unsafe { core::ptr::write_volatile(0xE000_ED04 as *mut u32, 1 << 28); } // ICSR.PENDSVSET
+        // Execute a bounded quantum of PDP instructions in thread context.
+        // Check the video producer after every instruction: USB completion
+        // interrupts may free a buffer while the emulator is running, and we
+        // must refill it before spending the rest of the quantum on emulation.
+        if !browser_open {
+            for _ in 0..16 {
+                unsafe { bk_loop(); }
+                service_keyboard_frame_pacing();
+                while prepare_next_video_batch(&mut video_renderer) {}
+            }
         }
     }
 }
@@ -972,9 +973,6 @@ fn configure_exception_priorities(scb: &mut SCB) {
         // USB controller interrupts preempt the emulator loop. SysTick
         // remains enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
-        // PendSV is the lowest-priority context for bounded emulator execution.
-        scb.set_priority(SystemHandler::PendSV, 0xF0);
-
         // OTG_HS is unmasked after successful TinyUSB device initialization.
         NVIC::mask(interrupt::OTG_HS);
         NVIC::unpend(interrupt::OTG_HS);
@@ -993,14 +991,8 @@ fn SysTick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
 }
 
-#[exception]
-fn PendSV() {
-    // Run a bounded emulator quantum. USB and SysTick interrupts preempt this
-    // lowest-priority handler.
-    for _ in 0..16 {
-        unsafe { bk_loop(); }
-    }
-
+// Keyboard input is paced in thread context alongside emulator execution.
+fn service_keyboard_frame_pacing() {
     let now = unsafe { bk_timing_cycles() };
     if !KEYBOARD_CYCLE_INITIALIZED.load(Ordering::Relaxed) {
         LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
