@@ -20,7 +20,7 @@ unsigned char in_wait_instr = 0;
  * there can be no more than 1 pending interrupt of each kind.
  */
 unsigned long pending_interrupts = 0;
-double earliest = 0.0;
+float earliest = 0.0f;
 event events[NUM_PRI];
 
 /*
@@ -89,7 +89,7 @@ int ev_fire( int priority )
 		return OK;
 	}
 
-	earliest = 10.0e38;
+	earliest = 3.0e38f;
 
 	for( x = 0; x < NUM_PRI && (1UL<<x) <= pending_interrupts; ++x ) {
 		if ((mask & pending_interrupts & (1<<x)) &&
