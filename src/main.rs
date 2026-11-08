@@ -171,10 +171,8 @@ fn main() -> ! {
     // TinyUSB's DCD enables the OTG_HS NVIC line during initialization.
     // Keep it masked and service the DWC2 device interrupt status from TIM2,
     // matching the old stack's timer-driven 16 kHz polling model.
-    unsafe {
-        NVIC::mask(interrupt::OTG_HS);
-        NVIC::unpend(interrupt::OTG_HS);
-    }
+    NVIC::mask(interrupt::OTG_HS);
+    NVIC::unpend(interrupt::OTG_HS);
     configure_usb_device_poll_timer(
         &device.RCC,
         &device.TIM2,
