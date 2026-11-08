@@ -557,20 +557,20 @@ pub fn show_audio_status(edge_overflows: u32, underrun_samples: u32, min_occupan
 
 /// Update the fixed performance row in the camera image. The caller limits
 /// this to one update per second so the overlay does not add per-frame work.
-pub fn show_performance_status(cycles_per_second: u32, frames_per_second_tenths: u32) {
+pub fn show_performance_status(
+    cycles_per_second: u32,
+    rendered_samples_per_second: u32,
+    render_calls_per_second: u32,
+) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
 
-    line[..4].copy_from_slice(b"CYC ");
-    pos = 4;
+    append_bytes(&mut line, &mut pos, b"CYC ");
     append_decimal(&mut line, &mut pos, cycles_per_second);
-    append_bytes(&mut line, &mut pos, b"/s FR ");
-    append_decimal(&mut line, &mut pos, frames_per_second_tenths / 10);
-    line[pos] = b'.';
-    pos += 1;
-    line[pos] = b'0' + (frames_per_second_tenths % 10) as u8;
-    pos += 1;
-    append_bytes(&mut line, &mut pos, b"/s");
+    append_bytes(&mut line, &mut pos, b" R ");
+    append_decimal(&mut line, &mut pos, rendered_samples_per_second);
+    append_bytes(&mut line, &mut pos, b" N ");
+    append_decimal(&mut line, &mut pos, render_calls_per_second);
 
     show_file_browser_line(28, &line[..pos], false);
 }
