@@ -2,9 +2,8 @@
 //
 // TinyUSB application class-driver registration.
 //
-// UVC and UAC2 are registered ahead of TinyUSB's built-in drivers. The UVC
-// driver is being implemented incrementally; UAC2 remains non-claiming until
-// its complete control and streaming paths are ready.
+// UVC is implemented as a custom class driver to preserve the three-transaction
+// high-speed ISO path. UAC2 remains non-claiming until its full driver is ready.
 
 #include "tusb.h"
 #include "device/usbd_pvt.h"
