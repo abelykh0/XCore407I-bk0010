@@ -837,8 +837,11 @@ fn parse_uac2_function(descriptors: &[u8]) -> Option<(usize, usize)> {
                     if len != 12 || usb_stream_terminal
                         || descriptors[offset + 3] != 4
                         || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != 0x0101
-                        || descriptors[offset + 6] != 5
-                        || descriptors[offset + 7] != UAC_CLOCK_ENTITY
+                        // UAC2 Output Terminal fields after wTerminalType are:
+                        // bAssocTerminal, bSourceID, bCSourceID.
+                        || descriptors[offset + 6] != 0
+                        || descriptors[offset + 7] != 5
+                        || descriptors[offset + 8] != UAC_CLOCK_ENTITY
                     { return None; }
                     usb_stream_terminal = true;
                 }
