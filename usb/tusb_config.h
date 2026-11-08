@@ -44,7 +44,8 @@
 
 // Device audio class is enabled during the UAC2 port; its function-specific
 // packet/FIFO sizing will be set alongside the migrated audio descriptors.
-#define CFG_TUD_AUDIO 1
+// UAC2 is handled by the application's custom class driver, not TinyUSB's built-in audiod.
+#define CFG_TUD_AUDIO 0
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT 0
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 12
