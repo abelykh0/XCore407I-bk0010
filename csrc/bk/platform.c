@@ -39,11 +39,11 @@ flag_t bkmodel = 0;
 flag_t io_stop_happened = 0;
 unsigned short last_branch = 0;
 
-uint8_t port0177660 = 0x40;
-uint8_t port0177662 = 0;
-uint16_t port0177716 = 0x0040;
-uint16_t port0177664 = 01330;
-uint16_t port0177714 = 0;
+uint8_t  port0177660 = 0x40;    // Keyboard Status Register
+uint8_t  port0177662 = 0;       // Keyboard Data / Code Register
+uint16_t port0177714 = 0;       // Parallel Port / Peripheral Device Register
+uint16_t port0177716 = 0x0040;  // System Port Register / Control Register (bit 6 - speaker)
+uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 
 // Audio output transition queue. The emulator is the single producer
 // (thread context); the USB Audio endpoint callback consumes transitions.
