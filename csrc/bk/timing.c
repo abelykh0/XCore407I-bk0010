@@ -271,3 +271,9 @@ register pdp_regs *p;
     	break;
     }
 }
+
+/* Return the accumulated PDP clock ticks modulo 2^32 for interval sampling. */
+uint32_t bk_timing_cycles(void)
+{
+    return (uint32_t)(uint64_t)ticks;
+}
