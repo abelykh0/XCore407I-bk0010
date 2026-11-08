@@ -6,6 +6,7 @@
 // endpoint. UAC2 is delegated to TinyUSB's built-in audio class driver.
 
 #include "tusb.h"
+#include "class/video/video.h"
 #include "device/usbd_pvt.h"
 #include "tusb_class_drivers.h"
 
