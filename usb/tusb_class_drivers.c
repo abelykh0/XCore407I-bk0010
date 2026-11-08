@@ -50,6 +50,10 @@ static bool xcore_audio_xfer(uint8_t rhport, uint8_t ep_addr,
   return xcore_tud_audio_xfer(rhport, ep_addr, (int32_t) result, xferred_bytes);
 }
 
+static void xcore_audio_reset(uint8_t rhport) {
+  xcore_tud_audio_reset(rhport);
+}
+
 static uint16_t xcore_audio_open(uint8_t rhport,
                                  tusb_desc_interface_t const *desc_intf,
                                  uint16_t max_len) {
@@ -72,7 +76,7 @@ static usbd_class_driver_t const xcore_class_drivers[] = {
     .name = "XCore UAC2",
     .init = xcore_driver_init,
     .deinit = xcore_driver_deinit,
-    .reset = xcore_driver_reset,
+    .reset = xcore_audio_reset,
     .open = xcore_audio_open,
     .control_xfer_cb = xcore_audio_control,
     .xfer_cb = xcore_audio_xfer,
