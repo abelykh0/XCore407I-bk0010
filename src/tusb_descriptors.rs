@@ -113,7 +113,7 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
         9, 0x04, 3, 1, 1, 1, 2, 0x20, 0,
         16, 0x24, 1, 4, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0,
         6, 0x24, 2, 1, 2, 16,
-        7, 0x05, 0x82, 0x05, 6, 0, 1,
+        7, 0x05, 0x82, 0x05, 12, 0, 1,
         8, 0x25, 1, 0, 0, 0, 0, 0,
     ]);
 
