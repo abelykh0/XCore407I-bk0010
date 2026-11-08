@@ -444,6 +444,50 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
     }
 }
 
+/// Update the fixed performance row in the camera image. The caller limits
+/// this to one update per second so the overlay does not add per-frame work.
+pub fn show_performance_status(cycles_per_second: u32, frames_per_second_tenths: u32) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+
+    line[..4].copy_from_slice(b"CYC ");
+    pos = 4;
+    append_decimal(&mut line, &mut pos, cycles_per_second);
+    append_bytes(&mut line, &mut pos, b"/s FR ");
+    append_decimal(&mut line, &mut pos, frames_per_second_tenths / 10);
+    line[pos] = b'.';
+    pos += 1;
+    line[pos] = b'0' + (frames_per_second_tenths % 10) as u8;
+    pos += 1;
+    append_bytes(&mut line, &mut pos, b"/s");
+
+    show_file_browser_line(28, &line[..pos], false);
+}
+
+fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
+    for &byte in bytes {
+        if *pos == out.len() { break; }
+        out[*pos] = byte;
+        *pos += 1;
+    }
+}
+
+fn append_decimal(out: &mut [u8; 32], pos: &mut usize, mut value: u32) {
+    let mut digits = [0u8; 10];
+    let mut count = 0usize;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        count += 1;
+        value /= 10;
+        if value == 0 { break; }
+    }
+    while count != 0 && *pos < out.len() {
+        count -= 1;
+        out[*pos] = digits[count];
+        *pos += 1;
+    }
+}
+
 /// Append keyboard input to one persistent canvas row instead of allocating a
 /// new status row for every key report. When the line fills, overwrite it from
 /// the beginning; a single key press never advances the row.
