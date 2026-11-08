@@ -1,12 +1,15 @@
 //! Rust side of the TinyUSB custom-class callback boundary.
 //!
 //! The class-driver registration structure stays in C because it is private
-//! to TinyUSB. UVC descriptor parsing is implemented here, but the callback
-//! still returns zero so TinyUSB does not claim the interface until endpoint
-//! activation and the complete control/data paths are ready.
+//! to TinyUSB. This module implements UVC parsing, alternate settings,
+//! Probe/Commit controls, and the high-bandwidth ISO IN transfer path.
 
 use core::ffi::c_void;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::camera::{HEIGHT, WIDTH};
+use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS, MAX_PACKET_SIZE};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
@@ -25,20 +28,89 @@ const UVC_NV12_GUID: [u8; 16] = [
     0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
 ];
 
+const CONTROL_STAGE_SETUP: u8 = 0;
+const CONTROL_STAGE_DATA: u8 = 1;
+const CONTROL_STAGE_ACK: u8 = 2;
+const REQUEST_GET_INTERFACE: u8 = 10;
+const REQUEST_SET_INTERFACE: u8 = 11;
+const REQUEST_SET_CUR: u8 = 0x01;
+const REQUEST_TYPE_MASK: u8 = 0x60;
+const REQUEST_TYPE_STANDARD: u8 = 0x00;
+const REQUEST_TYPE_CLASS: u8 = 0x20;
+const REQUEST_RECIPIENT_MASK: u8 = 0x1f;
+const REQUEST_RECIPIENT_INTERFACE: u8 = 0x01;
+const REQUEST_DIRECTION_IN: u8 = 0x80;
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct UsbControlRequest {
+    request_type: u8,
+    request: u8,
+    value: u16,
+    index: u16,
+    length: u16,
+}
+
+#[derive(Clone, Copy)]
+struct ParsedUvcFunction {
+    length: usize,
+    endpoint_offset: usize,
+}
+
+static UVC_STATE_READY: AtomicBool = AtomicBool::new(false);
+static mut UVC_STATE: MaybeUninit<UvcClass> = MaybeUninit::uninit();
+static mut UVC_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
+static mut UVC_ALT_RESPONSE: u8 = 0;
+
+unsafe extern "C" {
+    fn xcore_tud_control_xfer(
+        rhport: u8,
+        request: *const c_void,
+        buffer: *mut c_void,
+        length: u16,
+    ) -> bool;
+    fn xcore_tud_control_status(rhport: u8, request: *const c_void) -> bool;
+    fn xcore_usbd_control_buffer() -> *mut u8;
+    fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
+    fn xcore_usbd_edpt_iso_activate(rhport: u8, endpoint_desc: *const c_void) -> bool;
+    fn xcore_usbd_edpt_close(rhport: u8, ep_addr: u8);
+    fn xcore_usbd_edpt_xfer(rhport: u8, ep_addr: u8, buffer: *mut u8, length: u16) -> bool;
+    fn xcore_usbd_edpt_ready(rhport: u8, ep_addr: u8) -> bool;
+}
+
+fn with_uvc_state<R>(f: impl FnOnce(&mut UvcClass) -> R) -> Option<R> {
+    if !UVC_STATE_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    let state = core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>();
+    Some(unsafe { f(&mut *state) })
+}
+
+fn initialize_uvc_state() -> bool {
+    if UVC_STATE_READY.load(Ordering::Acquire) {
+        return true;
+    }
+    let Some(state) = UvcClass::try_new() else {
+        return false;
+    };
+    unsafe {
+        core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>().write(state);
+    }
+    UVC_STATE_READY.store(true, Ordering::Release);
+    true
+}
+
 /// Validate and measure the complete UVC function beginning at interface 0.
-///
-/// The configuration parser passes open() a slice beginning at the
-/// VideoControl interface (the preceding IAD is not included). The returned
-/// span ends immediately before the next function's interface descriptor.
-/// This parser deliberately does not claim the interfaces yet.
-fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
+fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
     if descriptors.len() < 9
-        || descriptors[0] < 9
+        || descriptors[0] != 9
         || descriptors[1] != USB_DESC_INTERFACE
         || descriptors[2] != UVC_CONTROL_INTERFACE
         || descriptors[3] != 0
+        || descriptors[4] != 0
         || descriptors[5] != USB_CLASS_VIDEO
         || descriptors[6] != USB_SUBCLASS_VIDEO_CONTROL
+        || descriptors[7] != 0
     {
         return None;
     }
@@ -47,11 +119,14 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
     let mut control_interface_seen = false;
     let mut streaming_alt0_seen = false;
     let mut streaming_alt1_seen = false;
-    let mut streaming_endpoint_seen = false;
+    let mut streaming_endpoint_offset = None;
     let mut vc_header_seen = false;
+    let mut vc_input_terminal_seen = false;
+    let mut vc_output_terminal_seen = false;
     let mut vs_header_seen = false;
     let mut nv12_format_seen = false;
     let mut frame_seen = false;
+    let mut color_matching_seen = false;
     let mut function_end = descriptors.len();
     let mut current_interface = u8::MAX;
     let mut current_alternate = u8::MAX;
@@ -64,66 +139,111 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
         }
 
         if descriptor_type == USB_DESC_INTERFACE {
-            if length < 9 {
+            if length != 9 {
                 return None;
             }
             let number = descriptors[offset + 2];
             let alternate = descriptors[offset + 3];
+            let endpoint_count = descriptors[offset + 4];
             let class = descriptors[offset + 5];
             let subclass = descriptors[offset + 6];
-            current_interface = number;
-            current_alternate = alternate;
+            let protocol = descriptors[offset + 7];
 
             if offset != 0 && number != UVC_CONTROL_INTERFACE && number != UVC_STREAMING_INTERFACE {
                 function_end = offset;
                 break;
             }
-
-            if class != USB_CLASS_VIDEO {
+            if class != USB_CLASS_VIDEO || protocol != 0 {
                 return None;
             }
 
+            current_interface = number;
+            current_alternate = alternate;
             match (number, alternate, subclass) {
                 (UVC_CONTROL_INTERFACE, 0, USB_SUBCLASS_VIDEO_CONTROL) => {
-                    if descriptors[offset + 4] != 0 { return None; }
+                    if control_interface_seen || endpoint_count != 0 {
+                        return None;
+                    }
                     control_interface_seen = true;
                 }
                 (UVC_STREAMING_INTERFACE, 0, USB_SUBCLASS_VIDEO_STREAMING) => {
-                    if descriptors[offset + 4] != 0 { return None; }
+                    if streaming_alt0_seen || endpoint_count != 0 {
+                        return None;
+                    }
                     streaming_alt0_seen = true;
                 }
                 (UVC_STREAMING_INTERFACE, 1, USB_SUBCLASS_VIDEO_STREAMING) => {
-                    if descriptors[offset + 4] != 1 { return None; }
+                    if streaming_alt1_seen || endpoint_count != 1 {
+                        return None;
+                    }
                     streaming_alt1_seen = true;
                 }
                 _ => return None,
             }
         } else if descriptor_type == USB_DESC_CS_INTERFACE
             && current_interface == UVC_CONTROL_INTERFACE
-            && length >= 13
-            && descriptors[offset + 2] == 1
         {
-            // UVC VideoControl Header: UVC 1.1, one streaming interface,
-            // and that interface is number 1.
-            if u16::from_le_bytes([descriptors[offset + 3], descriptors[offset + 4]]) != 0x0110
-                || descriptors[offset + 11] != 1
-                || descriptors[offset + 12] != UVC_STREAMING_INTERFACE
-            {
+            if length < 3 {
                 return None;
             }
-            vc_header_seen = true;
+            match descriptors[offset + 2] {
+                // UVC VideoControl Header.
+                1 => {
+                    if length != 13
+                        || vc_header_seen
+                        || u16::from_le_bytes([descriptors[offset + 3], descriptors[offset + 4]]) != 0x0110
+                        || u16::from_le_bytes([descriptors[offset + 5], descriptors[offset + 6]]) != 30
+                        || u32::from_le_bytes([
+                            descriptors[offset + 7], descriptors[offset + 8],
+                            descriptors[offset + 9], descriptors[offset + 10],
+                        ]) != 48_000_000
+                        || descriptors[offset + 11] != 1
+                        || descriptors[offset + 12] != UVC_STREAMING_INTERFACE
+                    {
+                        return None;
+                    }
+                    vc_header_seen = true;
+                }
+                // Input terminal descriptor used by the existing camera function.
+                2 => {
+                    if length != 8
+                        || descriptors[offset + 3] != 1
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != 0x0200
+                    {
+                        return None;
+                    }
+                    vc_input_terminal_seen = true;
+                }
+                // USB streaming output terminal.
+                3 => {
+                    if length != 9
+                        || descriptors[offset + 3] != 2
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != 0x0101
+                        || descriptors[offset + 7] != 1
+                    {
+                        return None;
+                    }
+                    vc_output_terminal_seen = true;
+                }
+                _ => return None,
+            }
         } else if descriptor_type == USB_DESC_CS_INTERFACE
             && current_interface == UVC_STREAMING_INTERFACE
             && current_alternate == 0
         {
+            if length < 3 {
+                return None;
+            }
             match descriptors[offset + 2] {
                 // VideoStreaming input header emitted by UvcUsbClass.
                 1 => {
                     if length != 14
+                        || vs_header_seen
                         || descriptors[offset + 3] != 1
-                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]])
-                            != UVC_VS_TOTAL_LENGTH
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != UVC_VS_TOTAL_LENGTH
                         || descriptors[offset + 6] != UVC_STREAM_ENDPOINT
+                        || descriptors[offset + 8] != 2
+                        || descriptors[offset + 12] != 1
                     {
                         return None;
                     }
@@ -132,10 +252,12 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
                 // Uncompressed format descriptor: exactly one NV12 format.
                 4 => {
                     if length != 27
+                        || nv12_format_seen
                         || descriptors[offset + 3] != 1
                         || descriptors[offset + 4] != 1
                         || descriptors[offset + 5..offset + 21] != UVC_NV12_GUID
                         || descriptors[offset + 21] != 12
+                        || descriptors[offset + 22] != 1
                     {
                         return None;
                     }
@@ -144,56 +266,81 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
                 // Uncompressed frame descriptor for the configured camera.
                 5 => {
                     if length != 30
+                        || frame_seen
                         || descriptors[offset + 3] != 1
                         || descriptors[offset + 4] != 0
-                        || u16::from_le_bytes([descriptors[offset + 5], descriptors[offset + 6]])
-                            != WIDTH as u16
-                        || u16::from_le_bytes([descriptors[offset + 7], descriptors[offset + 8]])
-                            != HEIGHT as u16
+                        || u16::from_le_bytes([descriptors[offset + 5], descriptors[offset + 6]]) != WIDTH as u16
+                        || u16::from_le_bytes([descriptors[offset + 7], descriptors[offset + 8]]) != HEIGHT as u16
                     {
                         return None;
                     }
-                    let frame_bytes = u32::from_le_bytes([
-                        descriptors[offset + 17],
-                        descriptors[offset + 18],
-                        descriptors[offset + 19],
-                        descriptors[offset + 20],
+                    let min_bitrate = u32::from_le_bytes([
+                        descriptors[offset + 9], descriptors[offset + 10],
+                        descriptors[offset + 11], descriptors[offset + 12],
                     ]);
-                    if frame_bytes != crate::camera::FRAME_BYTES as u32 {
+                    let max_bitrate = u32::from_le_bytes([
+                        descriptors[offset + 13], descriptors[offset + 14],
+                        descriptors[offset + 15], descriptors[offset + 16],
+                    ]);
+                    let frame_bytes = u32::from_le_bytes([
+                        descriptors[offset + 17], descriptors[offset + 18],
+                        descriptors[offset + 19], descriptors[offset + 20],
+                    ]);
+                    let interval = u32::from_le_bytes([
+                        descriptors[offset + 21], descriptors[offset + 22],
+                        descriptors[offset + 23], descriptors[offset + 24],
+                    ]);
+                    if min_bitrate != FRAME_BIT_RATE
+                        || max_bitrate != FRAME_BIT_RATE
+                        || frame_bytes != crate::camera::FRAME_BYTES as u32
+                        || interval != FRAME_INTERVAL_100NS
+                        || descriptors[offset + 25] != 1
+                        || u32::from_le_bytes([
+                            descriptors[offset + 26], descriptors[offset + 27],
+                            descriptors[offset + 28], descriptors[offset + 29],
+                        ]) != FRAME_INTERVAL_100NS
+                    {
                         return None;
                     }
                     frame_seen = true;
                 }
                 // Color-matching descriptor used by this NV12 function.
                 0x0d => {
-                    if length != 6 { return None; }
+                    if length != 6
+                        || descriptors[offset + 3] != 1
+                        || descriptors[offset + 4] != 1
+                        || descriptors[offset + 5] != 4
+                    {
+                        return None;
+                    }
+                    color_matching_seen = true;
                 }
                 _ => return None,
             }
         } else if descriptor_type == USB_DESC_ENDPOINT {
-            if length < 7 {
+            if length != 7 {
                 return None;
             }
             let address = descriptors[offset + 2];
-            let attributes = descriptors[offset + 3];
-            let max_packet = u16::from_le_bytes([
-                descriptors[offset + 4],
-                descriptors[offset + 5],
-            ]);
-            let packet_bytes = max_packet & 0x07ff;
-            let transactions = (((max_packet >> 11) & 0x03) + 1) as u8;
-
             if address == UVC_STREAM_ENDPOINT {
                 if current_interface != UVC_STREAMING_INTERFACE || current_alternate != 1 {
                     return None;
                 }
-                if attributes & 0x03 != 0x01
+                let attributes = descriptors[offset + 3];
+                let max_packet = u16::from_le_bytes([
+                    descriptors[offset + 4], descriptors[offset + 5],
+                ]);
+                let packet_bytes = max_packet & 0x07ff;
+                let transactions = (((max_packet >> 11) & 0x03) + 1) as u8;
+                if attributes != 0x05
                     || packet_bytes != UVC_MAX_PACKET_SIZE
                     || transactions != UVC_TRANSACTIONS_PER_MICROFRAME
+                    || descriptors[offset + 6] != 1
+                    || streaming_endpoint_offset.is_some()
                 {
                     return None;
                 }
-                streaming_endpoint_seen = true;
+                streaming_endpoint_offset = Some(offset);
             }
         }
 
@@ -203,13 +350,18 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
     if control_interface_seen
         && streaming_alt0_seen
         && streaming_alt1_seen
-        && streaming_endpoint_seen
         && vc_header_seen
+        && vc_input_terminal_seen
+        && vc_output_terminal_seen
         && vs_header_seen
         && nv12_format_seen
         && frame_seen
+        && color_matching_seen
     {
-        Some(function_end)
+        Some(ParsedUvcFunction {
+            length: function_end,
+            endpoint_offset: streaming_endpoint_offset?,
+        })
     } else {
         None
     }
@@ -217,43 +369,249 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<usize> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_open(
-    _rhport: u8,
+    rhport: u8,
     interface_desc: *const c_void,
     max_len: u16,
 ) -> u16 {
     if interface_desc.is_null() || max_len < 9 {
         return 0;
     }
-
-    // TinyUSB supplies a descriptor span bounded by the configuration
-    // descriptor. Read only within that span and validate every bLength.
     let descriptors = unsafe {
         core::slice::from_raw_parts(interface_desc.cast::<u8>(), max_len as usize)
     };
-    let _validated_function_len = parse_uvc_function(descriptors);
+    let Some(parsed) = parse_uvc_function(descriptors) else {
+        return 0;
+    };
+    if parsed.length < 9 || parsed.length > max_len as usize || !initialize_uvc_state() {
+        return 0;
+    }
 
-    // Keep the old class stack in charge until the TinyUSB control,
-    // alternate-setting and ISO transfer paths are implemented together.
-    0
+    let endpoint_desc = unsafe { descriptors.as_ptr().add(parsed.endpoint_offset) };
+    let packet_size = u16::from_le_bytes(unsafe { [*endpoint_desc.add(4), *endpoint_desc.add(5)] }) & 0x07ff;
+    if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, UVC_STREAM_ENDPOINT, packet_size) } {
+        return 0;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            endpoint_desc,
+            core::ptr::addr_of_mut!(UVC_ENDPOINT_DESCRIPTOR).cast::<u8>(),
+            7,
+        );
+    }
+    parsed.length as u16
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_reset(rhport: u8) {
+    let _ = with_uvc_state(|state| {
+        let _ = state.set_interface(UVC_STREAMING_INTERFACE, 0);
+    });
+    unsafe { xcore_usbd_edpt_close(rhport, UVC_STREAM_ENDPOINT); }
+}
+
+fn submit_uvc_batch(rhport: u8, batch: (&'static [u8], u8)) -> bool {
+    let (bytes, _packet_count) = batch;
+    if bytes.is_empty() || bytes.len() > u16::MAX as usize {
+        return false;
+    }
+    unsafe {
+        xcore_usbd_edpt_xfer(
+            rhport,
+            UVC_STREAM_ENDPOINT,
+            bytes.as_ptr() as *mut u8,
+            bytes.len() as u16,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_control_xfer(
-    _rhport: u8,
-    _stage: u8,
-    _request: *const c_void,
+    rhport: u8,
+    stage: u8,
+    request_ptr: *const c_void,
 ) -> bool {
-    false
+    if request_ptr.is_null() {
+        return false;
+    }
+    let request = unsafe {
+        core::ptr::read_unaligned(request_ptr.cast::<UsbControlRequest>())
+    };
+    let request_type = request.request_type;
+    let request_code = request.request;
+    let value = u16::from_le(request.value);
+    let index = u16::from_le(request.index);
+    let length = u16::from_le(request.length);
+    let interface = index as u8;
+
+    if (request_type & REQUEST_TYPE_MASK) == REQUEST_TYPE_STANDARD
+        && (request_type & REQUEST_RECIPIENT_MASK) == REQUEST_RECIPIENT_INTERFACE
+    {
+        if stage != CONTROL_STAGE_SETUP {
+            return true;
+        }
+        match request_code {
+            REQUEST_GET_INTERFACE => {
+                if interface != UVC_CONTROL_INTERFACE && interface != UVC_STREAMING_INTERFACE {
+                    return false;
+                }
+                let alternate = if interface == UVC_STREAMING_INTERFACE {
+                    let Some(alt) = with_uvc_state(|state| state.alternate_setting()) else {
+                        return false;
+                    };
+                    alt
+                } else {
+                    0
+                };
+                unsafe {
+                    UVC_ALT_RESPONSE = alternate;
+                    xcore_tud_control_xfer(
+                        rhport,
+                        request_ptr,
+                        core::ptr::addr_of_mut!(UVC_ALT_RESPONSE).cast::<c_void>(),
+                        1,
+                    )
+                }
+            }
+            REQUEST_SET_INTERFACE => {
+                if length != 0 || (value >> 8) != 0 {
+                    return false;
+                }
+                if interface == UVC_CONTROL_INTERFACE {
+                    if (value as u8) != 0 {
+                        return false;
+                    }
+                    return unsafe { xcore_tud_control_status(rhport, request_ptr) };
+                }
+                if interface != UVC_STREAMING_INTERFACE || value as u8 > 1 {
+                    return false;
+                }
+                let alternate = value as u8;
+                if alternate == 1 {
+                    let endpoint_desc = core::ptr::addr_of!(UVC_ENDPOINT_DESCRIPTOR).cast::<c_void>();
+                    if !unsafe { xcore_usbd_edpt_iso_activate(rhport, endpoint_desc) } {
+                        return false;
+                    }
+                }
+                let changed = with_uvc_state(|state| {
+                    state.set_interface(UVC_STREAMING_INTERFACE, alternate).is_ok()
+                }).unwrap_or(false);
+                if !changed {
+                    if alternate == 1 {
+                        unsafe { xcore_usbd_edpt_close(rhport, UVC_STREAM_ENDPOINT); }
+                    }
+                    return false;
+                }
+                if alternate == 0 {
+                    unsafe { xcore_usbd_edpt_close(rhport, UVC_STREAM_ENDPOINT); }
+                } else {
+                    let first = with_uvc_state(|state| state.start_stream_batch()).flatten();
+                    if let Some(batch) = first {
+                        if !submit_uvc_batch(rhport, batch) {
+                            return false;
+                        }
+                    }
+                }
+                unsafe { xcore_tud_control_status(rhport, request_ptr) }
+            }
+            _ => false,
+        }
+    } else if (request_type & REQUEST_TYPE_MASK) == REQUEST_TYPE_CLASS {
+        if stage == CONTROL_STAGE_SETUP {
+            if (request_type & REQUEST_DIRECTION_IN) != 0 {
+                let response = with_uvc_state(|state| {
+                    state.control(request_type, request_code, value, index, length, &[])
+                });
+                match response {
+                    Some(Ok(ControlResponse::Data(data))) => unsafe {
+                        xcore_tud_control_xfer(
+                            rhport,
+                            request_ptr,
+                            data.as_ptr() as *mut c_void,
+                            data.len() as u16,
+                        )
+                    },
+                    _ => false,
+                }
+            } else if request_code == REQUEST_SET_CUR && length <= crate::uvc::PROBE_LENGTH as u16 {
+                let buffer = unsafe { xcore_usbd_control_buffer() };
+                if buffer.is_null() {
+                    return false;
+                }
+                unsafe {
+                    xcore_tud_control_xfer(
+                        rhport,
+                        request_ptr,
+                        buffer.cast::<c_void>(),
+                        length,
+                    )
+                }
+            } else {
+                false
+            }
+        } else if stage == CONTROL_STAGE_DATA && (request_type & REQUEST_DIRECTION_IN) == 0 {
+            if length > crate::uvc::PROBE_LENGTH as u16 {
+                return false;
+            }
+            let buffer = unsafe { xcore_usbd_control_buffer() };
+            if buffer.is_null() {
+                return false;
+            }
+            let data = unsafe { core::slice::from_raw_parts(buffer, length as usize) };
+            matches!(
+                with_uvc_state(|state| {
+                    state.control(request_type, request_code, value, index, length, data)
+                }),
+                Some(Ok(ControlResponse::Ack))
+            )
+        } else {
+            true
+        }
+    } else {
+        false
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_xfer(
-    _rhport: u8,
-    _ep_addr: u8,
-    _result: i32,
+    rhport: u8,
+    ep_addr: u8,
+    result: i32,
     _xferred_bytes: u32,
 ) -> bool {
-    false
+    if ep_addr != UVC_STREAM_ENDPOINT {
+        return false;
+    }
+    let batch = with_uvc_state(|state| {
+        if result == 0 {
+            state.next_in_batch()
+        } else {
+            state.restart_after_iso_recovery()
+        }
+    }).flatten();
+    if let Some(batch) = batch {
+        return submit_uvc_batch(rhport, batch);
+    }
+    true
+}
+
+/// Thread-context kick for the first batch if streaming starts before the
+/// producer has published a READY buffer. Call from the main loop.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_task(rhport: u8) {
+    let ready = unsafe { xcore_usbd_edpt_ready(rhport, UVC_STREAM_ENDPOINT) };
+    if !ready {
+        return;
+    }
+    let batch = with_uvc_state(|state| {
+        if state.is_streaming() {
+            state.next_in_batch()
+        } else {
+            None
+        }
+    }).flatten();
+    if let Some(batch) = batch {
+        let _ = submit_uvc_batch(rhport, batch);
+    }
 }
 
 #[unsafe(no_mangle)]
