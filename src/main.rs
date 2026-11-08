@@ -319,6 +319,13 @@ fn main() -> ! {
             let frames_per_second_tenths =
                 ((cycles_per_second as u64 * 10) / 60_000) as u32;
             show_performance_status(cycles_per_second, frames_per_second_tenths);
+            let (edge_overflows, underrun_samples, min_occupancy) =
+                xcore407i_blinker::bk_audio::diagnostics();
+            xcore407i_blinker::camera::show_audio_status(
+                edge_overflows,
+                underrun_samples,
+                min_occupancy,
+            );
             performance_last_ms = now_ms;
             performance_last_cycles = now_cycles;
         }
