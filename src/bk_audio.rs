@@ -107,7 +107,7 @@ impl BkEmulatorAudio {
             }
 
             let sample_cycle = self.next_sample_cycle;
-            if render_until.wrapping_sub(sample_cycle) as i32 < 0 {
+            if (render_until.wrapping_sub(sample_cycle) as i32) < 0 {
                 break;
             }
 
