@@ -211,15 +211,8 @@ bool tud_audio_set_itf_cb(uint8_t rhport,
     return false;
   }
 
-  // audiod has already queued its initial ZLP. Prime the FIFO now so the
-  // first completed microframe can immediately schedule real audio samples.
-  if (interface == 3 && alternate == 1) {
-    uint8_t packet[12] __attribute__((aligned(4)));
-    const uint16_t length = xcore_tud_audio_fill_packet(packet, sizeof(packet));
-    if (length != 0 && tud_audio_n_write(0, packet, length) != length) {
-      return false;
-    }
-  }
+  // The initial ZLP is followed by the normal endpoint completion callback.
+  // Keep PCM consumption exclusively in that ISR callback.
   return true;
 }
 
