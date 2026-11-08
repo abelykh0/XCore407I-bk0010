@@ -9,7 +9,7 @@ use panic_halt as _;
 use stm32f4xx_hal::gpio::{GpioExt, Speed};
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
+use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_performance_status, show_usb_status, Nv12DemoImage};
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -74,6 +74,7 @@ static KEYBOARD_INPUT_LEN: AtomicU8 = AtomicU8::new(0);
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
+    fn bk_timing_cycles() -> u32;
     fn sendInput(buffer: *mut u8, size: u8);
     fn bk_set_pc(start: u16);
     fn bk_request_stop_irq();
@@ -192,6 +193,9 @@ fn main() -> ! {
     let mut browser_count = 0usize;
     let mut browser_selected = 0usize;
     let mut browser_open = false;
+    // Sample the emulator's PDP timing accumulator once per second.
+    let mut performance_last_ms = TICKS.load(Ordering::Relaxed);
+    let mut performance_last_cycles = unsafe { bk_timing_cycles() };
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -314,6 +318,21 @@ fn main() -> ! {
         // Keep the two video buffers replenished outside interrupt context.
         // Do not sleep here: the emulator and USB FS host task need servicing.
         while prepare_next_video_batch(&mut video_renderer) {}
+
+        let now_ms = TICKS.load(Ordering::Relaxed);
+        let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
+        if elapsed_ms >= 1_000 {
+            let now_cycles = unsafe { bk_timing_cycles() };
+            let elapsed_cycles = now_cycles.wrapping_sub(performance_last_cycles);
+            let cycles_per_second =
+                ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
+            // One BK-0010 frame is 60,000 PDP clock ticks (50 fps at 3 MHz).
+            let frames_per_second_tenths =
+                ((cycles_per_second as u64 * 10) / 60_000) as u32;
+            show_performance_status(cycles_per_second, frames_per_second_tenths);
+            performance_last_ms = now_ms;
+            performance_last_cycles = now_cycles;
+        }
     }
 }
 
