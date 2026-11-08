@@ -415,10 +415,13 @@ pub extern "C" fn xcore_tud_uvc_open(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_reset(rhport: u8) {
+    cortex_m::interrupt::free(|_| {
     let _ = with_uvc_state(|state| {
         let _ = state.set_interface(UVC_STREAMING_INTERFACE, 0);
     });
     UVC_ENDPOINT_ALLOCATED.store(false, Ordering::Release);
+
+    })
 }
 
 fn submit_uvc_batch(rhport: u8, batch: (&'static [u8], u8)) -> bool {
@@ -467,6 +470,7 @@ pub extern "C" fn xcore_tud_uvc_control_xfer(
     stage: u8,
     request_ptr: *const c_void,
 ) -> bool {
+    cortex_m::interrupt::free(|_| {
     if request_ptr.is_null() {
         return false;
     }
@@ -612,6 +616,8 @@ pub extern "C" fn xcore_tud_uvc_control_xfer(
     } else {
         false
     }
+
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -621,6 +627,7 @@ pub extern "C" fn xcore_tud_uvc_xfer(
     result: i32,
     _xferred_bytes: u32,
 ) -> bool {
+    cortex_m::interrupt::free(|_| {
     if ep_addr != UVC_STREAM_ENDPOINT {
         return false;
     }
@@ -635,6 +642,8 @@ pub extern "C" fn xcore_tud_uvc_xfer(
         return submit_uvc_batch(rhport, batch);
     }
     true
+
+    })
 }
 
 /// ISR completion path: keep the UVC high-bandwidth endpoint primed without
@@ -666,6 +675,7 @@ pub extern "C" fn xcore_tud_uvc_xfer_isr(
 /// producer has published a READY buffer. Call from the main loop.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_task(rhport: u8) {
+    cortex_m::interrupt::free(|_| {
     let ready = unsafe { xcore_usbd_edpt_ready(rhport, UVC_STREAM_ENDPOINT) };
     if !ready {
         return;
@@ -680,6 +690,8 @@ pub extern "C" fn xcore_tud_uvc_task(rhport: u8) {
     if let Some(batch) = batch {
         let _ = submit_uvc_batch(rhport, batch);
     }
+
+    })
 }
 
 const UAC_CONTROL_INTERFACE: u8 = 2;
@@ -931,11 +943,14 @@ pub extern "C" fn xcore_tud_audio_open(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_reset(_rhport: u8) {
+    cortex_m::interrupt::free(|_| {
     if let Some(state) = audio_state_ptr() {
         unsafe { (&mut *state).tinyusb_set_active(false); }
     }
     unsafe { AUDIO_ALT_SETTING = 0; }
     AUDIO_ENDPOINT_ALLOCATED.store(false, Ordering::Release);
+
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -944,6 +959,7 @@ pub extern "C" fn xcore_tud_audio_control_xfer(
     stage: u8,
     request_ptr: *const c_void,
 ) -> bool {
+    cortex_m::interrupt::free(|_| {
     if request_ptr.is_null() { return false; }
     let request = unsafe { core::ptr::read_unaligned(request_ptr.cast::<UsbControlRequest>()) };
     let request_type = request.request_type;
@@ -1045,6 +1061,8 @@ pub extern "C" fn xcore_tud_audio_control_xfer(
     } else {
         false
     }
+
+    })
 }
 
 /// Submit the next audio packet directly from the USB completion ISR.
@@ -1087,6 +1105,7 @@ pub extern "C" fn xcore_tud_audio_xfer(
     result: i32,
     _xferred_bytes: u32,
 ) -> bool {
+    cortex_m::interrupt::free(|_| {
     if ep_addr != UAC_STREAM_ENDPOINT { return false; }
     let Some(state) = audio_state_ptr() else { return false; };
     unsafe { (&mut *state).tinyusb_transfer_retired(); }
@@ -1096,4 +1115,6 @@ pub extern "C" fn xcore_tud_audio_xfer(
     } else {
         true
     }
+
+    })
 }
