@@ -46,7 +46,7 @@ uint16_t port0177664 = 01330;
 uint16_t port0177714 = 0;
 
 // Audio output transition queue. The emulator is the single producer
-// (thread context); USB Audio consumes transitions from the TIM2 ISR.
+// (thread context); the USB Audio endpoint callback consumes transitions.
 #define BK_AUDIO_EDGE_CAPACITY 512u
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
 static volatile uint16_t bk_audio_edge_head;
@@ -150,7 +150,7 @@ void bk_reset(void)
     pdp.ir = 0;
     pdp.ea_addr = 0;
     pdp.total = 0;
-    ticks = 0.0;
+    ticks = 0.0f;
     pdp.look_time = 0;
     pdp.regs[PC] = MONITOR_BASE;
 
