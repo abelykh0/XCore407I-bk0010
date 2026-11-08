@@ -4,7 +4,7 @@
 //! worker converts them to 48 kHz PCM in a ring buffer. The USB completion ISR
 //! only copies six already-rendered samples from that ring.
 
-use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 const SAMPLES_PER_MICROFRAME: usize = 6;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
@@ -14,6 +14,7 @@ const AUDIO_PREFILL_CYCLES: u32 = 1_008_000; // Queue 6 ms before starting USB c
 const AUDIO_AMPLITUDE: i16 = 12_000;
 const PCM_RING_CAPACITY: u16 = 512;
 const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
+const PCM_MIN_TRACKING_START: u16 = 48; // Ignore startup occupancy until 1 ms is buffered.
 const _: () = assert!(PCM_RING_CAPACITY.is_power_of_two());
 const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
@@ -21,6 +22,7 @@ static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static PCM_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
 static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
+static PCM_MIN_TRACKING: AtomicBool = AtomicBool::new(false);
 static PCM_MAX_OCCUPANCY: AtomicU16 = AtomicU16::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
@@ -86,6 +88,7 @@ impl BkEmulatorAudio {
                 PCM_HEAD.store(0, Ordering::Release);
                 PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
                 PCM_MIN_OCCUPANCY.store(PCM_RING_CAPACITY, Ordering::Relaxed);
+                PCM_MIN_TRACKING.store(false, Ordering::Relaxed);
                 PCM_MAX_OCCUPANCY.store(0, Ordering::Relaxed);
                 self.active = true;
             }
@@ -129,6 +132,9 @@ impl BkEmulatorAudio {
             }
             let new_occupancy = head.wrapping_add(1).wrapping_sub(tail);
             PCM_MAX_OCCUPANCY.fetch_max(new_occupancy, Ordering::Relaxed);
+            if new_occupancy >= PCM_MIN_TRACKING_START {
+                PCM_MIN_TRACKING.store(true, Ordering::Release);
+            }
             PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
             self.next_sample_cycle = self.next_sample_cycle
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_CYCLES);
@@ -158,7 +164,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
     let occupancy = head.wrapping_sub(tail);
-    PCM_MIN_OCCUPANCY.fetch_min(occupancy, Ordering::Relaxed);
+    if PCM_MIN_TRACKING.load(Ordering::Acquire) {
+        PCM_MIN_OCCUPANCY.fetch_min(occupancy, Ordering::Relaxed);
+    }
     let mut missing = 0u32;
     for index in 0..SAMPLES_PER_MICROFRAME {
         let sample = if tail != head {
