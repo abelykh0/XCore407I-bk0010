@@ -296,12 +296,6 @@ fn main() -> ! {
         // Run one emulator iteration in thread context. Video batches are
         // rendered from the canvas below, never from the USB timer ISR.
         if !browser_open {
-            // Execute a small batch of PDP instructions before returning to
-            // USB/video servicing in the main loop.
-            for _ in 0..16 {
-                unsafe { bk_loop(); }
-            }
-
             let input_len = KEYBOARD_INPUT_LEN.swap(0, Ordering::AcqRel);
             if input_len > 0 {
                 let mut buffer = [0u8; 32];
@@ -316,8 +310,8 @@ fn main() -> ! {
             }
         }
 
-        // Keep the two video buffers replenished outside interrupt context.
-        // Do not sleep here: the emulator and USB FS host task need servicing.
+        // Replenish the USB video buffers before scheduling emulator work.
+        // The producer stays in thread context and gets first access to CPU time.
         while prepare_next_video_batch(&mut video_renderer) {}
 
         let now_ms = TICKS.load(Ordering::Relaxed);
@@ -333,6 +327,12 @@ fn main() -> ! {
             show_performance_status(cycles_per_second, frames_per_second_tenths);
             performance_last_ms = now_ms;
             performance_last_cycles = now_cycles;
+        }
+
+        // Pend a low-priority emulator quantum only after USB tasks and video
+        // buffer production have had a chance to run in thread context.
+        if !browser_open {
+            unsafe { (0xE000_ED04 as *mut u32).write_volatile(1 << 28); } // ICSR.PENDSVSET
         }
     }
 }
@@ -955,6 +955,8 @@ fn configure_exception_priorities(scb: &mut SCB) {
         // USB controller interrupts preempt the emulator loop. SysTick
         // remains enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
+        // PendSV is the lowest-priority context for bounded emulator execution.
+        scb.set_priority(SystemHandler::PendSV, 0xF0);
 
         // OTG_HS is unmasked after successful TinyUSB device initialization.
         NVIC::mask(interrupt::OTG_HS);
@@ -972,6 +974,15 @@ fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
 #[exception]
 fn SysTick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[exception]
+fn PendSV() {
+    // Run a bounded quantum. OTG_HS and SysTick preempt this lowest-priority
+    // handler; video generation and TinyUSB task processing remain in thread mode.
+    for _ in 0..16 {
+        unsafe { bk_loop(); }
+    }
 }
 
 fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::FLASH) {
