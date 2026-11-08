@@ -164,6 +164,8 @@ extern flag_t io_stop_happened;
 extern struct _itab itab[];
 extern pdp_regs pdp;
 extern double ticks;
+void timing(pdp_regs *p);
+uint32_t bk_timing_cycles(void);
 extern flag_t in_wait_instr;
 extern unsigned long pending_interrupts;
 
