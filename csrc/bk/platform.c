@@ -148,7 +148,7 @@ void bk_reset(void)
     pdp.ir = 0;
     pdp.ea_addr = 0;
     pdp.total = 0;
-    ticks = 0.0f;
+    bk_timing_reset();
     pdp.look_time = 0;
     pdp.regs[PC] = MONITOR_BASE;
 
@@ -429,7 +429,7 @@ int32_t bk_loop(void)
 
     if (result != OK) {
         switch (result) {
-        case BUS_ERROR: ticks += 64; break;
+        case BUS_ERROR: bk_timing_add_cycles(64u); break;
         case ODD_ADDRESS: result2 = service(04); break;
         case CPU_ILLEGAL: result2 = service(010); break;
         case CPU_BPT: result2 = service(014); break;
