@@ -347,6 +347,59 @@ pub fn set_pixel(x: usize, y: usize, color: u8) {
     }
 }
 
+/// Write one packed BK video byte directly to the compact canvas.
+///
+/// The byte expands to eight luma pixels in monochrome mode or four Cb/Cr
+/// pairs in color mode. The packed group is eight bytes in either mode, and
+/// its aligned offset cannot straddle the SRAM/CCM canvas boundary.
+#[inline]
+pub(crate) fn set_bk_video_byte(byte_x: usize, y: usize, byte: u8, monochrome: bool) -> bool {
+    let mode = camera_mode();
+    if (mode == CameraMode::Monochrome) != monochrome || y >= CANVAS_HEIGHT {
+        return false;
+    }
+
+    let offset = if monochrome {
+        if byte_x >= WIDTH / 8 { return false; }
+        y * WIDTH + byte_x * 8
+    } else {
+        if byte_x >= (WIDTH / 2) / 4 { return false; }
+        (y * (WIDTH / 2) + byte_x * 4) * 2
+    };
+
+    // CANVAS_MAIN_BYTES is divisible by eight, as are all packed-byte
+    // offsets, so this eight-byte span is wholly within one backing region.
+    unsafe {
+        let destination = if offset < CANVAS_MAIN_BYTES {
+            core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
+        } else {
+            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
+        };
+
+        if monochrome {
+            let set = GRAYSCALE[0x3f];
+            let clear = GRAYSCALE[0];
+            for i in 0..8 {
+                destination.add(i).write(if byte & (1 << i) != 0 { set } else { clear });
+            }
+        } else {
+            for i in 0..4 {
+                let palette_index = match (byte >> (i * 2)) & 0x03 {
+                    0 => 0,
+                    1 => 0x30,
+                    2 => 0x0c,
+                    _ => 0x03,
+                };
+                let [u, v] = UV_PALETTE[palette_index];
+                destination.add(i * 2).write(u);
+                destination.add(i * 2 + 1).write(v);
+            }
+        }
+    }
+    true
+}
+
 /// Read a BK color pixel back from the NV12 source canvas.
 pub(crate) fn get_bk_color_pixel(x: usize, y: usize) -> u8 {
     if x >= 256 || y >= CANVAS_HEIGHT {
