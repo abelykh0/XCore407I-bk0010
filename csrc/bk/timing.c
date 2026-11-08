@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include "defines.h"
 
 float ticks = 0.0f;    /* legacy floating-point timing accumulator */
