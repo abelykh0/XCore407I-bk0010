@@ -306,7 +306,9 @@ fn main() -> ! {
         // also runs between individual PDP instructions below, so a newly
         // freed DMA buffer is refilled promptly instead of waiting for a
         // complete emulator quantum to finish.
-        while prepare_next_video_batch(&mut video_renderer) {}
+        while prepare_next_video_batch(&mut video_renderer) {
+            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
+        }
 
         let now_ms = TICKS.load(Ordering::Relaxed);
         let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
@@ -319,12 +321,13 @@ fn main() -> ! {
             let frames_per_second_tenths =
                 ((cycles_per_second as u64 * 10) / 60_000) as u32;
             show_performance_status(cycles_per_second, frames_per_second_tenths);
-            let (edge_overflows, underrun_samples, min_occupancy) =
+            let (edge_overflows, underrun_samples, min_occupancy, max_occupancy) =
                 xcore407i_blinker::bk_audio::diagnostics();
             xcore407i_blinker::camera::show_audio_status(
                 edge_overflows,
                 underrun_samples,
                 min_occupancy,
+                max_occupancy,
             );
             performance_last_ms = now_ms;
             performance_last_cycles = now_cycles;
