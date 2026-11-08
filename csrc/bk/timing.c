@@ -1,6 +1,19 @@
 #include "defines.h"
 
-float ticks = 0.0f;    /* single-precision emulated clock ticks */
+float ticks = 0.0f;    /* legacy floating-point timing accumulator */
+static uint32_t pdp_cycle_count;
+
+void bk_timing_reset(void)
+{
+    ticks = 0.0f;
+    pdp_cycle_count = 0;
+}
+
+void bk_timing_add_cycles(uint32_t cycles)
+{
+    bk_timing_add_cycles((uint32_t)((float)cycles));
+    pdp_cycle_count += cycles;
+}
 
 #define REGREG 12
 
@@ -196,10 +209,10 @@ register pdp_regs *p;
     case  mov: case  movb:
     case  bic: case  bicb: case  bis: case  bisb:
     case  add: case  sub:
-	ticks += REGREG + a_time[SRC_MODE] + dst_time[DST_MODE];
+	bk_timing_add_cycles((uint32_t)(REGREG + a_time[SRC_MODE] + dst_time[DST_MODE]));
 	break;
     case  cmp: case  cmpb: case  bit: case  bitb:
-	ticks += REGREG + a1_time[SRC_MODE] + cmp_time[DST_MODE];
+	bk_timing_add_cycles((uint32_t)(REGREG + a1_time[SRC_MODE] + cmp_time[DST_MODE]));
 	break;
     case  clr: case  clrb:
     case  com: case  comb:
@@ -214,10 +227,10 @@ register pdp_regs *p;
     case  asr: case  asrb:
     case  mtps: case  mfps:
     case  swabi: case  sxt:
-	ticks += REGREG + ab_time[DST_MODE];
+	bk_timing_add_cycles((uint32_t)(REGREG + ab_time[DST_MODE]));
 	break;
     case  tst: case  tstb:
-	ticks += REGREG + a1_time[DST_MODE];
+	bk_timing_add_cycles((uint32_t)(REGREG + a1_time[DST_MODE]));
 	break;
     case  bne: case  beq:
     case  bge: case  blt:
@@ -227,45 +240,45 @@ register pdp_regs *p;
     case  bvc: case  bvs:
     case  bcc: case  bcs:
     case  br:
-	ticks += 16;
+	bk_timing_add_cycles((uint32_t)(16));
 	break;
     case  jmp:
-	ticks += dj_time[DST_MODE];
+	bk_timing_add_cycles((uint32_t)(dj_time[DST_MODE]));
 	break;
     case  jsr:
-	ticks += ds_time[DST_MODE];
+	bk_timing_add_cycles((uint32_t)(ds_time[DST_MODE]));
 	break;
     case  sob:
-	ticks += 20;
+	bk_timing_add_cycles((uint32_t)(20));
 	break;
     case  rts:
-	ticks += 32;
+	bk_timing_add_cycles((uint32_t)(32));
 	break;
     case  scc: case  ccc:
-	ticks += REGREG;
+	bk_timing_add_cycles((uint32_t)(REGREG));
 	break;
     case  rti: case rtt:
-	ticks += 40;
+	bk_timing_add_cycles((uint32_t)(40));
 	break;
     case  trap:
     case  emt:
     case  bpt:
     case  iot:
-	ticks += 68;
+	bk_timing_add_cycles((uint32_t)(68));
 	break;
     case  xor:
-	ticks += REGREG + a2_time[DST_MODE];
+	bk_timing_add_cycles((uint32_t)(REGREG + a2_time[DST_MODE]));
 	break;
     case mark:
-	ticks += 36;
+	bk_timing_add_cycles((uint32_t)(36));
 	break;
     case  illegal: case  halt: case fis: case mul: case divide:
     case ash: case ashc:
-	ticks += 144;
+	bk_timing_add_cycles((uint32_t)(144));
 	break;
     case waiti:
     case busreset:
-	ticks += 1167;	/* 350 us */
+	bk_timing_add_cycles((uint32_t)(1167));	/* 350 us */
 	break;
     default:
     	break;
@@ -275,5 +288,5 @@ register pdp_regs *p;
 /* Return the accumulated PDP clock ticks modulo 2^32 for interval sampling. */
 uint32_t bk_timing_cycles(void)
 {
-    return (uint32_t)ticks;
+    return pdp_cycle_count;
 }
