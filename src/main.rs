@@ -991,19 +991,41 @@ fn SysTick() {
 
 #[exception]
 fn PendSV() {
-    static mut NEXT_KEYBOARD_CYCLE: u32 = 0;
-    for _ in 0..16 { unsafe { bk_loop(); } }
+    static mut LAST_KEYBOARD_CYCLE: u32 = 0;
+    static mut KEYBOARD_CYCLE_INITIALIZED: bool = false;
+
+    // Run a bounded emulator quantum. USB and SysTick interrupts preempt this
+    // lowest-priority handler.
+    for _ in 0..16 {
+        unsafe { bk_loop(); }
+    }
+
     let now = unsafe { bk_timing_cycles() };
-    let deadline_ptr = core::ptr::addr_of_mut!(NEXT_KEYBOARD_CYCLE);
-    let deadline = unsafe { deadline_ptr.read_volatile() };
-    if deadline == 0 {
-        unsafe { deadline_ptr.write_volatile(now.wrapping_add(PDP_CYCLES_PER_FRAME)); }
-    } else if now.wrapping_sub(deadline) as i32 >= 0 {
-        if let Some(key) = keyboard_queue_peek() {
-            if unsafe { bk_try_send_input_byte(key) } { keyboard_queue_pop(); }
+    let last_ptr = core::ptr::addr_of_mut!(LAST_KEYBOARD_CYCLE);
+    let initialized_ptr = core::ptr::addr_of_mut!(KEYBOARD_CYCLE_INITIALIZED);
+    let initialized = unsafe { initialized_ptr.read_volatile() };
+    if !initialized {
+        unsafe {
+            last_ptr.write_volatile(now);
+            initialized_ptr.write_volatile(true);
         }
-        // Avoid catching up with a burst after a long scheduling delay.
-        unsafe { deadline_ptr.write_volatile(now.wrapping_add(PDP_CYCLES_PER_FRAME)); }
+        return;
+    }
+
+    let last = unsafe { last_ptr.read_volatile() };
+    let elapsed = now.wrapping_sub(last);
+    if (elapsed as i32) < 0 {
+        // The emulator cycle counter was reset; rebase the frame interval.
+        unsafe { last_ptr.write_volatile(now); }
+    } else if elapsed >= PDP_CYCLES_PER_FRAME {
+        if let Some(key) = keyboard_queue_peek() {
+            // Leave the byte at the queue head if the BK keyboard port is busy.
+            if unsafe { bk_try_send_input_byte(key) } {
+                keyboard_queue_pop();
+            }
+        }
+        // At most one byte per 60,000 PDP cycles, including after delays.
+        unsafe { last_ptr.write_volatile(now); }
     }
 }
 
