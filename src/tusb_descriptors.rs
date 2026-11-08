@@ -135,6 +135,13 @@ static DEVICE_QUALIFIER_DESCRIPTOR: [u8; 10] = [
 // usb-device emitted an empty language list because no device-level strings
 // were configured. Preserve that exact two-byte string descriptor.
 static EMPTY_LANGUAGE_DESCRIPTOR: [u16; 1] = [0x0302];
+static CAMERA_INTERFACE_STRING: [u16; 22] = [
+    0x032c,
+    b'X' as u16, b'C' as u16, b'o' as u16, b'r' as u16, b'e' as u16,
+    b'4' as u16, b'0' as u16, b'7' as u16, b'I' as u16, b' ' as u16,
+    b'N' as u16, b'V' as u16, b'1' as u16, b'2' as u16, b' ' as u16,
+    b'c' as u16, b'a' as u16, b'm' as u16, b'e' as u16, b'r' as u16, b'a' as u16,
+];
 
 static BOS_DESCRIPTOR: [u8; 5] = [5, 0x0f, 5, 0, 0];
 
@@ -167,9 +174,9 @@ pub extern "C" fn tud_descriptor_bos_cb() -> *const u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_string_cb(index: u8, _lang_id: u16) -> *const u16 {
-    if index == 0 {
-        EMPTY_LANGUAGE_DESCRIPTOR.as_ptr()
-    } else {
-        core::ptr::null()
+    match index {
+        0 => EMPTY_LANGUAGE_DESCRIPTOR.as_ptr(),
+        4 => CAMERA_INTERFACE_STRING.as_ptr(),
+        _ => core::ptr::null(),
     }
 }
