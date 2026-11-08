@@ -86,13 +86,13 @@ static bool xcore_uvc_control(uint8_t rhport, uint8_t stage,
 
       if (!xcore_tud_uvc_set_interface(alternate)) {
         if (alternate == 1) {
-          usbd_edpt_close(rhport, 0x81);
+          xcore_usbd_edpt_close(rhport, 0x81);
         }
         return false;
       }
 
       if (alternate == 0) {
-        usbd_edpt_close(rhport, 0x81);
+        xcore_usbd_edpt_close(rhport, 0x81);
       } else if (!xcore_tud_uvc_start_stream(rhport)) {
         return false;
       }
@@ -272,21 +272,6 @@ void tud_umount_cb(void) {
   xcore_tud_audio_stop();
 }
 #endif
-
-bool xcore_tud_control_xfer(uint8_t rhport,
-                            tusb_control_request_t const *request,
-                            void *buffer, uint16_t length) {
-  return tud_control_xfer(rhport, request, buffer, length);
-}
-
-bool xcore_tud_control_status(uint8_t rhport,
-                              tusb_control_request_t const *request) {
-  return tud_control_status(rhport, request);
-}
-
-uint8_t *xcore_usbd_control_buffer(void) {
-  return usbd_get_ctrl_buf();
-}
 
 bool xcore_usbd_edpt_iso_alloc(uint8_t rhport, uint8_t ep_addr,
                                uint16_t packet_size) {
