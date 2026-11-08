@@ -57,8 +57,6 @@ static uint8_t bk_audio_level;
 static uint32_t bk_audio_edge_cycles[BK_AUDIO_EDGE_CAPACITY];
 static uint8_t bk_audio_edge_levels[BK_AUDIO_EDGE_CAPACITY];
 
-#define DWT_CYCCNT (*(volatile uint32_t *)0xE0001004u)
-
 static void bk_audio_record_level(uint8_t level)
 {
     level = level ? 1u : 0u;
@@ -75,7 +73,8 @@ static void bk_audio_record_level(uint8_t level)
 
     bk_audio_level = level;
     uint16_t slot = head & BK_AUDIO_EDGE_MASK;
-    bk_audio_edge_cycles[slot] = DWT_CYCCNT;
+    // Timestamp in the emulator's PDP-cycle domain, not the MCU clock domain.
+    bk_audio_edge_cycles[slot] = bk_timing_cycles();
     bk_audio_edge_levels[slot] = level;
     __asm volatile("dmb" ::: "memory");
     bk_audio_edge_head = (uint16_t)(head + 1u);
