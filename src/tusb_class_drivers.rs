@@ -656,7 +656,7 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_render() {
     if let Some(state) = audio_state_ptr() {
-        unsafe { (&mut *state).render_available(96); }
+        unsafe { (&mut *state).render_available(448); }
     }
 }
 
