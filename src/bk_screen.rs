@@ -63,7 +63,7 @@ impl BkScreen {
             let x = byte_x * 8;
             for i in 0..8 {
                 let color = if byte & (1 << i) == 0 { 0x00 } else { 0x3f };
-                crate::camera::set_demo_pixel(x + i, y, color);
+                crate::camera::set_pixel(x + i, y, color);
             }
         } else {
             let x = byte_x * 4;
@@ -71,7 +71,7 @@ impl BkScreen {
                 let color = match (byte >> (i * 2)) & 0x03 {
                     0 => 0x00, 1 => 0x30, 2 => 0x0c, _ => 0x03,
                 };
-                crate::camera::set_demo_pixel(x + i, y, color);
+                crate::camera::set_pixel(x + i, y, color);
             }
         }
         true
