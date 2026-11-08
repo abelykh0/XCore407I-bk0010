@@ -652,29 +652,18 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
     })
 }
 
-/// Generate one 6-sample / 12-byte packet for TinyUSB's audio software FIFO.
-/// TinyUSB copies these bytes into its own DMA-capable endpoint buffer.
+/// Render a bounded batch of PCM samples from the main loop.
 #[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
-    if buffer.is_null() || capacity < 12 {
-        return 0;
+pub extern "C" fn xcore_tud_audio_render() {
+    if let Some(state) = audio_state_ptr() {
+        unsafe { (&mut *state).render_available(96); }
     }
-    let Some(state) = audio_state_ptr() else {
-        return 0;
-    };
-    let packet = unsafe { (&mut *state).tinyusb_prepare_packet() };
-    let Some((source, length)) = packet else {
-        return 0;
-    };
-    if length > capacity {
-        unsafe { (&mut *state).tinyusb_transfer_retired(); }
-        return 0;
-    }
-    unsafe {
-        core::ptr::copy_nonoverlapping(source, buffer, length as usize);
-        (&mut *state).tinyusb_transfer_retired();
-    }
-    length
+}
+
+/// USB completion callback: copy six pre-rendered samples only.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
+    unsafe { crate::bk_audio::fill_usb_packet(buffer, capacity) }
 }
 
 /// TinyUSB calls this on unmount/reset; the next SET_INTERFACE will reinitialize
