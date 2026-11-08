@@ -442,6 +442,24 @@ fn submit_uvc_batch(rhport: u8, batch: (&'static [u8], u8)) -> bool {
     submitted
 }
 
+/// Re-arm the ISO endpoint directly from TinyUSB's DCD completion ISR.
+/// TinyUSB has already released the endpoint's busy/claimed state before
+/// invoking xfer_isr, so no endpoint claim is needed here.
+fn submit_uvc_batch_isr(rhport: u8, batch: (&'static [u8], u8)) -> bool {
+    let (bytes, _packet_count) = batch;
+    if bytes.is_empty() || bytes.len() > u16::MAX as usize {
+        return false;
+    }
+    unsafe {
+        xcore_usbd_edpt_xfer_isr(
+            rhport,
+            UVC_STREAM_ENDPOINT,
+            bytes.as_ptr() as *mut u8,
+            bytes.len() as u16,
+        )
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_control_xfer(
     rhport: u8,
@@ -616,6 +634,31 @@ pub extern "C" fn xcore_tud_uvc_xfer(
         return submit_uvc_batch(rhport, batch);
     }
     true
+}
+
+/// ISR completion path: keep the UVC high-bandwidth endpoint primed without
+/// waiting for the main-loop TinyUSB task to drain the event queue.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_uvc_xfer_isr(
+    rhport: u8,
+    ep_addr: u8,
+    result: i32,
+    _xferred_bytes: u32,
+) -> bool {
+    if ep_addr != UVC_STREAM_ENDPOINT {
+        return false;
+    }
+    let batch = with_uvc_state(|state| {
+        if result == 0 {
+            state.next_in_batch()
+        } else {
+            state.restart_after_iso_recovery()
+        }
+    }).flatten();
+    match batch {
+        Some(batch) => submit_uvc_batch_isr(rhport, batch),
+        None => true,
+    }
 }
 
 /// Thread-context kick for the first batch if streaming starts before the
@@ -1000,6 +1043,39 @@ pub extern "C" fn xcore_tud_audio_control_xfer(
         }
     } else {
         false
+    }
+}
+
+/// Submit the next audio packet directly from the USB completion ISR.
+fn submit_audio_packet_isr(rhport: u8) -> bool {
+    let Some(state) = audio_state_ptr() else { return false; };
+    let packet = unsafe { (&mut *state).tinyusb_prepare_packet() };
+    let Some((buffer, length)) = packet else { return true; };
+    let submitted = unsafe {
+        xcore_usbd_edpt_xfer_isr(rhport, UAC_STREAM_ENDPOINT, buffer, length)
+    };
+    if !submitted {
+        unsafe { (&mut *state).tinyusb_transfer_retired(); }
+    }
+    submitted
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_audio_xfer_isr(
+    rhport: u8,
+    ep_addr: u8,
+    _result: i32,
+    _xferred_bytes: u32,
+) -> bool {
+    if ep_addr != UAC_STREAM_ENDPOINT {
+        return false;
+    }
+    let Some(state) = audio_state_ptr() else { return false; };
+    unsafe { (&mut *state).tinyusb_transfer_retired(); }
+    if unsafe { AUDIO_ALT_SETTING } == 1 {
+        submit_audio_packet_isr(rhport)
+    } else {
+        true
     }
 }
 
