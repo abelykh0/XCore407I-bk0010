@@ -139,7 +139,17 @@ static CAMERA_INTERFACE_STRING: [u16; 22] = [
     b'c' as u16, b'a' as u16, b'm' as u16, b'e' as u16, b'r' as u16, b'a' as u16,
 ];
 
-static BOS_DESCRIPTOR: [u8; 5] = [5, 0x0f, 5, 0, 0];
+// usb-device's BosWriter emits a BOS header plus a USB 2.0 Extension
+// capability with bmAttributes = 0.
+static BOS_DESCRIPTOR: [u8; 12] = [
+    5, 0x0f, 12, 0, 1,
+    7, 0x10, 2, 0, 0, 0, 0,
+];
+
+// Match usb-device's Device Qualifier for the high-speed composite device.
+static DEVICE_QUALIFIER_DESCRIPTOR: [u8; 10] = [
+    10, 0x06, 0x10, 0x02, 0xef, 0x02, 0x01, 64, 1, 0,
+];
 
 static CONFIGURATION_DESCRIPTOR: [u8; CONFIGURATION_DESCRIPTOR_LEN] =
     build_configuration_descriptor();
@@ -160,10 +170,7 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_qualifier_cb() -> *const u8 {
-    // This firmware exposes only the high-speed configuration. Returning a
-    // qualifier would advertise dual-speed support and make the host request
-    // an Other-Speed Configuration descriptor that we do not provide.
-    core::ptr::null()
+    DEVICE_QUALIFIER_DESCRIPTOR.as_ptr()
 }
 
 #[unsafe(no_mangle)]
