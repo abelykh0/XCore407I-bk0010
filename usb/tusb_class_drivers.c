@@ -115,6 +115,14 @@ void xcore_usbd_edpt_close(uint8_t rhport, uint8_t ep_addr) {
   usbd_edpt_close(rhport, ep_addr);
 }
 
+bool xcore_usbd_edpt_claim(uint8_t rhport, uint8_t ep_addr) {
+  return usbd_edpt_claim(rhport, ep_addr);
+}
+
+bool xcore_usbd_edpt_release(uint8_t rhport, uint8_t ep_addr) {
+  return usbd_edpt_release(rhport, ep_addr);
+}
+
 bool xcore_usbd_edpt_xfer(uint8_t rhport, uint8_t ep_addr,
                           uint8_t *buffer, uint16_t length) {
   return usbd_edpt_xfer(rhport, ep_addr, buffer, length, false);
