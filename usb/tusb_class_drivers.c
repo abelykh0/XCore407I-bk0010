@@ -162,14 +162,14 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
 
 
 #if CFG_TUD_AUDIO
-// The clock source is fixed at 24 kHz.
+// The clock source is fixed at 32 kHz.
 bool tud_audio_get_req_entity_cb(uint8_t rhport,
                                  tusb_control_request_t const *request) {
-  static const uint8_t frequency_cur[4] = {0xc0, 0x5d, 0x00, 0x00};
+  static const uint8_t frequency_cur[4] = {0x00, 0x7d, 0x00, 0x00};
   static const uint8_t frequency_range[14] = {
     1, 0,                         // one subrange
-    0xc0, 0x5d, 0x00, 0x00,       // minimum: 24000 Hz
-    0xc0, 0x5d, 0x00, 0x00,       // maximum: 24000 Hz
+    0x00, 0x7d, 0x00, 0x00,       // minimum: 32000 Hz
+    0x00, 0x7d, 0x00, 0x00,       // maximum: 32000 Hz
     0x00, 0x00, 0x00, 0x00        // resolution: fixed
   };
   static const uint8_t clock_valid = 1;
@@ -238,7 +238,7 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
     return true;
   }
 
-  uint8_t packet[6] __attribute__((aligned(4)));
+  uint8_t packet[8] __attribute__((aligned(4)));
   const uint16_t length = xcore_tud_audio_fill_packet(packet, sizeof(packet));
   if (length == 0) {
     return true;
