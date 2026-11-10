@@ -16,7 +16,7 @@ pub mod tusb_descriptors;
 pub mod uvc;
 
 /// Single source of truth for the USB audio and BK emulator sample rate.
-pub const AUDIO_KHZ: u32 = 32;
+pub const AUDIO_KHZ: u32 = 24;
 pub const AUDIO_SAMPLE_RATE_HZ: u32 = AUDIO_KHZ * 1_000;
 
 #[unsafe(no_mangle)]
