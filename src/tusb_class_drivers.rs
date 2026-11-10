@@ -658,10 +658,14 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_render() {}
 
-/// USB completion callback: copy six pre-rendered samples only.
+/// Diagnostic experiment: keep the audio endpoint active but bypass PCM-ring
+/// reads and sample copying. The endpoint continues transmitting silence.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
-    unsafe { crate::bk_audio::fill_usb_packet(buffer, capacity) }
+    if !buffer.is_null() {
+        unsafe { core::ptr::write_bytes(buffer, 0, capacity as usize); }
+    }
+    capacity
 }
 
 /// TinyUSB calls this on unmount/reset; the next SET_INTERFACE will reinitialize
