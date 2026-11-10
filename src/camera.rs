@@ -570,6 +570,29 @@ pub fn show_audio_status(
     show_file_browser_line(29, &line[..pos], false);
 }
 
+/// Display OTG_HS interrupt load on row 31.
+pub fn show_usb_irq_status(
+    interrupts_per_second: u32,
+    cpu_tenths_percent: u32,
+    average_us: u32,
+    maximum_us: u32,
+) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut line, &mut pos, b"IRQ ");
+    append_decimal(&mut line, &mut pos, interrupts_per_second);
+    append_bytes(&mut line, &mut pos, b" CPU ");
+    append_decimal(&mut line, &mut pos, cpu_tenths_percent / 10);
+    line[pos] = b'.'; pos += 1;
+    append_decimal(&mut line, &mut pos, cpu_tenths_percent % 10);
+    line[pos] = b'%'; pos += 1;
+    append_bytes(&mut line, &mut pos, b" AVG ");
+    append_decimal(&mut line, &mut pos, average_us);
+    append_bytes(&mut line, &mut pos, b" MAX ");
+    append_decimal(&mut line, &mut pos, maximum_us);
+    show_file_browser_line(31, &line[..pos], false);
+}
+
 /// Display one-second USB audio packet callback timings on row 30.
 pub fn show_packet_status(
     calls_per_second: u32,
