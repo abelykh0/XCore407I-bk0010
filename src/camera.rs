@@ -853,28 +853,20 @@ impl Nv12DemoImage {
                     i += 1;
                 }
             } else {
-                let source_pairs = source.cast::<u16>();
-                let destination = unsafe { y_row_ptr().cast::<u16>().add(pixel_x) };
+                let source_words = source.cast::<u32>();
+                let destination_words = unsafe { y_row_ptr().cast::<u32>().add(pixel_x / 2) };
 
-                // Process four Cb/Cr pairs per loop iteration. The transform
-                // and lookup are identical to the scalar path; unrolling only
-                // reduces loop-control overhead in this per-row hot path.
-                while i + 4 <= chunk_pixels {
-                    let p0 = unsafe { source_pairs.add(i).read() };
-                    let p1 = unsafe { source_pairs.add(i + 1).read() };
-                    let p2 = unsafe { source_pairs.add(i + 2).read() };
-                    let p3 = unsafe { source_pairs.add(i + 3).read() };
-                    let h0 = (p0 as u8 ^ (p0 >> 8) as u8) as usize;
-                    let h1 = (p1 as u8 ^ (p1 >> 8) as u8) as usize;
-                    let h2 = (p2 as u8 ^ (p2 >> 8) as u8) as usize;
-                    let h3 = (p3 as u8 ^ (p3 >> 8) as u8) as usize;
-                    unsafe {
-                        destination.add(i).write(DUPLICATED_Y_TABLE[h0]);
-                        destination.add(i + 1).write(DUPLICATED_Y_TABLE[h1]);
-                        destination.add(i + 2).write(DUPLICATED_Y_TABLE[h2]);
-                        destination.add(i + 3).write(DUPLICATED_Y_TABLE[h3]);
-                    }
-                    i += 4;
+                // Read two Cb/Cr pairs at once and emit their two duplicated
+                // luma values with one aligned word store. Canvas rows, the
+                // SRAM/CCM split, and row-cache offsets are all 4-byte aligned.
+                while i + 2 <= chunk_pixels {
+                    let packed = unsafe { source_words.add(i / 2).read() };
+                    let h0 = ((packed as u8) ^ ((packed >> 8) as u8)) as usize;
+                    let h1 = (((packed >> 16) as u8) ^ ((packed >> 24) as u8)) as usize;
+                    let out = (DUPLICATED_Y_TABLE[h0] as u32)
+                        | ((DUPLICATED_Y_TABLE[h1] as u32) << 16);
+                    unsafe { destination_words.add(i / 2).write(out) };
+                    i += 2;
                 }
                 while i < chunk_pixels {
                     let pair = unsafe { source_pairs.add(i).read() };
