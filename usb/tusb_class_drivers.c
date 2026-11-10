@@ -244,12 +244,25 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
     return true;
   }
 
+  // Measure packet preparation and FIFO submission independently. DWT runs
+  // at 168 MHz and remains active in the USB completion interrupt.
+  const volatile uint32_t *dwt_cyccnt = (const volatile uint32_t *)0xE0001004UL;
+  const uint32_t callback_start = *dwt_cyccnt;
   uint8_t packet[10] __attribute__((aligned(4)));
+  const uint32_t fill_start = *dwt_cyccnt;
   const uint16_t length = xcore_tud_audio_fill_packet(packet, sizeof(packet));
+  const uint32_t fill_cycles = *dwt_cyccnt - fill_start;
   if (length == 0) {
+    xcore_tud_audio_record_packet_timing(*dwt_cyccnt - callback_start,
+                                         fill_cycles, 0);
     return true;
   }
-  return tud_audio_n_write(func_id, packet, length) == length;
+  const uint32_t write_start = *dwt_cyccnt;
+  const bool written = tud_audio_n_write(func_id, packet, length) == length;
+  const uint32_t write_cycles = *dwt_cyccnt - write_start;
+  xcore_tud_audio_record_packet_timing(*dwt_cyccnt - callback_start,
+                                       fill_cycles, write_cycles);
+  return written;
 }
 
 // Stop capture on bus reset, disconnect, or configuration teardown.
