@@ -306,9 +306,7 @@ fn main() -> ! {
         // also runs between individual PDP instructions below, so a newly
         // freed DMA buffer is refilled promptly instead of waiting for a
         // complete emulator quantum to finish.
-        while prepare_next_video_batch(&mut video_renderer) {
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
-        }
+        while prepare_next_video_batch(&mut video_renderer) {}
 
         let now_ms = TICKS.load(Ordering::Relaxed);
         let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
