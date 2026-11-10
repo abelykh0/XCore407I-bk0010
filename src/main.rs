@@ -351,10 +351,16 @@ fn main() -> ! {
                 let target_cycles =
                     (elapsed_ms as u64 * PDP_CYCLES_PER_SECOND as u64) / 1_000;
                 if (elapsed_cycles as u64) < target_cycles {
-                    unsafe { bk_loop(); }
+                    // Execute a small batch to amortize the pacing check. The
+                    // batch is deliberately bounded so USB servicing remains
+                    // responsive; any small cycle overshoot is corrected by
+                    // the next iteration.
+                    for _ in 0..16 {
+                        unsafe { bk_loop(); }
 
-                    // Keep video-buffer replenishment independent of audio work.
-                    while prepare_next_video_batch(&mut video_renderer) {}
+                        // Refill buffers while the emulator runs, outside USB IRQs.
+                        while prepare_next_video_batch(&mut video_renderer) {}
+                    }
                     service_keyboard_frame_pacing();
                 }
             }
