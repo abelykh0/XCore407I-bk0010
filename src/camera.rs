@@ -568,7 +568,6 @@ pub fn show_audio_status(
 /// this to one update per second so the overlay does not add per-frame work.
 pub fn show_performance_status(
     cycles_per_second: u32,
-    rendered_samples_per_second: u32,
     render_calls_per_second: u32,
     render_avg_us: u32,
     render_max_us: u32,
