@@ -541,19 +541,15 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
 
 /// Row 29: DWC2 global interrupt causes at OTG_HS entry.
 /// I=IN endpoint, O=OUT endpoint, S=SOF, R=RX FIFO level, X=incomplete ISO IN.
-pub fn show_usb_irq_causes(iep: u32, oep: u32, sof: u32, rxflvl: u32, iiso: u32) {
+pub fn show_usb_irq_causes(iep: u32, video: u32, audio: u32) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
     append_bytes(&mut line, &mut pos, b"I ");
     append_decimal(&mut line, &mut pos, iep);
-    append_bytes(&mut line, &mut pos, b" O ");
-    append_decimal(&mut line, &mut pos, oep);
-    append_bytes(&mut line, &mut pos, b" S ");
-    append_decimal(&mut line, &mut pos, sof);
-    append_bytes(&mut line, &mut pos, b" R ");
-    append_decimal(&mut line, &mut pos, rxflvl);
-    append_bytes(&mut line, &mut pos, b" X ");
-    append_decimal(&mut line, &mut pos, iiso);
+    append_bytes(&mut line, &mut pos, b" V ");
+    append_decimal(&mut line, &mut pos, video);
+    append_bytes(&mut line, &mut pos, b" A ");
+    append_decimal(&mut line, &mut pos, audio);
     show_file_browser_line(29, &line[..pos], false);
 }
 
