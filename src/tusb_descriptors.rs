@@ -4,6 +4,7 @@
 //! endpoint addresses, high-bandwidth UVC transactions, and packet sizes.
 
 use crate::camera::{HEIGHT, WIDTH};
+use crate::AUDIO_SAMPLE_RATE_HZ;
 use crate::uvc::{
     FRAME_BIT_RATE, FRAME_BYTES, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME,
     MAX_PACKET_SIZE,
