@@ -83,6 +83,7 @@ static mut KEYBOARD_QUEUE: [u8; KEYBOARD_QUEUE_CAPACITY as usize] = [0; KEYBOARD
 static KEYBOARD_QUEUE_HEAD: AtomicU16 = AtomicU16::new(0);
 static KEYBOARD_QUEUE_TAIL: AtomicU16 = AtomicU16::new(0);
 const PDP_CYCLES_PER_FRAME: u32 = 60_000;
+const PDP_CYCLES_PER_SECOND: u32 = 3_000_000;
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
@@ -203,9 +204,11 @@ fn main() -> ! {
     let mut browser_count = 0usize;
     let mut browser_selected = 0usize;
     let mut browser_open = false;
-    // Sample the emulator's PDP timing accumulator once per second.
+    // Performance display and real-time emulator pacing use the same PDP clock.
     let mut performance_last_ms = TICKS.load(Ordering::Relaxed);
     let mut performance_last_cycles = unsafe { bk_timing_cycles() };
+    let mut pacing_start_ms = performance_last_ms;
+    let mut pacing_start_cycles = performance_last_cycles;
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -331,18 +334,30 @@ fn main() -> ! {
             performance_last_cycles = now_cycles;
         }
 
-        // Execute a bounded quantum of PDP instructions in thread context.
-        // Check the video producer after every instruction: USB completion
-        // interrupts may free a buffer while the emulator is running, and we
-        // must refill it before spending the rest of the quantum on emulation.
+        // Pace PDP execution against the 1 ms hardware timebase. This keeps
+        // the emulated 3 MHz clock aligned with real time in both color and
+        // monochrome modes. USB/audio/video servicing continues while ahead.
         if !browser_open {
-            for _ in 0..16 {
-                unsafe { bk_loop(); }
+            let now_ms = TICKS.load(Ordering::Relaxed);
+            let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
+            let now_cycles = unsafe { bk_timing_cycles() };
+            let elapsed_cycles = now_cycles.wrapping_sub(pacing_start_cycles);
 
-                // Keep video-buffer replenishment independent of audio work.
-                while prepare_next_video_batch(&mut video_renderer) {}
+            // Rebase every second so both wrapping counters remain unambiguous.
+            if elapsed_ms >= 1_000 {
+                pacing_start_ms = now_ms;
+                pacing_start_cycles = now_cycles;
+            } else {
+                let target_cycles =
+                    (elapsed_ms as u64 * PDP_CYCLES_PER_SECOND as u64) / 1_000;
+                if (elapsed_cycles as u64) < target_cycles {
+                    unsafe { bk_loop(); }
+
+                    // Keep video-buffer replenishment independent of audio work.
+                    while prepare_next_video_batch(&mut video_renderer) {}
+                    service_keyboard_frame_pacing();
+                }
             }
-            service_keyboard_frame_pacing();
         }
     }
 }
