@@ -540,18 +540,27 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
 }
 
 /// Display audio-path counters on row 29:
-/// E=edge queue overflows, U=PCM zero-fill samples, M=min and X=max ring occupancy.
-pub fn show_audio_status(edge_overflows: u32, underrun_samples: u32, min_occupancy: u16, max_occupancy: u16) {
+/// E=edge overflows, U=PCM zero-fill samples, X=max PCM occupancy,
+/// Q=current edge-queue occupancy, A=age of its oldest queued edge in ms.
+pub fn show_audio_status(
+    edge_overflows: u32,
+    underrun_samples: u32,
+    max_occupancy: u16,
+    edge_occupancy: u16,
+    edge_age_ms: u32,
+) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
     line[pos] = b'E'; pos += 1;
     append_decimal(&mut line, &mut pos, edge_overflows);
     append_bytes(&mut line, &mut pos, b" U");
     append_decimal(&mut line, &mut pos, underrun_samples);
-    append_bytes(&mut line, &mut pos, b" M");
-    append_decimal(&mut line, &mut pos, min_occupancy as u32);
     append_bytes(&mut line, &mut pos, b" X");
     append_decimal(&mut line, &mut pos, max_occupancy as u32);
+    append_bytes(&mut line, &mut pos, b" Q");
+    append_decimal(&mut line, &mut pos, edge_occupancy as u32);
+    append_bytes(&mut line, &mut pos, b" A");
+    append_decimal(&mut line, &mut pos, edge_age_ms);
     show_file_browser_line(29, &line[..pos], false);
 }
 
