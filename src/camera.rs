@@ -853,6 +853,8 @@ impl Nv12DemoImage {
                     i += 1;
                 }
             } else {
+                let source_pairs = source.cast::<u16>();
+                let destination = unsafe { y_row_ptr().cast::<u16>().add(pixel_x) };
                 let source_words = source.cast::<u32>();
                 let destination_words = unsafe { y_row_ptr().cast::<u32>().add(pixel_x / 2) };
 
