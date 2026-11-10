@@ -570,6 +570,26 @@ pub fn show_audio_status(
     show_file_browser_line(29, &line[..pos], false);
 }
 
+/// Display one-second USB audio packet callback timings on row 30.
+pub fn show_packet_status(
+    calls_per_second: u32,
+    total_avg_us: u32,
+    fill_avg_us: u32,
+    write_avg_us: u32,
+) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut line, &mut pos, b"PK ");
+    append_decimal(&mut line, &mut pos, calls_per_second);
+    append_bytes(&mut line, &mut pos, b" T");
+    append_decimal(&mut line, &mut pos, total_avg_us);
+    append_bytes(&mut line, &mut pos, b" F");
+    append_decimal(&mut line, &mut pos, fill_avg_us);
+    append_bytes(&mut line, &mut pos, b" W");
+    append_decimal(&mut line, &mut pos, write_avg_us);
+    show_file_browser_line(30, &line[..pos], false);
+}
+
 /// Update the fixed performance row in the camera image. The caller limits
 /// this to one update per second so the overlay does not add per-frame work.
 pub fn show_performance_status(
