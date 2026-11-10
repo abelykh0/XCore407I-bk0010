@@ -238,7 +238,7 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
     return true;
   }
 
-  uint8_t packet[8] __attribute__((aligned(4)));
+  uint8_t packet[10] __attribute__((aligned(4)));
   const uint16_t length = xcore_tud_audio_fill_packet(packet, sizeof(packet));
   if (length == 0) {
     return true;
