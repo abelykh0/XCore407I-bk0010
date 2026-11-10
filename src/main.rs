@@ -63,6 +63,11 @@ const USB_FS_RETRY_INTERVAL_MS: u32 = 500;
 // TIM3 schedules TinyUSB host work; the actual task runs in thread context.
 static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
 
+// OTG_HS device IRQ timing window (DWT runs at SystemCoreClock).
+static USB_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_CYCLES: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_MAX_CYCLES: AtomicU32 = AtomicU32::new(0);
+
 // HID boot-keyboard state. TinyUSB invokes HID callbacks from tuh_task_ext(),
 // so these non-atomic key snapshots are only accessed serially there.
 static mut PREVIOUS_KEYS: [u8; 6] = [0; 6];
@@ -329,6 +334,27 @@ fn main() -> ! {
             let render_max_us = render_max_cycles / 168;
             let (packet_calls, packet_total_cycles, packet_fill_cycles, packet_write_cycles) =
                 xcore407i_blinker::bk_audio::take_packet_diagnostics();
+
+            // Snapshot OTG_HS ISR timing once per performance interval.
+            let usb_irq_count = USB_IRQ_COUNT.swap(0, Ordering::AcqRel);
+            let usb_irq_cycles = USB_IRQ_CYCLES.swap(0, Ordering::AcqRel);
+            let usb_irq_max_cycles = USB_IRQ_MAX_CYCLES.swap(0, Ordering::AcqRel);
+            let usb_irq_per_second =
+                ((usb_irq_count as u64 * 1_000) / elapsed_ms as u64) as u32;
+            let usb_irq_cpu_tenths_percent = if elapsed_ms == 0 { 0 } else {
+                ((usb_irq_cycles as u64 * 1_000) / (168_000u64 * elapsed_ms as u64))
+                    .min(u32::MAX as u64) as u32
+            };
+            let usb_irq_avg_us = if usb_irq_count == 0 { 0 } else {
+                usb_irq_cycles / usb_irq_count / 168
+            };
+            let usb_irq_max_us = usb_irq_max_cycles / 168;
+            xcore407i_blinker::camera::show_usb_irq_status(
+                usb_irq_per_second,
+                usb_irq_cpu_tenths_percent,
+                usb_irq_avg_us,
+                usb_irq_max_us,
+            );
             let packet_calls_per_second =
                 ((packet_calls as u64 * 1_000) / elapsed_ms as u64) as u32;
             let packet_avg_us = |cycles: u32| -> u32 {
@@ -511,7 +537,16 @@ fn OTG_FS() {
 
 #[interrupt]
 fn OTG_HS() {
+    // DWT CYCCNT is enabled during startup. Measure the complete Rust/TinyUSB
+    // device IRQ path without changing its servicing order or behavior.
+    let start = unsafe { ptr::read_volatile(0xE000_1004 as *const u32) };
+    USB_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
     unsafe { tusb::tusb_int_handler(1, true); }
+    let elapsed = unsafe {
+        ptr::read_volatile(0xE000_1004 as *const u32).wrapping_sub(start)
+    };
+    USB_IRQ_CYCLES.fetch_add(elapsed, Ordering::Relaxed);
+    USB_IRQ_MAX_CYCLES.fetch_max(elapsed, Ordering::Relaxed);
 }
 
 #[unsafe(no_mangle)]
