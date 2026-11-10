@@ -245,24 +245,11 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
   }
 
   uint8_t packet[10] __attribute__((aligned(4)));
-
-  // TEMPORARY DIAGNOSTIC: keep the UAC2 stream and packet cadence active,
-  // but bypass BK PCM-ring reads and packet generation. The packet size is
-  // derived from the existing shared sample-rate constant; descriptors and
-  // endpoint configuration are unchanged.
-  const uint16_t length = (uint16_t)(
-      (xcore_audio_sample_rate_hz() / 8000u) * 2u);
-  if (length == 0 || length > sizeof(packet)) {
-    return false;
+  const uint16_t length = xcore_tud_audio_fill_packet(packet, sizeof(packet));
+  if (length == 0) {
+    return true;
   }
-  for (uint16_t i = 0; i < length; i++) {
-    packet[i] = 0;
-  }
-
-  // TEMPORARY DIAGNOSTIC: bypass TinyUSB's audio FIFO enqueue/copy path.
-  // Keep the completion callback and its packet-size calculation active.
-  (void) func_id;
-  return true;
+  return tud_audio_n_write(func_id, packet, length) == length;
 }
 
 // Stop capture on bus reset, disconnect, or configuration teardown.
