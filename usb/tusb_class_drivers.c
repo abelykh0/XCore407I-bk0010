@@ -244,12 +244,9 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
     return true;
   }
 
-  uint8_t packet[10] __attribute__((aligned(4)));
-  const uint16_t length = xcore_tud_audio_fill_packet(packet, sizeof(packet));
-  if (length == 0) {
-    return true;
-  }
-  return tud_audio_n_write(func_id, packet, length) == length;
+  // Diagnostic: do not enqueue any audio payload. TinyUSB still handles
+  // each IN completion and re-arms the isochronous endpoint with an empty packet.
+  return true;
 }
 
 // Stop capture on bus reset, disconnect, or configuration teardown.
