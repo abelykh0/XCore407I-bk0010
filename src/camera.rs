@@ -570,16 +570,20 @@ pub fn show_performance_status(
     cycles_per_second: u32,
     rendered_samples_per_second: u32,
     render_calls_per_second: u32,
+    render_avg_us: u32,
+    render_max_us: u32,
 ) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
 
-    append_bytes(&mut line, &mut pos, b"CYC ");
+    append_bytes(&mut line, &mut pos, b"C");
     append_decimal(&mut line, &mut pos, cycles_per_second);
-    append_bytes(&mut line, &mut pos, b" R ");
-    append_decimal(&mut line, &mut pos, rendered_samples_per_second);
-    append_bytes(&mut line, &mut pos, b" N ");
+    append_bytes(&mut line, &mut pos, b" N");
     append_decimal(&mut line, &mut pos, render_calls_per_second);
+    append_bytes(&mut line, &mut pos, b" A");
+    append_decimal(&mut line, &mut pos, render_avg_us);
+    append_bytes(&mut line, &mut pos, b" M");
+    append_decimal(&mut line, &mut pos, render_max_us);
 
     show_file_browser_line(28, &line[..pos], false);
 }
