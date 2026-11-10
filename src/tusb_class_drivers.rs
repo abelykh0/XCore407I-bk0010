@@ -652,13 +652,11 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
     })
 }
 
-/// Render a bounded batch of PCM samples from the main loop.
+/// Diagnostic experiment: leave the UAC2 stream and USB endpoint active,
+/// but skip PCM rendering to measure the cost of USB audio servicing alone.
+/// The endpoint callback will transmit silence during this experiment.
 #[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_audio_render() {
-    if let Some(state) = audio_state_ptr() {
-        unsafe { (&mut *state).render_available(448); }
-    }
-}
+pub extern "C" fn xcore_tud_audio_render() {}
 
 /// USB completion callback: copy six pre-rendered samples only.
 #[unsafe(no_mangle)]
