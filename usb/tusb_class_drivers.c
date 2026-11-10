@@ -162,16 +162,22 @@ usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
 
 
 #if CFG_TUD_AUDIO
-// The clock source is fixed at 32 kHz.
+// The clock rate is supplied by the shared Rust AUDIO_KHZ constant.
+extern uint32_t xcore_audio_sample_rate_hz(void);
+
 bool tud_audio_get_req_entity_cb(uint8_t rhport,
                                  tusb_control_request_t const *request) {
-  static const uint8_t frequency_cur[4] = {0x00, 0x7d, 0x00, 0x00};
-  static const uint8_t frequency_range[14] = {
-    1, 0,                         // one subrange
-    0x00, 0x7d, 0x00, 0x00,       // minimum: 32000 Hz
-    0x00, 0x7d, 0x00, 0x00,       // maximum: 32000 Hz
-    0x00, 0x00, 0x00, 0x00        // resolution: fixed
+  static uint8_t frequency_cur[4];
+  static uint8_t frequency_range[14] = {
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
   };
+  const uint32_t sample_rate = xcore_audio_sample_rate_hz();
+  for (uint8_t i = 0; i < 4; i++) {
+    const uint8_t byte = (uint8_t) (sample_rate >> (8 * i));
+    frequency_cur[i] = byte;
+    frequency_range[2 + i] = byte;
+    frequency_range[6 + i] = byte;
+  }
   static const uint8_t clock_valid = 1;
 
   const uint8_t entity = TU_U16_HIGH(request->wIndex);
