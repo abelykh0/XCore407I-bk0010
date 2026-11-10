@@ -525,6 +525,15 @@ static bool audiod_tx_xfer_isr(uint8_t rhport, audiod_function_t * audio, uint16
   #else
   n_bytes_tx = tu_min16(tu_fifo_count(&audio->ep_in_ff), audio->ep_in_sz);// Limit up to max packet size, more can not be done for ISO
   #endif
+
+  // TEMPORARY DIAGNOSTIC: do not re-arm the audio IN endpoint when its FIFO
+  // is empty. The application callback currently enqueues no data, so this
+  // isolates the recurring zero-length transfer/re-arm path. The initial
+  // transfer completes normally; subsequent audio IN traffic stops here.
+  if (n_bytes_tx == 0) {
+    return true;
+  }
+
   #if !CFG_TUD_EDPT_DEDICATED_HWFIFO
   tu_fifo_read_n(&audio->ep_in_ff, audio->lin_buf_in, n_bytes_tx);
   TU_VERIFY(usbd_edpt_xfer(rhport, audio->ep_in, audio->lin_buf_in, n_bytes_tx, true));
