@@ -855,6 +855,27 @@ impl Nv12DemoImage {
             } else {
                 let source_pairs = source.cast::<u16>();
                 let destination = unsafe { y_row_ptr().cast::<u16>().add(pixel_x) };
+
+                // Process four Cb/Cr pairs per loop iteration. The transform
+                // and lookup are identical to the scalar path; unrolling only
+                // reduces loop-control overhead in this per-row hot path.
+                while i + 4 <= chunk_pixels {
+                    let p0 = unsafe { source_pairs.add(i).read() };
+                    let p1 = unsafe { source_pairs.add(i + 1).read() };
+                    let p2 = unsafe { source_pairs.add(i + 2).read() };
+                    let p3 = unsafe { source_pairs.add(i + 3).read() };
+                    let h0 = (p0 as u8 ^ (p0 >> 8) as u8) as usize;
+                    let h1 = (p1 as u8 ^ (p1 >> 8) as u8) as usize;
+                    let h2 = (p2 as u8 ^ (p2 >> 8) as u8) as usize;
+                    let h3 = (p3 as u8 ^ (p3 >> 8) as u8) as usize;
+                    unsafe {
+                        destination.add(i).write(DUPLICATED_Y_TABLE[h0]);
+                        destination.add(i + 1).write(DUPLICATED_Y_TABLE[h1]);
+                        destination.add(i + 2).write(DUPLICATED_Y_TABLE[h2]);
+                        destination.add(i + 3).write(DUPLICATED_Y_TABLE[h3]);
+                    }
+                    i += 4;
+                }
                 while i < chunk_pixels {
                     let pair = unsafe { source_pairs.add(i).read() };
                     let hash = pair as u8 ^ (pair >> 8) as u8;
