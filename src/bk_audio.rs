@@ -128,6 +128,8 @@ impl BkEmulatorAudio {
         if !self.active {
             return 0;
         }
+        const DWT_CYCCNT: *const u32 = 0xE000_1004 as *const u32;
+        let render_start = unsafe { core::ptr::read_volatile(DWT_CYCCNT) };
         PCM_RENDER_CALLS_WINDOW.fetch_add(1, Ordering::Relaxed);
 
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
@@ -163,6 +165,9 @@ impl BkEmulatorAudio {
             rendered += 1;
         }
         PCM_RENDERED_WINDOW.fetch_add(rendered as u32, Ordering::Relaxed);
+        let render_elapsed = unsafe { core::ptr::read_volatile(DWT_CYCCNT) }
+            .wrapping_sub(render_start);
+        record_render_cycles(render_elapsed);
         rendered
     }
 }
