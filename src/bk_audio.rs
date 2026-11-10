@@ -32,6 +32,8 @@ static PCM_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
 static PCM_UNDERRUN_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_RENDERED_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_RENDER_CALLS_WINDOW: AtomicU32 = AtomicU32::new(0);
+static PCM_RENDER_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
+static PCM_RENDER_MAX_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
 static PCM_MIN_TRACKING: AtomicBool = AtomicBool::new(false);
 static PCM_MAX_OCCUPANCY: AtomicU16 = AtomicU16::new(0);
@@ -104,6 +106,8 @@ impl BkEmulatorAudio {
                 PCM_UNDERRUN_WINDOW.store(0, Ordering::Relaxed);
                 PCM_RENDERED_WINDOW.store(0, Ordering::Relaxed);
                 PCM_RENDER_CALLS_WINDOW.store(0, Ordering::Relaxed);
+                PCM_RENDER_CYCLES_WINDOW.store(0, Ordering::Relaxed);
+                PCM_RENDER_MAX_CYCLES_WINDOW.store(0, Ordering::Relaxed);
                 PCM_MIN_OCCUPANCY.store(PCM_RING_CAPACITY, Ordering::Relaxed);
                 PCM_MIN_TRACKING.store(false, Ordering::Relaxed);
                 PCM_MAX_OCCUPANCY.store(0, Ordering::Relaxed);
@@ -166,11 +170,18 @@ impl BkEmulatorAudio {
 /// Take one-second producer/consumer counters. The main loop calls this once
 /// per performance interval; USB underruns are counted separately from lifetime
 /// totals so the displayed rate directly exposes a sustained clock mismatch.
-pub fn take_interval_diagnostics() -> (u32, u32, u32) {
+pub fn record_render_cycles(cycles: u32) {
+    PCM_RENDER_CYCLES_WINDOW.fetch_add(cycles, Ordering::Relaxed);
+    PCM_RENDER_MAX_CYCLES_WINDOW.fetch_max(cycles, Ordering::Relaxed);
+}
+
+pub fn take_interval_diagnostics() -> (u32, u32, u32, u32, u32) {
     (
         PCM_RENDERED_WINDOW.swap(0, Ordering::AcqRel),
         PCM_RENDER_CALLS_WINDOW.swap(0, Ordering::AcqRel),
         PCM_UNDERRUN_WINDOW.swap(0, Ordering::AcqRel),
+        PCM_RENDER_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
+        PCM_RENDER_MAX_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
     )
 }
 
