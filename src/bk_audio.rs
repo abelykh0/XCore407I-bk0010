@@ -22,17 +22,11 @@ const _: () = assert!(PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE % crate::AUDIO_SAMPLE
 const AUDIO_AMPLITUDE: i16 = 12_000;
 const PCM_RING_CAPACITY: u16 = 2048;
 const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
-const PCM_MIN_TRACKING_START: u16 = 48; // Ignore startup occupancy until 1 ms is buffered.
 const _: () = assert!(PCM_RING_CAPACITY.is_power_of_two());
 const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
-static PCM_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
-static PCM_UNDERRUN_WINDOW: AtomicU32 = AtomicU32::new(0);
-static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
-static PCM_MIN_TRACKING: AtomicBool = AtomicBool::new(false);
-static PCM_MAX_OCCUPANCY: AtomicU16 = AtomicU16::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
@@ -40,8 +34,6 @@ unsafe extern "C" {
     fn bk_timing_cycles() -> u32;
     fn bk_audio_stop();
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
-    fn bk_audio_get_edge_overflows() -> u32;
-    fn bk_audio_get_edge_queue_stats(occupancy: *mut u16, oldest_cycles: *mut u32);
 }
 
 pub struct BkEmulatorAudio {
@@ -98,11 +90,6 @@ apply end    }
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
-                PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
-                PCM_UNDERRUN_WINDOW.store(0, Ordering::Relaxed);
-                PCM_MIN_OCCUPANCY.store(PCM_RING_CAPACITY, Ordering::Relaxed);
-                PCM_MIN_TRACKING.store(false, Ordering::Relaxed);
-                PCM_MAX_OCCUPANCY.store(0, Ordering::Relaxed);
                 self.active = true;
             }
         } else if self.active {
@@ -142,11 +129,6 @@ apply end    }
                     .add((head & PCM_RING_MASK) as usize)
                     .write(sample);
             }
-            let new_occupancy = head.wrapping_add(1).wrapping_sub(tail);
-            PCM_MAX_OCCUPANCY.fetch_max(new_occupancy, Ordering::Relaxed);
-            if new_occupancy >= PCM_MIN_TRACKING_START {
-                PCM_MIN_TRACKING.store(true, Ordering::Release);
-            }
             PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
             self.next_sample_phase = self.next_sample_phase
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
@@ -154,27 +136,6 @@ apply end    }
         }
         rendered
     }
-}
-
-/// Return cumulative edge-queue overflows, PCM zero-fill samples, and minimum
-/// observed minimum and maximum PCM occupancy (in samples) since stream start.
-pub fn diagnostics() -> (u32, u32, u16, u16, u16, u32) {
-    let mut edge_occupancy = 0u16;
-    let mut oldest_edge_cycles = 0u32;
-    unsafe {
-        bk_audio_get_edge_queue_stats(&mut edge_occupancy, &mut oldest_edge_cycles);
-    }
-    let edge_age_cycles = unsafe { bk_timing_cycles() }.wrapping_sub(oldest_edge_cycles);
-    let edge_age_ms = ((edge_age_cycles as u64 * 1_000) / PDP_CLOCK_HZ as u64)
-        .min(u32::MAX as u64) as u32;
-    (
-        unsafe { bk_audio_get_edge_overflows() },
-        PCM_UNDERRUN_SAMPLES.load(Ordering::Relaxed),
-        PCM_MIN_OCCUPANCY.load(Ordering::Relaxed),
-        PCM_MAX_OCCUPANCY.load(Ordering::Relaxed),
-        edge_occupancy,
-        edge_age_ms,
-    )
 }
 
 /// Copy one USB microframe of pre-rendered PCM. Missing samples are zero-filled.
@@ -185,11 +146,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
-    let occupancy = head.wrapping_sub(tail);
-    if PCM_MIN_TRACKING.load(Ordering::Acquire) {
-        PCM_MIN_OCCUPANCY.fetch_min(occupancy, Ordering::Relaxed);
-    }
-    let mut missing = 0u32;
     for index in 0..SAMPLES_PER_MICROFRAME {
         let sample = if tail != head {
             let value = unsafe {
@@ -201,7 +157,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             tail = tail.wrapping_add(1);
             value
         } else {
-            missing += 1;
             0
         };
         unsafe {
@@ -211,10 +166,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         }
     }
     PCM_TAIL.store(tail, Ordering::Release);
-    if missing != 0 {
-        PCM_UNDERRUN_SAMPLES.fetch_add(missing, Ordering::Relaxed);
-        PCM_UNDERRUN_WINDOW.fetch_add(missing, Ordering::Relaxed);
-    }
     PACKET_BYTES as u16
 }
 
