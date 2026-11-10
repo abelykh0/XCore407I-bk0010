@@ -119,6 +119,25 @@ uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
     return 1u;
 }
 
+// Snapshot queued transition count and timestamp of the oldest queued edge.
+// The caller converts the timestamp delta to milliseconds.
+void bk_audio_get_edge_queue_stats(uint16_t *occupancy, uint32_t *oldest_cycles)
+{
+    uint16_t tail = bk_audio_edge_tail;
+    uint16_t head = bk_audio_edge_head;
+    uint16_t count = (uint16_t)(head - tail);
+    if (occupancy != NULL) *occupancy = count;
+
+    if (oldest_cycles != NULL) {
+        if (count == 0u) {
+            *oldest_cycles = bk_timing_cycles();
+        } else {
+            __asm volatile("dmb" ::: "memory");
+            *oldest_cycles = bk_audio_edge_cycles[tail & BK_AUDIO_EDGE_MASK];
+        }
+    }
+}
+
 // STOP key requests the independent hardware IRQ1 (priority 5, vector 000004).
 static volatile uint8_t stop_irq_pending = 0;
 
