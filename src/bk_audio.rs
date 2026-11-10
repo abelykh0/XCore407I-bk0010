@@ -43,6 +43,7 @@ unsafe extern "C" {
     fn bk_audio_stop();
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
     fn bk_audio_get_edge_overflows() -> u32;
+    fn bk_audio_get_edge_queue_stats(occupancy: *mut u16, oldest_cycles: *mut u32);
 }
 
 pub struct BkEmulatorAudio {
@@ -175,12 +176,22 @@ pub fn take_interval_diagnostics() -> (u32, u32, u32) {
 
 /// Return cumulative edge-queue overflows, PCM zero-fill samples, and minimum
 /// observed minimum and maximum PCM occupancy (in samples) since stream start.
-pub fn diagnostics() -> (u32, u32, u16, u16) {
+pub fn diagnostics() -> (u32, u32, u16, u16, u16, u32) {
+    let mut edge_occupancy = 0u16;
+    let mut oldest_edge_cycles = 0u32;
+    unsafe {
+        bk_audio_get_edge_queue_stats(&mut edge_occupancy, &mut oldest_edge_cycles);
+    }
+    let edge_age_cycles = unsafe { bk_timing_cycles() }.wrapping_sub(oldest_edge_cycles);
+    let edge_age_ms = ((edge_age_cycles as u64 * 1_000) / PDP_CLOCK_HZ as u64)
+        .min(u32::MAX as u64) as u32;
     (
         unsafe { bk_audio_get_edge_overflows() },
         PCM_UNDERRUN_SAMPLES.load(Ordering::Relaxed),
         PCM_MIN_OCCUPANCY.load(Ordering::Relaxed),
         PCM_MAX_OCCUPANCY.load(Ordering::Relaxed),
+        edge_occupancy,
+        edge_age_ms,
     )
 }
 
