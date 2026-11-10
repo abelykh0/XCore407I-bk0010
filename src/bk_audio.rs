@@ -1,16 +1,24 @@
 //! BK-0010 speaker-edge capture and deferred PCM16 rendering for TinyUSB UAC2.
 //!
 //! The emulator publishes timestamped speaker transitions. The main-loop audio
-//! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
+//! worker converts them to PCM at AUDIO_KHZ in a ring buffer. The USB completion ISR
 //! only copies three already-rendered samples from that ring.
 
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
-const SAMPLES_PER_MICROFRAME: usize = 3;
+const PDP_CLOCK_HZ: u32 = 3_000_000;
+const PHASE_UNITS_PER_CYCLE: u32 = 4;
+const USB_MICROFRAMES_PER_SECOND: u32 = 8_000;
+const SAMPLES_PER_MICROFRAME: usize =
+    (crate::AUDIO_SAMPLE_RATE_HZ / USB_MICROFRAMES_PER_SECOND) as usize;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
-const AUDIO_SAMPLE_PERIOD_HALF_CYCLES: u32 = 250; // 60,000 PDP cycles / 480 samples = 125 cycles/sample at 24 kHz.
-const AUDIO_STARTUP_LATENCY_HALF_CYCLES: u32 = 6_000; // 3,000 PDP cycles = 1 ms.
-const AUDIO_PREFILL_HALF_CYCLES: u32 = 36_000; // 18,000 PDP cycles = 6 ms.
+// Quarter-cycle phase units represent 93.75 PDP cycles/sample exactly at 32 kHz.
+const AUDIO_SAMPLE_PERIOD_PHASE: u32 =
+    PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / crate::AUDIO_SAMPLE_RATE_HZ;
+const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
+const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 6 / 1_000;
+const _: () = assert!(crate::AUDIO_SAMPLE_RATE_HZ % USB_MICROFRAMES_PER_SECOND == 0);
+const _: () = assert!(PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE % crate::AUDIO_SAMPLE_RATE_HZ == 0);
 const AUDIO_AMPLITUDE: i16 = 12_000;
 const PCM_RING_CAPACITY: u16 = 2048;
 const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
@@ -38,7 +46,7 @@ unsafe extern "C" {
 }
 
 pub struct BkEmulatorAudio {
-    // Half-cycle units preserve the exact 125 PDP-cycle sample interval.
+    // Quarter-cycle units preserve fractional PDP-cycle sample intervals.
     next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
@@ -57,7 +65,7 @@ impl BkEmulatorAudio {
 
     #[inline(always)]
     fn cycle_phase() -> u32 {
-        unsafe { bk_timing_cycles() }.wrapping_mul(2)
+        unsafe { bk_timing_cycles() }.wrapping_mul(PHASE_UNITS_PER_CYCLE)
     }
 
     fn apply_edges_through(&mut self, sample_phase: u32) {
@@ -72,7 +80,7 @@ impl BkEmulatorAudio {
             }
 
             let (edge_cycle, edge_level) = self.pending_edge.unwrap();
-            if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(2)) as i32 >= 0 {
+            if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE)) as i32 >= 0 {
                 self.sample_level = edge_level;
                 self.pending_edge = None;
             } else {
@@ -88,7 +96,7 @@ impl BkEmulatorAudio {
                 self.sample_level = unsafe { bk_audio_start() != 0 };
                 self.pending_edge = None;
                 self.next_sample_phase = Self::cycle_phase()
-                    .wrapping_sub(AUDIO_STARTUP_LATENCY_HALF_CYCLES + AUDIO_PREFILL_HALF_CYCLES);
+                    .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
                 PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
@@ -117,7 +125,7 @@ impl BkEmulatorAudio {
         }
         PCM_RENDER_CALLS_WINDOW.fetch_add(1, Ordering::Relaxed);
 
-        let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_HALF_CYCLES);
+        let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
         let mut rendered = 0usize;
         while rendered < max_samples {
             let head = PCM_HEAD.load(Ordering::Relaxed);
@@ -146,7 +154,7 @@ impl BkEmulatorAudio {
             }
             PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
             self.next_sample_phase = self.next_sample_phase
-                .wrapping_add(AUDIO_SAMPLE_PERIOD_HALF_CYCLES);
+                .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
             rendered += 1;
         }
         PCM_RENDERED_WINDOW.fetch_add(rendered as u32, Ordering::Relaxed);
