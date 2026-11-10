@@ -516,6 +516,11 @@ static bool audiod_tx_xfer_isr(uint8_t rhport, audiod_function_t * audio, uint16
   // Only send something if current alternate interface is not 0 as in this case nothing is to be sent due to UAC2 specifications
   if (audio->ep_in_alt == 0) { return false; }
 
+  // Let the application refill the FIFO before selecting the next packet.
+  // This avoids scheduling an unnecessary ZLP when the FIFO was empty only
+  // because the completion callback had not yet supplied the next packet.
+  TU_VERIFY(tud_audio_tx_done_isr(rhport, n_bytes_sent, idx_audio_fct, audio->ep_in, audio->ep_in_alt));
+
   // Send everything in ISO EP FIFO
   uint16_t n_bytes_tx;
 
@@ -525,15 +530,6 @@ static bool audiod_tx_xfer_isr(uint8_t rhport, audiod_function_t * audio, uint16
   #else
   n_bytes_tx = tu_min16(tu_fifo_count(&audio->ep_in_ff), audio->ep_in_sz);// Limit up to max packet size, more can not be done for ISO
   #endif
-
-  // TEMPORARY DIAGNOSTIC: do not re-arm the audio IN endpoint when its FIFO
-  // is empty. The application callback currently enqueues no data, so this
-  // isolates the recurring zero-length transfer/re-arm path. The initial
-  // transfer completes normally; subsequent audio IN traffic stops here.
-  if (n_bytes_tx == 0) {
-    return true;
-  }
-
   #if !CFG_TUD_EDPT_DEDICATED_HWFIFO
   tu_fifo_read_n(&audio->ep_in_ff, audio->lin_buf_in, n_bytes_tx);
   TU_VERIFY(usbd_edpt_xfer(rhport, audio->ep_in, audio->lin_buf_in, n_bytes_tx, true));
@@ -541,9 +537,6 @@ static bool audiod_tx_xfer_isr(uint8_t rhport, audiod_function_t * audio, uint16
   // Send everything in ISO EP FIFO
   TU_VERIFY(usbd_edpt_xfer_fifo(rhport, audio->ep_in, &audio->ep_in_ff, n_bytes_tx, true));
   #endif
-
-  // Call a weak callback here - a possibility for user to get informed former TX was completed and data gets now loaded into EP in buffer
-  TU_VERIFY(tud_audio_tx_done_isr(rhport, n_bytes_sent, idx_audio_fct, audio->ep_in, audio->ep_in_alt));
 
   return true;
 }
