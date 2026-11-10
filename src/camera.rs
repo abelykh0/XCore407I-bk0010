@@ -539,100 +539,30 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
     }
 }
 
-/// Display audio-path counters on row 29:
-/// E=edge overflows, U=PCM zero-fill samples, P=edge-processing CPU percent,
-/// H=applied speaker edges/s, Q=edge-queue occupancy, A=oldest edge age in ms.
-pub fn show_audio_status(
-    edge_overflows: u32,
-    underrun_samples: u32,
-    edge_cpu_tenths_percent: u32,
-    edges_per_second: u32,
-    edge_occupancy: u16,
-    edge_age_ms: u32,
-) {
+/// Row 29: DWC2 global interrupt causes at OTG_HS entry.
+/// I=IN endpoint, O=OUT endpoint, S=SOF, R=RX FIFO level, X=incomplete ISO IN.
+pub fn show_usb_irq_causes(iep: u32, oep: u32, sof: u32, rxflvl: u32, iiso: u32) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
-    line[pos] = b'E'; pos += 1;
-    append_decimal(&mut line, &mut pos, edge_overflows);
-    append_bytes(&mut line, &mut pos, b" U");
-    append_decimal(&mut line, &mut pos, underrun_samples);
-    append_bytes(&mut line, &mut pos, b" P");
-    append_decimal(&mut line, &mut pos, edge_cpu_tenths_percent / 10);
-    line[pos] = b'.'; pos += 1;
-    append_decimal(&mut line, &mut pos, edge_cpu_tenths_percent % 10);
-    line[pos] = b'%'; pos += 1;
-    append_bytes(&mut line, &mut pos, b" H");
-    append_decimal(&mut line, &mut pos, edges_per_second);
-    append_bytes(&mut line, &mut pos, b" Q");
-    append_decimal(&mut line, &mut pos, edge_occupancy as u32);
-    append_bytes(&mut line, &mut pos, b" A");
-    append_decimal(&mut line, &mut pos, edge_age_ms);
+    append_bytes(&mut line, &mut pos, b"I ");
+    append_decimal(&mut line, &mut pos, iep);
+    append_bytes(&mut line, &mut pos, b" O ");
+    append_decimal(&mut line, &mut pos, oep);
+    append_bytes(&mut line, &mut pos, b" S ");
+    append_decimal(&mut line, &mut pos, sof);
+    append_bytes(&mut line, &mut pos, b" R ");
+    append_decimal(&mut line, &mut pos, rxflvl);
+    append_bytes(&mut line, &mut pos, b" X ");
+    append_decimal(&mut line, &mut pos, iiso);
     show_file_browser_line(29, &line[..pos], false);
 }
 
-/// Display OTG_HS interrupt load on row 31.
-pub fn show_usb_irq_status(
-    interrupts_per_second: u32,
-    cpu_tenths_percent: u32,
-    average_us: u32,
-    maximum_us: u32,
-) {
+/// Update the emulator throughput row on the camera image.
+pub fn show_performance_status(cycles_per_second: u32) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"IRQ ");
-    append_decimal(&mut line, &mut pos, interrupts_per_second);
-    append_bytes(&mut line, &mut pos, b" CPU ");
-    append_decimal(&mut line, &mut pos, cpu_tenths_percent / 10);
-    line[pos] = b'.'; pos += 1;
-    append_decimal(&mut line, &mut pos, cpu_tenths_percent % 10);
-    line[pos] = b'%'; pos += 1;
-    append_bytes(&mut line, &mut pos, b" AVG ");
-    append_decimal(&mut line, &mut pos, average_us);
-    append_bytes(&mut line, &mut pos, b" MAX ");
-    append_decimal(&mut line, &mut pos, maximum_us);
-    show_file_browser_line(31, &line[..pos], false);
-}
-
-/// Display one-second USB audio packet callback timings on row 30.
-pub fn show_packet_status(
-    calls_per_second: u32,
-    total_avg_us: u32,
-    fill_avg_us: u32,
-    write_avg_us: u32,
-) {
-    let mut line = [b' '; 32];
-    let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"PK ");
-    append_decimal(&mut line, &mut pos, calls_per_second);
-    append_bytes(&mut line, &mut pos, b" T");
-    append_decimal(&mut line, &mut pos, total_avg_us);
-    append_bytes(&mut line, &mut pos, b" F");
-    append_decimal(&mut line, &mut pos, fill_avg_us);
-    append_bytes(&mut line, &mut pos, b" W");
-    append_decimal(&mut line, &mut pos, write_avg_us);
-    show_file_browser_line(30, &line[..pos], false);
-}
-
-/// Update the fixed performance row in the camera image. The caller limits
-/// this to one update per second so the overlay does not add per-frame work.
-pub fn show_performance_status(
-    cycles_per_second: u32,
-    render_calls_per_second: u32,
-    render_avg_us: u32,
-    render_max_us: u32,
-) {
-    let mut line = [b' '; 32];
-    let mut pos = 0usize;
-
     append_bytes(&mut line, &mut pos, b"C");
     append_decimal(&mut line, &mut pos, cycles_per_second);
-    append_bytes(&mut line, &mut pos, b" N");
-    append_decimal(&mut line, &mut pos, render_calls_per_second);
-    append_bytes(&mut line, &mut pos, b" A");
-    append_decimal(&mut line, &mut pos, render_avg_us);
-    append_bytes(&mut line, &mut pos, b" M");
-    append_decimal(&mut line, &mut pos, render_max_us);
-
     show_file_browser_line(28, &line[..pos], false);
 }
 
