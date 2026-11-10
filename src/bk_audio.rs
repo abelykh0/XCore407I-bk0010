@@ -201,7 +201,7 @@ pub fn record_render_cycles(cycles: u32) {
 }
 
 /// Record packet callback timings measured in the USB completion ISR.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_record_packet_timing(
     total_cycles: u32, fill_cycles: u32, write_cycles: u32,
 ) {
