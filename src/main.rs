@@ -222,8 +222,8 @@ fn main() -> ! {
         // endpoints are re-armed directly by their class xfer_isr callbacks.
         unsafe {
             let _ = tusb::tud_task_ext(0, false);
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
@@ -349,10 +349,6 @@ fn main() -> ! {
                 // Keep video-buffer replenishment independent of audio work.
                 while prepare_next_video_batch(&mut video_renderer) {}
             }
-            // Refill PCM once per 16-instruction quantum. Avoid the expensive
-            // per-instruction renderer call while shortening the gap between
-            // producer runs when video work delays the next main-loop pass.
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
             service_keyboard_frame_pacing();
         }
     }
