@@ -1,7 +1,7 @@
 //! BK-0010 speaker-edge capture and deferred PCM16 rendering for TinyUSB UAC2.
 //!
 //! The emulator publishes timestamped speaker transitions. The main-loop audio
-//! worker converts them to PCM at AUDIO_KHZ in a ring buffer. The USB completion ISR
+//! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
 //! only copies three already-rendered samples from that ring.
 
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
@@ -12,7 +12,7 @@ const USB_MICROFRAMES_PER_SECOND: u32 = 8_000;
 const SAMPLES_PER_MICROFRAME: usize =
     (crate::AUDIO_SAMPLE_RATE_HZ / USB_MICROFRAMES_PER_SECOND) as usize;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
-// Quarter-cycle phase units represent 93.75 PDP cycles/sample exactly at 32 kHz.
+// Quarter-cycle phase units represent 125 PDP cycles/sample exactly at 24 kHz.
 const AUDIO_SAMPLE_PERIOD_PHASE: u32 =
     PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / crate::AUDIO_SAMPLE_RATE_HZ;
 const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
@@ -46,7 +46,7 @@ unsafe extern "C" {
 }
 
 pub struct BkEmulatorAudio {
-    // Quarter-cycle units preserve fractional PDP-cycle sample intervals.
+    // Quarter-cycle units preserve exact sample timing; at 24 kHz each sample is 125 PDP cycles.
     next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
