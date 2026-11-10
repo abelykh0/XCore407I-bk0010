@@ -316,7 +316,8 @@ fn main() -> ! {
             let cycles_per_second =
                 ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
             // One BK-0010 frame is 60,000 PDP clock ticks (50 fps at 3 MHz).
-            let (_rendered_samples, render_calls, underrun_samples, render_cycles, render_max_cycles) =
+            let (_rendered_samples, render_calls, underrun_samples, render_cycles, render_max_cycles,
+                 edge_process_cycles, edges_applied) =
                 xcore407i_blinker::bk_audio::take_interval_diagnostics();
             let render_calls_per_second =
                 ((render_calls as u64 * 1_000) / elapsed_ms as u64) as u32;
@@ -332,12 +333,21 @@ fn main() -> ! {
                 render_avg_us,
                 render_max_us,
             );
-            let (edge_overflows, _, _min_occupancy, max_occupancy, edge_occupancy, edge_age_ms) =
+            let (edge_overflows, _, _min_occupancy, _max_occupancy, edge_occupancy, edge_age_ms) =
                 xcore407i_blinker::bk_audio::diagnostics();
+            // DWT runs at 168 MHz. Report edge polling/processing as tenths
+            // of one percent of the elapsed CPU interval.
+            let edge_cpu_tenths_percent = if elapsed_ms == 0 { 0 } else {
+                ((edge_process_cycles as u64 * 1_000) / (168_000u64 * elapsed_ms as u64))
+                    .min(u32::MAX as u64) as u32
+            };
+            let edges_per_second =
+                ((edges_applied as u64 * 1_000) / elapsed_ms as u64) as u32;
             xcore407i_blinker::camera::show_audio_status(
                 edge_overflows,
                 underruns_per_second,
-                max_occupancy,
+                edge_cpu_tenths_percent,
+                edges_per_second,
                 edge_occupancy,
                 edge_age_ms,
             );
