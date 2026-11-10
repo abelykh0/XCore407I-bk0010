@@ -78,7 +78,7 @@ impl BkEmulatorAudio {
                 break;
             }
         }
-apply end    }
+    }
 
     /// Start/stop edge capture. Called from TinyUSB control/task context.
     pub fn tinyusb_set_active(&mut self, active: bool) {
