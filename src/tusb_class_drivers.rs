@@ -652,20 +652,18 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
     })
 }
 
-/// Diagnostic experiment: leave the UAC2 stream and USB endpoint active,
-/// but skip PCM rendering to measure the cost of USB audio servicing alone.
-/// The endpoint callback will transmit silence during this experiment.
+/// Render a bounded batch of PCM samples from the main loop.
 #[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_audio_render() {}
+pub extern "C" fn xcore_tud_audio_render() {
+    if let Some(state) = audio_state_ptr() {
+        unsafe { (&mut *state).render_available(448); }
+    }
+}
 
-/// Diagnostic experiment: keep the audio endpoint active but bypass PCM-ring
-/// reads and sample copying. The endpoint continues transmitting silence.
+/// USB completion callback: copy pre-rendered PCM samples only.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
-    if !buffer.is_null() {
-        unsafe { core::ptr::write_bytes(buffer, 0, capacity as usize); }
-    }
-    capacity
+    unsafe { crate::bk_audio::fill_usb_packet(buffer, capacity) }
 }
 
 /// TinyUSB calls this on unmount/reset; the next SET_INTERFACE will reinitialize
