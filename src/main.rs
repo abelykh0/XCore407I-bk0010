@@ -329,11 +329,13 @@ fn main() -> ! {
             let render_max_us = render_max_cycles / 168;
             let (packet_calls, packet_total_cycles, packet_fill_cycles, packet_write_cycles) =
                 xcore407i_blinker::bk_audio::take_packet_diagnostics();
+            let packet_calls_per_second =
+                ((packet_calls as u64 * 1_000) / elapsed_ms as u64) as u32;
             let packet_avg_us = |cycles: u32| -> u32 {
                 if packet_calls == 0 { 0 } else { cycles / packet_calls / 168 }
             };
             xcore407i_blinker::camera::show_packet_status(
-                packet_calls,
+                packet_calls_per_second,
                 packet_avg_us(packet_total_cycles),
                 packet_avg_us(packet_fill_cycles),
                 packet_avg_us(packet_write_cycles),
