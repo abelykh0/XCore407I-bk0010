@@ -35,6 +35,7 @@ bool xcore_usbd_edpt_ready(uint8_t rhport, uint8_t ep_addr);
 
 bool xcore_tud_audio_set_interface(uint8_t interface, uint8_t alternate);
 uint16_t xcore_tud_audio_fill_packet(uint8_t *buffer, uint16_t capacity);
+void xcore_tud_audio_record_packet_timing(uint32_t total_cycles, uint32_t fill_cycles, uint32_t write_cycles);
 void xcore_tud_audio_stop(void);
 
 #endif
