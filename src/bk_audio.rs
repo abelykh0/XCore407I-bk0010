@@ -30,16 +30,6 @@ static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static PCM_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
 static PCM_UNDERRUN_WINDOW: AtomicU32 = AtomicU32::new(0);
-static PCM_RENDERED_WINDOW: AtomicU32 = AtomicU32::new(0);
-static PCM_RENDER_CALLS_WINDOW: AtomicU32 = AtomicU32::new(0);
-static PCM_RENDER_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
-static PCM_RENDER_MAX_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
-static PCM_EDGE_PROCESS_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
-static PCM_EDGES_APPLIED_WINDOW: AtomicU32 = AtomicU32::new(0);
-static USB_PACKET_CALLS_WINDOW: AtomicU32 = AtomicU32::new(0);
-static USB_PACKET_TOTAL_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
-static USB_PACKET_FILL_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
-static USB_PACKET_WRITE_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
 static PCM_MIN_TRACKING: AtomicBool = AtomicBool::new(false);
 static PCM_MAX_OCCUPANCY: AtomicU16 = AtomicU16::new(0);
@@ -77,10 +67,7 @@ impl BkEmulatorAudio {
         unsafe { bk_timing_cycles() }.wrapping_mul(PHASE_UNITS_PER_CYCLE)
     }
 
-    fn apply_edges_through(&mut self, sample_phase: u32) -> (u32, u32) {
-        const DWT_CYCCNT: *const u32 = 0xE000_1004 as *const u32;
-        let start = unsafe { core::ptr::read_volatile(DWT_CYCCNT) };
-        let mut applied = 0u32;
+    fn apply_edges_through(&mut self, sample_phase: u32) {
         loop {
             if self.pending_edge.is_none() {
                 let mut cycles = 0u32;
@@ -95,14 +82,11 @@ impl BkEmulatorAudio {
             if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE)) as i32 >= 0 {
                 self.sample_level = edge_level;
                 self.pending_edge = None;
-                applied += 1;
             } else {
                 break;
             }
         }
-        let elapsed = unsafe { core::ptr::read_volatile(DWT_CYCCNT) }.wrapping_sub(start);
-        (elapsed, applied)
-    }
+apply end    }
 
     /// Start/stop edge capture. Called from TinyUSB control/task context.
     pub fn tinyusb_set_active(&mut self, active: bool) {
@@ -116,12 +100,6 @@ impl BkEmulatorAudio {
                 PCM_HEAD.store(0, Ordering::Release);
                 PCM_UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
                 PCM_UNDERRUN_WINDOW.store(0, Ordering::Relaxed);
-                PCM_RENDERED_WINDOW.store(0, Ordering::Relaxed);
-                PCM_RENDER_CALLS_WINDOW.store(0, Ordering::Relaxed);
-                PCM_RENDER_CYCLES_WINDOW.store(0, Ordering::Relaxed);
-                PCM_RENDER_MAX_CYCLES_WINDOW.store(0, Ordering::Relaxed);
-                PCM_EDGE_PROCESS_CYCLES_WINDOW.store(0, Ordering::Relaxed);
-                PCM_EDGES_APPLIED_WINDOW.store(0, Ordering::Relaxed);
                 PCM_MIN_OCCUPANCY.store(PCM_RING_CAPACITY, Ordering::Relaxed);
                 PCM_MIN_TRACKING.store(false, Ordering::Relaxed);
                 PCM_MAX_OCCUPANCY.store(0, Ordering::Relaxed);
@@ -142,14 +120,8 @@ impl BkEmulatorAudio {
         if !self.active {
             return 0;
         }
-        const DWT_CYCCNT: *const u32 = 0xE000_1004 as *const u32;
-        let render_start = unsafe { core::ptr::read_volatile(DWT_CYCCNT) };
-        PCM_RENDER_CALLS_WINDOW.fetch_add(1, Ordering::Relaxed);
-
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
         let mut rendered = 0usize;
-        let mut edge_process_cycles = 0u32;
-        let mut edges_applied = 0u32;
         while rendered < max_samples {
             let head = PCM_HEAD.load(Ordering::Relaxed);
             let tail = PCM_TAIL.load(Ordering::Acquire);
@@ -162,9 +134,7 @@ impl BkEmulatorAudio {
                 break;
             }
 
-            let (edge_cycles, applied) = self.apply_edges_through(sample_phase);
-            edge_process_cycles = edge_process_cycles.wrapping_add(edge_cycles);
-            edges_applied = edges_applied.wrapping_add(applied);
+            self.apply_edges_through(sample_phase);
             let sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
@@ -182,54 +152,8 @@ impl BkEmulatorAudio {
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
             rendered += 1;
         }
-        PCM_RENDERED_WINDOW.fetch_add(rendered as u32, Ordering::Relaxed);
-        PCM_EDGE_PROCESS_CYCLES_WINDOW.fetch_add(edge_process_cycles, Ordering::Relaxed);
-        PCM_EDGES_APPLIED_WINDOW.fetch_add(edges_applied, Ordering::Relaxed);
-        let render_elapsed = unsafe { core::ptr::read_volatile(DWT_CYCCNT) }
-            .wrapping_sub(render_start);
-        record_render_cycles(render_elapsed);
         rendered
     }
-}
-
-/// Take one-second producer/consumer counters. The main loop calls this once
-/// per performance interval; USB underruns are counted separately from lifetime
-/// totals so the displayed rate directly exposes a sustained clock mismatch.
-pub fn record_render_cycles(cycles: u32) {
-    PCM_RENDER_CYCLES_WINDOW.fetch_add(cycles, Ordering::Relaxed);
-    PCM_RENDER_MAX_CYCLES_WINDOW.fetch_max(cycles, Ordering::Relaxed);
-}
-
-/// Record packet callback timings measured in the USB completion ISR.
-#[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_audio_record_packet_timing(
-    total_cycles: u32, fill_cycles: u32, write_cycles: u32,
-) {
-    USB_PACKET_CALLS_WINDOW.fetch_add(1, Ordering::Relaxed);
-    USB_PACKET_TOTAL_CYCLES_WINDOW.fetch_add(total_cycles, Ordering::Relaxed);
-    USB_PACKET_FILL_CYCLES_WINDOW.fetch_add(fill_cycles, Ordering::Relaxed);
-    USB_PACKET_WRITE_CYCLES_WINDOW.fetch_add(write_cycles, Ordering::Relaxed);
-}
-
-pub fn take_packet_diagnostics() -> (u32, u32, u32, u32) {
-    (
-        USB_PACKET_CALLS_WINDOW.swap(0, Ordering::AcqRel),
-        USB_PACKET_TOTAL_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
-        USB_PACKET_FILL_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
-        USB_PACKET_WRITE_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
-    )
-}
-
-pub fn take_interval_diagnostics() -> (u32, u32, u32, u32, u32, u32, u32) {
-    (
-        PCM_RENDERED_WINDOW.swap(0, Ordering::AcqRel),
-        PCM_RENDER_CALLS_WINDOW.swap(0, Ordering::AcqRel),
-        PCM_UNDERRUN_WINDOW.swap(0, Ordering::AcqRel),
-        PCM_RENDER_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
-        PCM_RENDER_MAX_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
-        PCM_EDGE_PROCESS_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
-        PCM_EDGES_APPLIED_WINDOW.swap(0, Ordering::AcqRel),
-    )
 }
 
 /// Return cumulative edge-queue overflows, PCM zero-fill samples, and minimum
