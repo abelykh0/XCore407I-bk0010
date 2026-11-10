@@ -36,6 +36,10 @@ static PCM_RENDER_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_RENDER_MAX_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_EDGE_PROCESS_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_EDGES_APPLIED_WINDOW: AtomicU32 = AtomicU32::new(0);
+static USB_PACKET_CALLS_WINDOW: AtomicU32 = AtomicU32::new(0);
+static USB_PACKET_TOTAL_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
+static USB_PACKET_FILL_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
+static USB_PACKET_WRITE_CYCLES_WINDOW: AtomicU32 = AtomicU32::new(0);
 static PCM_MIN_OCCUPANCY: AtomicU16 = AtomicU16::new(PCM_RING_CAPACITY);
 static PCM_MIN_TRACKING: AtomicBool = AtomicBool::new(false);
 static PCM_MAX_OCCUPANCY: AtomicU16 = AtomicU16::new(0);
@@ -194,6 +198,26 @@ impl BkEmulatorAudio {
 pub fn record_render_cycles(cycles: u32) {
     PCM_RENDER_CYCLES_WINDOW.fetch_add(cycles, Ordering::Relaxed);
     PCM_RENDER_MAX_CYCLES_WINDOW.fetch_max(cycles, Ordering::Relaxed);
+}
+
+/// Record packet callback timings measured in the USB completion ISR.
+#[no_mangle]
+pub extern "C" fn xcore_tud_audio_record_packet_timing(
+    total_cycles: u32, fill_cycles: u32, write_cycles: u32,
+) {
+    USB_PACKET_CALLS_WINDOW.fetch_add(1, Ordering::Relaxed);
+    USB_PACKET_TOTAL_CYCLES_WINDOW.fetch_add(total_cycles, Ordering::Relaxed);
+    USB_PACKET_FILL_CYCLES_WINDOW.fetch_add(fill_cycles, Ordering::Relaxed);
+    USB_PACKET_WRITE_CYCLES_WINDOW.fetch_add(write_cycles, Ordering::Relaxed);
+}
+
+pub fn take_packet_diagnostics() -> (u32, u32, u32, u32) {
+    (
+        USB_PACKET_CALLS_WINDOW.swap(0, Ordering::AcqRel),
+        USB_PACKET_TOTAL_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
+        USB_PACKET_FILL_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
+        USB_PACKET_WRITE_CYCLES_WINDOW.swap(0, Ordering::AcqRel),
+    )
 }
 
 pub fn take_interval_diagnostics() -> (u32, u32, u32, u32, u32, u32, u32) {
