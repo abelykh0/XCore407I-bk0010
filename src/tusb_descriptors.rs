@@ -4,7 +4,6 @@
 //! endpoint addresses, high-bandwidth UVC transactions, and packet sizes.
 
 use crate::camera::{HEIGHT, WIDTH};
-use crate::AUDIO_SAMPLE_RATE_HZ;
 use crate::uvc::{
     FRAME_BIT_RATE, FRAME_BYTES, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME,
     MAX_PACKET_SIZE,
@@ -103,6 +102,8 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
     push_u8(&mut descriptor, &mut offset, 1);
 
     // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
+    // The fixed sample rate is reported by the Clock Source GET_CUR/GET_RANGE callback,
+    // which reads the shared AUDIO_KHZ constant from the Rust application.
     push_bytes(&mut descriptor, &mut offset, &[
         8, 0x0b, 2, 2, 1, 1, 0x20, 0,
         9, 0x04, 2, 0, 0, 1, 1, 0x20, 0,
