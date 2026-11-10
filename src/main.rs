@@ -327,13 +327,14 @@ fn main() -> ! {
             let underruns_per_second =
                 ((underrun_samples as u64 * 1_000) / elapsed_ms as u64) as u32;
             show_performance_status(cycles_per_second, rendered_per_second, render_calls_per_second);
-            let (edge_overflows, _, min_occupancy, max_occupancy) =
+            let (edge_overflows, _, _min_occupancy, max_occupancy, edge_occupancy, edge_age_ms) =
                 xcore407i_blinker::bk_audio::diagnostics();
             xcore407i_blinker::camera::show_audio_status(
                 edge_overflows,
                 underruns_per_second,
-                min_occupancy,
                 max_occupancy,
+                edge_occupancy,
+                edge_age_ms,
             );
             performance_last_ms = now_ms;
             performance_last_cycles = now_cycles;
