@@ -258,7 +258,11 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
   for (uint16_t i = 0; i < length; i++) {
     packet[i] = 0;
   }
-  return tud_audio_n_write(func_id, packet, length) == length;
+
+  // TEMPORARY DIAGNOSTIC: bypass TinyUSB's audio FIFO enqueue/copy path.
+  // Keep the completion callback and its packet-size calculation active.
+  (void) func_id;
+  return true;
 }
 
 // Stop capture on bus reset, disconnect, or configuration teardown.
