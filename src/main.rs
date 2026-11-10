@@ -63,12 +63,10 @@ const USB_FS_RETRY_INTERVAL_MS: u32 = 500;
 // TIM3 schedules TinyUSB host work; the actual task runs in thread context.
 static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
 
-// Count enabled DWC2 global interrupt causes at OTG_HS entry.
+// Count IN endpoint IRQ entries by endpoint (EP1 video, EP2 audio).
 static USB_IRQ_IEP: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_OEP: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_SOF: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_RXFLVL: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_IISO: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_VIDEO: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_AUDIO: AtomicU32 = AtomicU32::new(0);
 
 // HID boot-keyboard state. TinyUSB invokes HID callbacks from tuh_task_ext(),
 // so these non-atomic key snapshots are only accessed serially there.
@@ -326,10 +324,8 @@ fn main() -> ! {
             show_performance_status(cycles_per_second);
             show_usb_irq_causes(
                 USB_IRQ_IEP.swap(0, Ordering::AcqRel),
-                USB_IRQ_OEP.swap(0, Ordering::AcqRel),
-                USB_IRQ_SOF.swap(0, Ordering::AcqRel),
-                USB_IRQ_RXFLVL.swap(0, Ordering::AcqRel),
-                USB_IRQ_IISO.swap(0, Ordering::AcqRel),
+                USB_IRQ_VIDEO.swap(0, Ordering::AcqRel),
+                USB_IRQ_AUDIO.swap(0, Ordering::AcqRel),
             );
             performance_last_ms = now_ms;
             performance_last_cycles = now_cycles;
@@ -485,11 +481,17 @@ fn OTG_HS() {
         let gintmsk = ptr::read_volatile(0x4004_0018 as *const u32);
         gintsts & gintmsk
     };
-    if status & (1 << 18) != 0 { USB_IRQ_IEP.fetch_add(1, Ordering::Relaxed); }
-    if status & (1 << 19) != 0 { USB_IRQ_OEP.fetch_add(1, Ordering::Relaxed); }
-    if status & (1 << 3) != 0 { USB_IRQ_SOF.fetch_add(1, Ordering::Relaxed); }
-    if status & (1 << 4) != 0 { USB_IRQ_RXFLVL.fetch_add(1, Ordering::Relaxed); }
-    if status & (1 << 20) != 0 { USB_IRQ_IISO.fetch_add(1, Ordering::Relaxed); }
+    if status & (1 << 18) != 0 {
+        // DAINT is at OTG_HS +0x818; bits 0..15 are pending IN endpoints.
+        let daint = unsafe { ptr::read_volatile(0x4004_0818 as *const u32) };
+        USB_IRQ_IEP.fetch_add(1, Ordering::Relaxed);
+        if daint & (1 << 1) != 0 {
+            USB_IRQ_VIDEO.fetch_add(1, Ordering::Relaxed);
+        }
+        if daint & (1 << 2) != 0 {
+            USB_IRQ_AUDIO.fetch_add(1, Ordering::Relaxed);
+        }
+    }
     unsafe { tusb::tusb_int_handler(1, true); }
 }
 
