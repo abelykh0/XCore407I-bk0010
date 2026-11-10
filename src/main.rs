@@ -316,10 +316,8 @@ fn main() -> ! {
             let cycles_per_second =
                 ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
             // One BK-0010 frame is 60,000 PDP clock ticks (50 fps at 3 MHz).
-            let (rendered_samples, render_calls, underrun_samples, render_cycles, render_max_cycles) =
+            let (_rendered_samples, render_calls, underrun_samples, render_cycles, render_max_cycles) =
                 xcore407i_blinker::bk_audio::take_interval_diagnostics();
-            let rendered_per_second =
-                ((rendered_samples as u64 * 1_000) / elapsed_ms as u64) as u32;
             let render_calls_per_second =
                 ((render_calls as u64 * 1_000) / elapsed_ms as u64) as u32;
             let underruns_per_second =
@@ -330,7 +328,6 @@ fn main() -> ! {
             let render_max_us = render_max_cycles / 168;
             show_performance_status(
                 cycles_per_second,
-                rendered_per_second,
                 render_calls_per_second,
                 render_avg_us,
                 render_max_us,
