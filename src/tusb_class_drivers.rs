@@ -655,9 +655,14 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
 /// Render a bounded batch of PCM samples from the main loop.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_render() {
+    // DWT CYCCNT is enabled during early system initialization (168 MHz).
+    const DWT_CYCCNT: *const u32 = 0xE000_1004 as *const u32;
+    let start = unsafe { core::ptr::read_volatile(DWT_CYCCNT) };
     if let Some(state) = audio_state_ptr() {
         unsafe { (&mut *state).render_available(448); }
     }
+    let elapsed = unsafe { core::ptr::read_volatile(DWT_CYCCNT) }.wrapping_sub(start);
+    crate::bk_audio::record_render_cycles(elapsed);
 }
 
 /// USB completion callback: copy pre-rendered PCM samples only.
