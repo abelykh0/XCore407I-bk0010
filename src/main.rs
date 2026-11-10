@@ -9,7 +9,7 @@ use panic_halt as _;
 use stm32f4xx_hal::gpio::{GpioExt, Speed};
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_performance_status, show_usb_status, Nv12DemoImage};
+use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_performance_status, show_usb_irq_causes, show_usb_status, Nv12DemoImage};
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -63,10 +63,12 @@ const USB_FS_RETRY_INTERVAL_MS: u32 = 500;
 // TIM3 schedules TinyUSB host work; the actual task runs in thread context.
 static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
 
-// OTG_HS device IRQ timing window (DWT runs at SystemCoreClock).
-static USB_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_CYCLES: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_MAX_CYCLES: AtomicU32 = AtomicU32::new(0);
+// Count enabled DWC2 global interrupt causes at OTG_HS entry.
+static USB_IRQ_IEP: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_OEP: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_SOF: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_RXFLVL: AtomicU32 = AtomicU32::new(0);
+static USB_IRQ_IISO: AtomicU32 = AtomicU32::new(0);
 
 // HID boot-keyboard state. TinyUSB invokes HID callbacks from tuh_task_ext(),
 // so these non-atomic key snapshots are only accessed serially there.
@@ -320,75 +322,14 @@ fn main() -> ! {
             let elapsed_cycles = now_cycles.wrapping_sub(performance_last_cycles);
             let cycles_per_second =
                 ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
-            // One BK-0010 frame is 60,000 PDP clock ticks (50 fps at 3 MHz).
-            let (_rendered_samples, render_calls, underrun_samples, render_cycles, render_max_cycles,
-                 edge_process_cycles, edges_applied) =
-                xcore407i_blinker::bk_audio::take_interval_diagnostics();
-            let render_calls_per_second =
-                ((render_calls as u64 * 1_000) / elapsed_ms as u64) as u32;
-            let underruns_per_second =
-                ((underrun_samples as u64 * 1_000) / elapsed_ms as u64) as u32;
-            let render_avg_us = if render_calls == 0 { 0 } else {
-                (render_cycles / render_calls / 168).min(u32::MAX) as u32
-            };
-            let render_max_us = render_max_cycles / 168;
-            let (packet_calls, packet_total_cycles, packet_fill_cycles, packet_write_cycles) =
-                xcore407i_blinker::bk_audio::take_packet_diagnostics();
-
-            // Snapshot OTG_HS ISR timing once per performance interval.
-            let usb_irq_count = USB_IRQ_COUNT.swap(0, Ordering::AcqRel);
-            let usb_irq_cycles = USB_IRQ_CYCLES.swap(0, Ordering::AcqRel);
-            let usb_irq_max_cycles = USB_IRQ_MAX_CYCLES.swap(0, Ordering::AcqRel);
-            let usb_irq_per_second =
-                ((usb_irq_count as u64 * 1_000) / elapsed_ms as u64) as u32;
-            let usb_irq_cpu_tenths_percent = if elapsed_ms == 0 { 0 } else {
-                ((usb_irq_cycles as u64 * 1_000) / (168_000u64 * elapsed_ms as u64))
-                    .min(u32::MAX as u64) as u32
-            };
-            let usb_irq_avg_us = if usb_irq_count == 0 { 0 } else {
-                usb_irq_cycles / usb_irq_count / 168
-            };
-            let usb_irq_max_us = usb_irq_max_cycles / 168;
-            xcore407i_blinker::camera::show_usb_irq_status(
-                usb_irq_per_second,
-                usb_irq_cpu_tenths_percent,
-                usb_irq_avg_us,
-                usb_irq_max_us,
-            );
-            let packet_calls_per_second =
-                ((packet_calls as u64 * 1_000) / elapsed_ms as u64) as u32;
-            let packet_avg_us = |cycles: u32| -> u32 {
-                if packet_calls == 0 { 0 } else { cycles / packet_calls / 168 }
-            };
-            xcore407i_blinker::camera::show_packet_status(
-                packet_calls_per_second,
-                packet_avg_us(packet_total_cycles),
-                packet_avg_us(packet_fill_cycles),
-                packet_avg_us(packet_write_cycles),
-            );
-            show_performance_status(
-                cycles_per_second,
-                render_calls_per_second,
-                render_avg_us,
-                render_max_us,
-            );
-            let (edge_overflows, _, _min_occupancy, _max_occupancy, edge_occupancy, edge_age_ms) =
-                xcore407i_blinker::bk_audio::diagnostics();
-            // DWT runs at 168 MHz. Report edge polling/processing as tenths
-            // of one percent of the elapsed CPU interval.
-            let edge_cpu_tenths_percent = if elapsed_ms == 0 { 0 } else {
-                ((edge_process_cycles as u64 * 1_000) / (168_000u64 * elapsed_ms as u64))
-                    .min(u32::MAX as u64) as u32
-            };
-            let edges_per_second =
-                ((edges_applied as u64 * 1_000) / elapsed_ms as u64) as u32;
-            xcore407i_blinker::camera::show_audio_status(
-                edge_overflows,
-                underruns_per_second,
-                edge_cpu_tenths_percent,
-                edges_per_second,
-                edge_occupancy,
-                edge_age_ms,
+            // Keep the throughput counter and only the DWC2 causes needed next.
+            show_performance_status(cycles_per_second);
+            show_usb_irq_causes(
+                USB_IRQ_IEP.swap(0, Ordering::AcqRel),
+                USB_IRQ_OEP.swap(0, Ordering::AcqRel),
+                USB_IRQ_SOF.swap(0, Ordering::AcqRel),
+                USB_IRQ_RXFLVL.swap(0, Ordering::AcqRel),
+                USB_IRQ_IISO.swap(0, Ordering::AcqRel),
             );
             performance_last_ms = now_ms;
             performance_last_cycles = now_cycles;
@@ -537,16 +478,19 @@ fn OTG_FS() {
 
 #[interrupt]
 fn OTG_HS() {
-    // DWT CYCCNT is enabled during startup. Measure the complete Rust/TinyUSB
-    // device IRQ path without changing its servicing order or behavior.
-    let start = unsafe { ptr::read_volatile(0xE000_1004 as *const u32) };
-    USB_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
-    unsafe { tusb::tusb_int_handler(1, true); }
-    let elapsed = unsafe {
-        ptr::read_volatile(0xE000_1004 as *const u32).wrapping_sub(start)
+    // STM32F407 OTG_HS global registers: GINTSTS +0x14, GINTMSK +0x18.
+    // Capture enabled causes before TinyUSB acknowledges them.
+    let status = unsafe {
+        let gintsts = ptr::read_volatile(0x4004_0014 as *const u32);
+        let gintmsk = ptr::read_volatile(0x4004_0018 as *const u32);
+        gintsts & gintmsk
     };
-    USB_IRQ_CYCLES.fetch_add(elapsed, Ordering::Relaxed);
-    USB_IRQ_MAX_CYCLES.fetch_max(elapsed, Ordering::Relaxed);
+    if status & (1 << 18) != 0 { USB_IRQ_IEP.fetch_add(1, Ordering::Relaxed); }
+    if status & (1 << 19) != 0 { USB_IRQ_OEP.fetch_add(1, Ordering::Relaxed); }
+    if status & (1 << 3) != 0 { USB_IRQ_SOF.fetch_add(1, Ordering::Relaxed); }
+    if status & (1 << 4) != 0 { USB_IRQ_RXFLVL.fetch_add(1, Ordering::Relaxed); }
+    if status & (1 << 20) != 0 { USB_IRQ_IISO.fetch_add(1, Ordering::Relaxed); }
+    unsafe { tusb::tusb_int_handler(1, true); }
 }
 
 #[unsafe(no_mangle)]
