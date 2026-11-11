@@ -9,20 +9,38 @@
 #include <stddef.h>
 #include "platform.h"
 
-// Emulator RTC extension: the STM32 RTC returns Unix seconds. Reading the
-// low word captures a snapshot; the high word is read from that same snapshot.
-extern uint32_t bk_rtc_unix_time(void);
-static uint32_t bk_rtc_latched_time;
+// Emulator RTC extension: expose the low 32 bits of Unix milliseconds.
+// Reading the low word captures a snapshot; the high word uses that snapshot.
+extern uint32_t bk_rtc_unix_millis(void);
+static uint32_t bk_rtc_latched_millis;
+// Preserve the diagnostic's cycle timeline across bk_reset(), which resets
+// the emulator's live timing counter.
+static uint64_t bk_rtc_cycle_epoch;
+static uint64_t bk_rtc_previous_low_read_cycles;
+static uint32_t bk_rtc_cycles_between_low_reads;
+static uint8_t bk_rtc_have_previous_low_read;
 
 static uint16_t bk_rtc_read_time_low(void)
 {
-    bk_rtc_latched_time = bk_rtc_unix_time();
-    return (uint16_t)bk_rtc_latched_time;
+    uint64_t now_cycles = bk_rtc_cycle_epoch + bk_timing_cycles();
+    if (bk_rtc_have_previous_low_read) {
+        bk_rtc_cycles_between_low_reads = (uint32_t)(now_cycles - bk_rtc_previous_low_read_cycles);
+    } else {
+        bk_rtc_have_previous_low_read = 1u;
+    }
+    bk_rtc_previous_low_read_cycles = now_cycles;
+    bk_rtc_latched_millis = bk_rtc_unix_millis();
+    return (uint16_t)bk_rtc_latched_millis;
+}
+
+uint32_t bk_rtc_get_cycles_between_reads(void)
+{
+    return bk_rtc_cycles_between_low_reads;
 }
 
 static uint16_t bk_rtc_read_time_high(void)
 {
-    return (uint16_t)(bk_rtc_latched_time >> 16);
+    return (uint16_t)(bk_rtc_latched_millis >> 16);
 }
 
 
@@ -176,6 +194,9 @@ void bk_reset(void)
     pdp.ir = 0;
     pdp.ea_addr = 0;
     pdp.total = 0;
+    // Keep RTC-read diagnostics continuous even though the live emulator
+    // cycle counter is restarted here.
+    bk_rtc_cycle_epoch += bk_timing_cycles();
     bk_timing_reset();
     pdp.look_time = 0;
     pdp.regs[PC] = MONITOR_BASE;
@@ -191,7 +212,7 @@ void bk_reset(void)
     port0177662 = 0;
     port0177716 = 0x0040;
     port0177714 = 0;
-    bk_rtc_latched_time = 0;
+    bk_rtc_latched_millis = 0;
     bk_audio_enabled = 0;
     bk_audio_level = 0;
     bk_audio_edge_head = 0;
@@ -223,9 +244,9 @@ int ll_byte(pdp_regs *p, c_addr addr, d_byte *byte)
         case 0177716: *byte = (uint8_t)port0177716; break;
         case 0177717: *byte = (uint8_t)(port0177716 >> 8); break;
         case 0177720: *byte = (uint8_t)bk_rtc_read_time_low(); break;
-        case 0177721: *byte = (uint8_t)(bk_rtc_latched_time >> 8); break;
+        case 0177721: *byte = (uint8_t)(bk_rtc_latched_millis >> 8); break;
         case 0177722: *byte = (uint8_t)bk_rtc_read_time_high(); break;
-        case 0177723: *byte = (uint8_t)(bk_rtc_latched_time >> 24); break;
+        case 0177723: *byte = (uint8_t)(bk_rtc_latched_millis >> 24); break;
         default: *byte = 0; break;
         }
     } else if (addr >= BASIC_BASE) {

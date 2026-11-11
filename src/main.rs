@@ -11,7 +11,7 @@ use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
-use xcore407i_blinker::camera::show_performance_status;
+use xcore407i_blinker::camera::{show_performance_status, show_rtc_read_cycles};
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -36,12 +36,12 @@ pub extern "C" fn tusb_time_millis_api() -> u32 {
 #[unsafe(no_mangle)]
 pub static SystemCoreClock: u32 = 168_000_000;
 
-// C BK platform callback: return the STM32 RTC as Unix seconds (UTC).
-// The C I/O layer latches this value when BK reads RTC_TIME_L.
+// C BK platform callback: return the low 32 bits of Unix milliseconds (UTC).
+// The C I/O layer latches this value when BK reads RTC_MILLIS_L.
 #[unsafe(no_mangle)]
-pub extern "C" fn bk_rtc_unix_time() -> u32 {
+pub extern "C" fn bk_rtc_unix_millis() -> u32 {
     let rtc = unsafe { &*pac::RTC::ptr() };
-    rtc::unix_time(rtc)
+    rtc::unix_time_millis(rtc)
 }
 
 const FILE_BROWSER_OPEN: u8 = 1;
@@ -87,6 +87,8 @@ unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
+    #[cfg(feature = "cpu-cycle-diag")]
+    fn bk_rtc_get_cycles_between_reads() -> u32;
     fn bk_try_send_input_byte(value: u8) -> u8;
     fn bk_set_pc(start: u16);
     fn bk_request_stop_irq();
@@ -326,6 +328,8 @@ fn main() -> ! {
                 let cycles_per_second =
                     ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
                 show_performance_status(cycles_per_second);
+                let rtc_read_cycles = unsafe { bk_rtc_get_cycles_between_reads() };
+                show_rtc_read_cycles(rtc_read_cycles);
                 performance_last_ms = now_ms;
                 performance_last_cycles = now_cycles;
             }

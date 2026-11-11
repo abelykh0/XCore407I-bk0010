@@ -31,18 +31,24 @@ The XCore407I board provides the hardware required for the emulator:
 
 ## Emulator RTC I/O
 
-The emulator exposes the STM32F407 calendar as unsigned 32-bit Unix time
-(seconds since 1970-01-01 00:00:00 UTC) through two read-only BK I/O words:
+The emulator exposes the STM32F407 calendar as the **low 32 bits of Unix
+milliseconds** (milliseconds since 1970-01-01 00:00:00 UTC) through two
+read-only BK I/O words:
 
 | Octal address | Register | Value |
 | --- | --- | --- |
-| `177720` | `RTC_TIME_L` | Bits 0..15 |
-| `177722` | `RTC_TIME_H` | Bits 16..31 |
+| `177720` | `RTC_MILLIS_L` | Bits 0..15 |
+| `177722` | `RTC_MILLIS_H` | Bits 16..31 |
 
-Read `177720` first. That access captures the complete 32-bit timestamp;
-the subsequent read of `177722` returns the high word from the same snapshot.
-The snapshot is refreshed by the next read of `177720`. Byte reads follow
-the same low-word-first rule. The registers are read-only.
+Read `177720` first. That access captures the complete 32-bit millisecond
+value; the subsequent read of `177722` returns the high word from the same
+snapshot. The snapshot is refreshed by the next read of `177720`. Byte reads
+follow the same low-word-first rule. The registers are read-only.
+
+The 32-bit value wraps every 49.7 days. Subtracting two readings gives the
+elapsed milliseconds correctly across a wrap for intervals shorter than that.
+The RTC is configured for 256 subsecond ticks per second, so the timestamp
+resolution is approximately 3.9 ms (not 1 ms).
 
 ## Commands to Build and Flash
 

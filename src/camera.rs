@@ -549,6 +549,17 @@ pub fn show_performance_status(cycles_per_second: u32) {
     show_file_browser_line(28, &line[..pos], false);
 }
 
+/// Show PDP cycles elapsed between successive reads of RTC_TIME_L (0177720).
+/// This measures the interval between the BASIC benchmark's start/end samples.
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn show_rtc_read_cycles(cycles: u32) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut line, &mut pos, b"RTC CYCLES ");
+    append_decimal(&mut line, &mut pos, cycles);
+    show_file_browser_line(29, &line[..pos], false);
+}
+
 fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
     for &byte in bytes {
         if *pos == out.len() { break; }

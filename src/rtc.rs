@@ -185,35 +185,27 @@ fn decode_bcd(value: u32) -> Option<u8> {
 }
 
 
-/// Show raw RTC time/date register contents for hardware diagnostics.
-/// Read TR first and DR second to complete the shadow-register read sequence.
-/// INITS and RSF are deliberately not used to gate this diagnostic.
-pub fn diagnostic_text(rtc: &stm32f4::stm32f407::rtc::RegisterBlock) -> [u8; 23] {
+/// Return the STM32 RTC calendar as Unix milliseconds (UTC), modulo 2^32.
+/// Read SSR, TR, then DR so the subsecond and calendar fields form one snapshot.
+/// The configured synchronous prescaler is 255, giving 256 subsecond ticks per
+/// second (about 3.9 ms resolution).
+pub fn unix_time_millis(rtc: &stm32f4::stm32f407::rtc::RegisterBlock) -> u32 {
+    let subsecond = rtc.ssr().read().bits() & 0xff;
     let time = rtc.tr().read().bits();
     let date = rtc.dr().read().bits();
-
-    let mut out = *b"TR=00000000 DR=00000000";
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-    for i in 0..8 {
-        let shift = (7 - i) * 4;
-        out[3 + i] = HEX[((time >> shift) & 0x0f) as usize];
-        out[15 + i] = HEX[((date >> shift) & 0x0f) as usize];
-    }
-
-    out
+    let seconds = unix_seconds_from_registers(time, date);
+    let milliseconds = ((255 - subsecond) * 1_000) / 256;
+    (seconds as u64 * 1_000 + milliseconds as u64) as u32
 }
 
-/// Return the STM32 RTC calendar as unsigned Unix time (UTC seconds since
-/// 1970-01-01). The STM32F407 calendar stores a two-digit year, interpreted
-/// here as 2000..2099. Reading TR before DR completes the RTC shadow-register
-/// read sequence and keeps the calendar fields coherent.
+/// Return whole Unix seconds from a coherent RTC calendar snapshot.
 pub fn unix_time(rtc: &stm32f4::stm32f407::rtc::RegisterBlock) -> u32 {
-    // Read the live calendar registers regardless of INITS/RSF status.
-    // The diagnostic confirms TR and DR are populated and advancing.
     let time = rtc.tr().read().bits();
     let date = rtc.dr().read().bits();
+    unix_seconds_from_registers(time, date)
+}
 
+fn unix_seconds_from_registers(time: u32, date: u32) -> u32 {
     let Some(seconds) = decode_bcd(time & 0x7f) else { return 0; };
     let Some(minutes) = decode_bcd((time >> 8) & 0x7f) else { return 0; };
     let Some(hours) = decode_bcd((time >> 16) & 0x3f) else { return 0; };
