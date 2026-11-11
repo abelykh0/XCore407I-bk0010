@@ -11,7 +11,7 @@ use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
-use xcore407i_blinker::camera::show_performance_status;
+use xcore407i_blinker::camera::{show_performance_details, show_performance_status};
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -326,6 +326,17 @@ fn main() -> ! {
                 let cycles_per_second =
                     ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
                 show_performance_status(cycles_per_second);
+                let (audio_rendered, audio_underruns, audio_high_water) =
+                    xcore407i_blinker::bk_audio::take_performance_stats();
+                let (video_batches, video_repeats) =
+                    xcore407i_blinker::uvc::take_video_performance_stats();
+                show_performance_details(
+                    audio_rendered,
+                    audio_underruns,
+                    audio_high_water,
+                    video_batches,
+                    video_repeats,
+                );
                 performance_last_ms = now_ms;
                 performance_last_cycles = now_cycles;
             }
