@@ -834,12 +834,14 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     let previous = unsafe { PREVIOUS_KEYS };
     let mut current = [0u8; 6];
 
-    // AZBK standard modifier keys are emitted on the modifier's rising edge.
-    if control_pressed {
+    // AZBK modifier keys are only forwarded while the emulator owns input.
+    let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
+        || FILE_BROWSER_ACTIVE.load(Ordering::Acquire);
+    if !keyboard_captured && control_pressed {
         append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
     }
     // АР2 is a modifier (Alt/AltGr), not a standalone BK key code.
-    if gui_pressed {
+    if !keyboard_captured && gui_pressed {
         // A single Win key toggles the language. Read the live BK flag so
         // changes made by the emulator itself are respected:
         // bit 7 set = РУС, clear = ЛАТ.
