@@ -8,6 +8,10 @@ cc = "1.11.1"
 bindgen = "0.70.1"
 glob = "0.3"
 
+[features]
+default = []
+cpu-cycle-diag = []
+
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7"
