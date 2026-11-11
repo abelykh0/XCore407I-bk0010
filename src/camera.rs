@@ -130,6 +130,19 @@ static mut ROW_BUFFERS: RowBuffers = RowBuffers([0; WIDTH * 2]);
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);
 
+#[cfg(feature = "cpu-cycle-diag")]
+static VIDEO_Y_PHASE_CYCLES: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "cpu-cycle-diag")]
+static VIDEO_UV_PHASE_CYCLES: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn take_video_phase_stats() -> (u32, u32) {
+    (
+        VIDEO_Y_PHASE_CYCLES.swap(0, Ordering::Relaxed),
+        VIDEO_UV_PHASE_CYCLES.swap(0, Ordering::Relaxed),
+    )
+}
+
 fn write_canvas(index: usize, value: u8) {
     unsafe {
         if index < CANVAS_MAIN_BYTES {
@@ -584,6 +597,18 @@ pub fn show_performance_details(
     show_file_browser_line(30, &video[..pos], false);
 }
 
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn show_video_phase_status(y_cpu_percent: u32, uv_cpu_percent: u32) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut line, &mut pos, b"Y:");
+    append_decimal(&mut line, &mut pos, y_cpu_percent);
+    append_bytes(&mut line, &mut pos, b"% UV:");
+    append_decimal(&mut line, &mut pos, uv_cpu_percent);
+    append_bytes(&mut line, &mut pos, b"%");
+    show_file_browser_line(31, &line[..pos], false);
+}
+
 fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
     for &byte in bytes {
         if *pos == out.len() { break; }
@@ -808,11 +833,15 @@ impl Nv12DemoImage {
         let mode = camera_mode();
         let mut pos = offset;
         let mut written = 0;
+        #[cfg(feature = "cpu-cycle-diag")]
+        let (mut y_phase_cycles, mut uv_phase_cycles) = (0u32, 0u32);
         while written < out.len() && pos < FRAME_BYTES {
             if pos < Y_PLANE_BYTES {
                 let output_row = pos / WIDTH;
                 let x = pos % WIDTH;
                 let source_row = (output_row / 2) as u16;
+                #[cfg(feature = "cpu-cycle-diag")]
+                let phase_start = cortex_m::peripheral::DWT::cycle_count();
                 self.prepare_y_row(source_row);
                 let run = (WIDTH - x)
                     .min(Y_PLANE_BYTES - pos)
@@ -820,6 +849,12 @@ impl Nv12DemoImage {
                 unsafe {
                     crate::copy_words::copy_words(
                         y_row_ptr().add(x), out.as_mut_ptr().add(written), run,
+                    );
+                }
+                #[cfg(feature = "cpu-cycle-diag")]
+                {
+                    y_phase_cycles = y_phase_cycles.wrapping_add(
+                        cortex_m::peripheral::DWT::cycle_count().wrapping_sub(phase_start),
                     );
                 }
                 pos += run;
@@ -836,6 +871,8 @@ impl Nv12DemoImage {
                 } else {
                     (FRAME_BYTES - pos).min(out.len() - written)
                 };
+                #[cfg(feature = "cpu-cycle-diag")]
+                let phase_start = cortex_m::peripheral::DWT::cycle_count();
                 if mode == CameraMode::Monochrome {
                     let source_row = (chroma_pos / WIDTH) as u16;
                     self.prepare_uv_row(source_row);
@@ -847,11 +884,22 @@ impl Nv12DemoImage {
                         copy_canvas_range(chroma_pos, out.as_mut_ptr().add(written), run);
                     }
                 }
+                #[cfg(feature = "cpu-cycle-diag")]
+                {
+                    uv_phase_cycles = uv_phase_cycles.wrapping_add(
+                        cortex_m::peripheral::DWT::cycle_count().wrapping_sub(phase_start),
+                    );
+                }
                 pos += run;
                 written += run;
             }
         }
         out[written..].fill(0);
+        #[cfg(feature = "cpu-cycle-diag")]
+        {
+            VIDEO_Y_PHASE_CYCLES.fetch_add(y_phase_cycles, Ordering::Relaxed);
+            VIDEO_UV_PHASE_CYCLES.fetch_add(uv_phase_cycles, Ordering::Relaxed);
+        }
     }
 
     fn prepare_y_row(&mut self, source_row: u16) {
