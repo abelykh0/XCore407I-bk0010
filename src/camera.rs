@@ -557,6 +557,8 @@ pub fn show_performance_details(
     audio_high_water: u16,
     video_batches: u32,
     video_repeats: u32,
+    video_cpu_percent: u32,
+    video_max_us: u32,
 ) {
     let mut audio = [b' '; 32];
     let mut pos = 0usize;
@@ -574,6 +576,11 @@ pub fn show_performance_details(
     append_decimal(&mut video, &mut pos, video_batches);
     append_bytes(&mut video, &mut pos, b" REP:");
     append_decimal(&mut video, &mut pos, video_repeats);
+    append_bytes(&mut video, &mut pos, b" CPU:");
+    append_decimal(&mut video, &mut pos, video_cpu_percent);
+    append_bytes(&mut video, &mut pos, b"% M:");
+    append_decimal(&mut video, &mut pos, video_max_us);
+    append_bytes(&mut video, &mut pos, b"us");
     show_file_browser_line(30, &video[..pos], false);
 }
 
