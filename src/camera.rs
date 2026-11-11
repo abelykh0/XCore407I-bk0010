@@ -131,6 +131,8 @@ static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "cpu-cycle-diag")]
+const VIDEO_PHASE_SAMPLE_INTERVAL: u8 = 61;
+#[cfg(feature = "cpu-cycle-diag")]
 static VIDEO_Y_PHASE_CYCLES: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "cpu-cycle-diag")]
 static VIDEO_UV_PHASE_CYCLES: AtomicU32 = AtomicU32::new(0);
@@ -138,8 +140,10 @@ static VIDEO_UV_PHASE_CYCLES: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "cpu-cycle-diag")]
 pub fn take_video_phase_stats() -> (u32, u32) {
     (
-        VIDEO_Y_PHASE_CYCLES.swap(0, Ordering::Relaxed),
-        VIDEO_UV_PHASE_CYCLES.swap(0, Ordering::Relaxed),
+        VIDEO_Y_PHASE_CYCLES.swap(0, Ordering::Relaxed)
+            .saturating_mul(VIDEO_PHASE_SAMPLE_INTERVAL as u32),
+        VIDEO_UV_PHASE_CYCLES.swap(0, Ordering::Relaxed)
+            .saturating_mul(VIDEO_PHASE_SAMPLE_INTERVAL as u32),
     )
 }
 
@@ -723,6 +727,8 @@ pub struct Nv12DemoImage {
     cached_y_source_row: u16,
     cached_uv_source_row: u16,
     cached_clock_version: u32,
+    #[cfg(feature = "cpu-cycle-diag")]
+    profile_countdown: u8,
 }
 
 impl Nv12DemoImage {
@@ -741,6 +747,8 @@ impl Nv12DemoImage {
             cached_y_source_row: u16::MAX,
             cached_uv_source_row: u16::MAX,
             cached_clock_version: CLOCK_VERSION.load(Ordering::Relaxed),
+            #[cfg(feature = "cpu-cycle-diag")]
+            profile_countdown: 0,
         })
     }
 
@@ -753,6 +761,10 @@ impl Nv12DemoImage {
         self.cached_y_source_row = u16::MAX;
         self.cached_uv_source_row = u16::MAX;
         self.cached_clock_version = CLOCK_VERSION.load(Ordering::Relaxed);
+        #[cfg(feature = "cpu-cycle-diag")]
+        {
+            self.profile_countdown = 0;
+        }
     }
 
     /// Set the estimated CPU percentage available outside measured UVC work.
@@ -834,6 +846,16 @@ impl Nv12DemoImage {
         let mut pos = offset;
         let mut written = 0;
         #[cfg(feature = "cpu-cycle-diag")]
+        let profile_sample = {
+            self.profile_countdown += 1;
+            if self.profile_countdown >= VIDEO_PHASE_SAMPLE_INTERVAL {
+                self.profile_countdown = 0;
+                true
+            } else {
+                false
+            }
+        };
+        #[cfg(feature = "cpu-cycle-diag")]
         let (mut y_phase_cycles, mut uv_phase_cycles) = (0u32, 0u32);
         while written < out.len() && pos < FRAME_BYTES {
             if pos < Y_PLANE_BYTES {
@@ -841,7 +863,11 @@ impl Nv12DemoImage {
                 let x = pos % WIDTH;
                 let source_row = (output_row / 2) as u16;
                 #[cfg(feature = "cpu-cycle-diag")]
-                let phase_start = cortex_m::peripheral::DWT::cycle_count();
+                let phase_start = if profile_sample {
+                    Some(cortex_m::peripheral::DWT::cycle_count())
+                } else {
+                    None
+                };
                 self.prepare_y_row(source_row);
                 let run = (WIDTH - x)
                     .min(Y_PLANE_BYTES - pos)
@@ -852,9 +878,9 @@ impl Nv12DemoImage {
                     );
                 }
                 #[cfg(feature = "cpu-cycle-diag")]
-                {
+                if let Some(start) = phase_start {
                     y_phase_cycles = y_phase_cycles.wrapping_add(
-                        cortex_m::peripheral::DWT::cycle_count().wrapping_sub(phase_start),
+                        cortex_m::peripheral::DWT::cycle_count().wrapping_sub(start),
                     );
                 }
                 pos += run;
@@ -872,7 +898,11 @@ impl Nv12DemoImage {
                     (FRAME_BYTES - pos).min(out.len() - written)
                 };
                 #[cfg(feature = "cpu-cycle-diag")]
-                let phase_start = cortex_m::peripheral::DWT::cycle_count();
+                let phase_start = if profile_sample {
+                    Some(cortex_m::peripheral::DWT::cycle_count())
+                } else {
+                    None
+                };
                 if mode == CameraMode::Monochrome {
                     let source_row = (chroma_pos / WIDTH) as u16;
                     self.prepare_uv_row(source_row);
@@ -885,9 +915,9 @@ impl Nv12DemoImage {
                     }
                 }
                 #[cfg(feature = "cpu-cycle-diag")]
-                {
+                if let Some(start) = phase_start {
                     uv_phase_cycles = uv_phase_cycles.wrapping_add(
-                        cortex_m::peripheral::DWT::cycle_count().wrapping_sub(phase_start),
+                        cortex_m::peripheral::DWT::cycle_count().wrapping_sub(start),
                     );
                 }
                 pos += run;
@@ -896,7 +926,7 @@ impl Nv12DemoImage {
         }
         out[written..].fill(0);
         #[cfg(feature = "cpu-cycle-diag")]
-        {
+        if profile_sample {
             VIDEO_Y_PHASE_CYCLES.fetch_add(y_phase_cycles, Ordering::Relaxed);
             VIDEO_UV_PHASE_CYCLES.fetch_add(uv_phase_cycles, Ordering::Relaxed);
         }
