@@ -543,14 +543,14 @@ fn save_file_exists(path_bytes: &[u8]) -> bool {
 fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(), ()> {
     let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
     xcore407i_blinker::nand_fs::with_mounted(|fs| {
-        if fs.exists(path) {
-            if !overwrite {
-                return Err(littlefs2::io::Error::IO);
-            }
-            fs.remove(path)?;
+        if fs.exists(path) && !overwrite {
+            return Err(littlefs2::io::Error::IO);
         }
 
-        fs.create_file_and_then(path, |file| {
+        fs.open_file_with_options_and_then(
+            |options| options.write(true).create(true).truncate(true),
+            path,
+            |file| {
             let header = [
                 (SAVE_RAM_START as u16).to_le_bytes()[0],
                 (SAVE_RAM_START as u16).to_le_bytes()[1],
@@ -581,7 +581,8 @@ fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(), ()> {
                 total += count;
             }
             Ok(())
-        })
+            },
+        )
     })
     .map_err(|_| ())
 }
@@ -848,27 +849,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             continue;
         }
 
-        // STOP is a hardware IRQ1, not a character sent through 177662.
-        // Pause and F12 are equivalent host keys for the BK STOP signal.
-        if key == 0x48 || key == 0x45 {
-            unsafe { bk_request_stop_irq(); }
-            continue;
-        }
-
-        // F1 requests a camera mode change. The camera applies it at the
-        // next UVC frame boundary and clears the canvas in the new format.
-        if key == 0x3a {
-            request_camera_mode_toggle();
-            continue;
-        }
-
-        // F2 opens the NAND file browser; directory access runs in main().
-        if key == 0x3b {
-            FILE_BROWSER_ACTIVE.store(true, Ordering::Release);
-            FILE_BROWSER_ACTION.store(FILE_BROWSER_OPEN, Ordering::Release);
-            continue;
-        }
-
         // While the save dialog is active, capture filename editing and
         // confirmation keys instead of forwarding them to the BK emulator.
         let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
@@ -928,15 +908,24 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             continue;
         }
 
-        // F3 starts a RAM save; the extension is appended automatically.
-        if key == 0x3c {
-            unsafe {
-                SAVE_FILENAME.fill(0);
-                SAVE_FILENAME_LEN = 0;
-            }
-            SAVE_DIALOG_RESULT.store(0, Ordering::Release);
-            SAVE_DIALOG_STATE.store(SAVE_DIALOG_INPUT, Ordering::Release);
-            SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
+        // STOP is a hardware IRQ1, not a character sent through 177662.
+        // Pause and F12 are equivalent host keys for the BK STOP signal.
+        if key == 0x48 || key == 0x45 {
+            unsafe { bk_request_stop_irq(); }
+            continue;
+        }
+
+        // F1 requests a camera mode change. The camera applies it at the
+        // next UVC frame boundary and clears the canvas in the new format.
+        if key == 0x3a {
+            request_camera_mode_toggle();
+            continue;
+        }
+
+        // F2 opens the NAND file browser; directory access runs in main().
+        if key == 0x3b {
+            FILE_BROWSER_ACTIVE.store(true, Ordering::Release);
+            FILE_BROWSER_ACTION.store(FILE_BROWSER_OPEN, Ordering::Release);
             continue;
         }
 
@@ -953,6 +942,18 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             if action != 0 {
                 FILE_BROWSER_ACTION.store(action, Ordering::Release);
             }
+            continue;
+        }
+
+        // F3 starts a RAM save; the extension is appended automatically.
+        if key == 0x3c {
+            unsafe {
+                SAVE_FILENAME.fill(0);
+                SAVE_FILENAME_LEN = 0;
+            }
+            SAVE_DIALOG_RESULT.store(0, Ordering::Release);
+            SAVE_DIALOG_STATE.store(SAVE_DIALOG_INPUT, Ordering::Release);
+            SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
             continue;
         }
 
