@@ -792,7 +792,15 @@ impl Nv12DemoImage {
             } else {
                 let chroma_pos = pos - Y_PLANE_BYTES;
                 let x = chroma_pos % WIDTH;
-                let run = (WIDTH - x).min(FRAME_BYTES - pos).min(out.len() - written);
+                // In color mode the UV plane is a contiguous copy of the
+                // source canvas. Let the copy cross source-row boundaries;
+                // copy_canvas_range() already handles the SRAM/CCM split.
+                // Monochrome still needs row-sized chunks to prepare neutral UV.
+                let run = if mode == CameraMode::Monochrome {
+                    (WIDTH - x).min(FRAME_BYTES - pos).min(out.len() - written)
+                } else {
+                    (FRAME_BYTES - pos).min(out.len() - written)
+                };
                 if mode == CameraMode::Monochrome {
                     let source_row = (chroma_pos / WIDTH) as u16;
                     self.prepare_uv_row(source_row);
