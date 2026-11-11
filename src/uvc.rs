@@ -7,7 +7,9 @@
 //! ISO IN endpoint at `ENDPOINT_IN`.
 
 use crate::camera::{Nv12DemoImage, HEIGHT, WIDTH};
-use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+#[cfg(feature = "cpu-cycle-diag")]
+use core::sync::atomic::AtomicU32;
 
 pub const CONTROL_INTERFACE: u8 = 0;
 pub const STREAMING_INTERFACE: u8 = 1;
@@ -48,12 +50,18 @@ static VIDEO_BUFFER_PACKETS: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)
 static VIDEO_BATCHES_PREPARED: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "cpu-cycle-diag")]
 static VIDEO_BATCHES_REPEATED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "cpu-cycle-diag")]
+static VIDEO_GENERATION_CYCLES: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "cpu-cycle-diag")]
+static VIDEO_GENERATION_MAX_CYCLES: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "cpu-cycle-diag")]
-pub fn take_video_performance_stats() -> (u32, u32) {
+pub fn take_video_performance_stats() -> (u32, u32, u32, u32) {
     (
         VIDEO_BATCHES_PREPARED.swap(0, Ordering::Relaxed),
         VIDEO_BATCHES_REPEATED.swap(0, Ordering::Relaxed),
+        VIDEO_GENERATION_CYCLES.swap(0, Ordering::Relaxed),
+        VIDEO_GENERATION_MAX_CYCLES.swap(0, Ordering::Relaxed),
     )
 }
 
@@ -74,7 +82,15 @@ pub fn prepare_next_video_batch(camera: &mut Nv12DemoImage) -> bool {
                 .as_mut()
                 .unwrap()
         };
+        #[cfg(feature = "cpu-cycle-diag")]
+        let generation_start = cortex_m::peripheral::DWT::cycle_count();
         if let Some(payload) = camera.next_payload_transfer(&mut buffer.0, ISO_BATCH_BYTES) {
+            #[cfg(feature = "cpu-cycle-diag")]
+            {
+                let elapsed = cortex_m::peripheral::DWT::cycle_count().wrapping_sub(generation_start);
+                VIDEO_GENERATION_CYCLES.fetch_add(elapsed, Ordering::Relaxed);
+                VIDEO_GENERATION_MAX_CYCLES.fetch_max(elapsed, Ordering::Relaxed);
+            }
             let packets = payload.len.div_ceil(MAX_PACKET_SIZE as usize) as u8;
             VIDEO_BUFFER_LENGTH[index].store(payload.len as u16, Ordering::Relaxed);
             VIDEO_BUFFER_PACKETS[index].store(packets, Ordering::Relaxed);
