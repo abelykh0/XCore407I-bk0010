@@ -53,7 +53,7 @@ probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcor
 
 ## Not implemented / TODO
 
-- Solve mystery with keyboard not working at start
+- Solve mystery with keyboard not working at start sometimes
 - Improve performance which playing music
 - Full keyboard support (СУ, АР2)
 - Ability to save and delete files
