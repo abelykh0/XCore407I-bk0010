@@ -222,6 +222,7 @@ fn main() -> ! {
     // Real-time emulator pacing uses the PDP cycle counter.
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
+    let mut save_dialog_was_active = false;
     #[cfg(feature = "cpu-cycle-diag")]
     let mut performance_last_ms = pacing_start_ms;
     #[cfg(feature = "cpu-cycle-diag")]
@@ -299,6 +300,13 @@ fn main() -> ! {
             if state == SAVE_DIALOG_INPUT || state == SAVE_DIALOG_CONFIRM {
                 unsafe { draw_save_dialog(state); }
             }
+        }
+
+        let save_dialog_active = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE;
+        if save_dialog_active != save_dialog_was_active {
+            pacing_start_ms = TICKS.load(Ordering::Relaxed);
+            pacing_start_cycles = unsafe { bk_timing_cycles() };
+            save_dialog_was_active = save_dialog_active;
         }
 
         match SAVE_DIALOG_RESULT.swap(0, Ordering::AcqRel) {
@@ -964,6 +972,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
 
         // F3 starts a RAM save; the extension is appended automatically.
         if key == 0x3c {
+            keyboard_queue_discard();
             unsafe {
                 core::ptr::write_bytes(
                     core::ptr::addr_of_mut!(SAVE_FILENAME).cast::<u8>(),
