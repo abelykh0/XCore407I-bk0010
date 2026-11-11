@@ -549,6 +549,34 @@ pub fn show_performance_status(cycles_per_second: u32) {
     show_file_browser_line(28, &line[..pos], false);
 }
 
+/// Display one-second audio and UVC buffer-flow counters.
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn show_performance_details(
+    audio_rendered: u32,
+    audio_underruns: u32,
+    audio_high_water: u16,
+    video_batches: u32,
+    video_repeats: u32,
+) {
+    let mut audio = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut audio, &mut pos, b"A R:");
+    append_decimal(&mut audio, &mut pos, audio_rendered);
+    append_bytes(&mut audio, &mut pos, b" U:");
+    append_decimal(&mut audio, &mut pos, audio_underruns);
+    append_bytes(&mut audio, &mut pos, b" H:");
+    append_decimal(&mut audio, &mut pos, audio_high_water as u32);
+    show_file_browser_line(29, &audio[..pos], false);
+
+    let mut video = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut video, &mut pos, b"V B:");
+    append_decimal(&mut video, &mut pos, video_batches);
+    append_bytes(&mut video, &mut pos, b" REP:");
+    append_decimal(&mut video, &mut pos, video_repeats);
+    show_file_browser_line(30, &video[..pos], false);
+}
+
 fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
     for &byte in bytes {
         if *pos == out.len() { break; }
