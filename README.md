@@ -48,6 +48,7 @@ the same low-word-first rule. The registers are read-only.
 
 ```powershell
 cargo build --release --target thumbv7em-none-eabihf
+cargo build --release --features cpu-cycle-diag
 probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
 ```
 
