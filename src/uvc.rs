@@ -20,6 +20,8 @@ pub const ISO_PACKETS_PER_MICROFRAME: u8 = 3;
 // as many source-row segments as needed. One transfer header occupies four bytes.
 pub const ISO_BATCH_BYTES: usize =
     MAX_PACKET_SIZE as usize * ISO_PACKETS_PER_MICROFRAME as usize;
+pub const USB_HS_DMA_BUFFER_LIMIT: usize = 4096;
+const _: () = assert!(ISO_BATCH_BYTES <= USB_HS_DMA_BUFFER_LIMIT);
 pub const MAX_PAYLOAD_TRANSFER_SIZE: u32 = ISO_BATCH_BYTES as u32;
 pub const FRAME_RATE_FPS: u32 = 25;
 pub const FRAME_INTERVAL_100NS: u32 = 10_000_000 / FRAME_RATE_FPS;

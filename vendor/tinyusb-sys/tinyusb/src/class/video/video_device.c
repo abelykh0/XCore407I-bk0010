@@ -789,6 +789,23 @@ static bool _open_vc_itf(uint8_t rhport, videod_interface_t *self, uint_fast8_t 
   return true;
 }
 
+// Return the maximum payload that an endpoint can carry in one service
+// interval. For HS isochronous endpoints wMaxPacketSize[12:11] encodes
+// additional transactions (00=1, 01=2, 10=3); tu_edpt_packet_size()
+// intentionally returns only the per-transaction MPS.
+static uint32_t _endpoint_max_payload_size(tusb_desc_endpoint_t const *ep) {
+  uint32_t payload = tu_edpt_packet_size(ep);
+  if (tud_speed_get() == TUSB_SPEED_HIGH &&
+      ep->bmAttributes.xfer == TUSB_XFER_ISOCHRONOUS) {
+    const uint8_t mult = (uint8_t)((ep->wMaxPacketSize >> 11) & 0x03u);
+    if (mult == 3u) {
+      return 0; // Reserved encoding: four transactions is not valid.
+    }
+    payload *= (uint32_t)(mult + 1u);
+  }
+  return payload;
+}
+
 static bool _init_vs_configuration(videod_streaming_interface_t *stm) {
   /* initialize streaming settings */
   stm->state = VS_STATE_PROBING;
@@ -847,8 +864,9 @@ static bool _open_vs_itf(uint8_t rhport, videod_streaming_interface_t *stm, uint
     tusb_desc_endpoint_t const *ep = (tusb_desc_endpoint_t const*)cur;
     uint_fast32_t max_size = stm->max_payload_transfer_size;
     if (altnum && (TUSB_XFER_ISOCHRONOUS == ep->bmAttributes.xfer)) {
-      /* FS must be less than or equal to max packet size */
-      TU_VERIFY (tu_edpt_packet_size(ep) >= max_size);
+      /* The committed UVC payload must fit one service interval. For HS
+       * ISO, include the high-bandwidth transaction multiplier. */
+      TU_VERIFY(_endpoint_max_payload_size(ep) >= max_size);
 #ifdef TUP_DCD_EDPT_ISO_ALLOC
       TU_ASSERT(usbd_edpt_iso_activate(rhport, ep));
 #else

@@ -1,33 +1,29 @@
 #![no_std]
 #![no_main]
 
-use core::mem::MaybeUninit;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 use cortex_m::peripheral::{scb::SystemHandler, syst::SystClkSource, NVIC, SCB};
 use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 use stm32f4xx_hal::gpio::{GpioExt, Speed};
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use synopsys_usb_otg::{UsbBus};
-use usb_device::device::{UsbDevice, UsbDeviceBuilder, UsbVidPid};
 use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
+#[cfg(feature = "cpu-cycle-diag")]
+use xcore407i_blinker::camera::show_performance_status;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
-use tinyusb_sys as tusb;
+use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
-use xcore407i_blinker::usb_uvc::{
-    usb_bus, F407UsbHs, UvcUsbClass,
-};
-use xcore407i_blinker::usb_audio::BkEmulatorAudio;
 
-// USB polling timer runs at 16 kHz (62.5 us between polls).
-const USB_POLL_TIMER_HZ: u32 = 16_000;
-const TIM2_PRIORITY: u8 = 0;
 const TIM3_PRIORITY: u8 = 3;
 const SYSTICK_PRIORITY: u8 = 1;
 
 static TICKS: AtomicU32 = AtomicU32::new(0);
+
+// Keyboard frame pacing state shared with the PendSV handler.
+static LAST_KEYBOARD_CYCLE: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_CYCLE_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 // TinyUSB's no-RTOS time source. SysTick increments TICKS once per millisecond.
 #[unsafe(no_mangle)]
@@ -69,6 +65,7 @@ const USB_FS_RETRY_INTERVAL_MS: u32 = 500;
 // TIM3 schedules TinyUSB host work; the actual task runs in thread context.
 static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
 
+
 // HID boot-keyboard state. TinyUSB invokes HID callbacks from tuh_task_ext(),
 // so these non-atomic key snapshots are only accessed serially there.
 static mut PREVIOUS_KEYS: [u8; 6] = [0; 6];
@@ -77,30 +74,24 @@ static KEYBOARD_LOCKS: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
 static mut KEYBOARD_LED_REPORT: u8 = 0;
-// Characters decoded by TinyUSB are handed to the emulator from the main loop.
-static mut KEYBOARD_INPUT_BUFFER: [u8; 32] = [0; 32];
-static KEYBOARD_INPUT_LEN: AtomicU8 = AtomicU8::new(0);
+// Decoded HID characters enter a FIFO; PendSV consumes it at PDP frame cadence.
+const KEYBOARD_QUEUE_CAPACITY: u16 = 128;
+const KEYBOARD_QUEUE_MASK: u16 = KEYBOARD_QUEUE_CAPACITY - 1;
+static mut KEYBOARD_QUEUE: [u8; KEYBOARD_QUEUE_CAPACITY as usize] = [0; KEYBOARD_QUEUE_CAPACITY as usize];
+static KEYBOARD_QUEUE_HEAD: AtomicU16 = AtomicU16::new(0);
+static KEYBOARD_QUEUE_TAIL: AtomicU16 = AtomicU16::new(0);
+const PDP_CYCLES_PER_FRAME: u32 = 60_000;
+const PDP_CYCLES_PER_SECOND: u32 = 3_000_000;
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
-    fn sendInput(buffer: *mut u8, size: u8);
+    fn bk_timing_cycles() -> u32;
+    fn bk_try_send_input_byte(value: u8) -> u8;
     fn bk_set_pc(start: u16);
     fn bk_request_stop_irq();
     static mut RamBuffer: [u8; 0x4000];
 }
-
-type BoardUsbBus = UsbBus<F407UsbHs>;
-type BoardUsbDevice = UsbDevice<'static, BoardUsbBus>;
-type BoardUvcClass = UvcUsbClass<'static, BoardUsbBus>;
-type BoardAudioHandler = BkEmulatorAudio;
-type BoardAudioClass = usbd_uac2::UsbAudioClass<'static, BoardUsbBus, BoardAudioHandler>;
-
-// These pointers are published once, before TIM2 is enabled. After that,
-// TIM2 is the sole owner of both mutable objects. main() must not access them.
-static USB_DEVICE_PTR: AtomicPtr<BoardUsbDevice> = AtomicPtr::new(ptr::null_mut());
-static CAMERA_PTR: AtomicPtr<BoardUvcClass> = AtomicPtr::new(ptr::null_mut());
-static AUDIO_PTR: AtomicPtr<BoardAudioClass> = AtomicPtr::new(ptr::null_mut());
 
 #[entry]
 fn main() -> ! {
@@ -151,7 +142,7 @@ fn main() -> ! {
     core.SYST.enable_counter();
 
     // Prepare and initialize OTG_FS host. A failed attempt is retried from
-    // the main loop after a short delay; OTG_HS remains owned by the UVC driver.
+    // the main loop after a short delay; OTG_HS is initialized separately as a TinyUSB device.
     unsafe {
         core.NVIC.set_priority(interrupt::OTG_FS, 0x3 << 4);
         NVIC::unpend(interrupt::OTG_FS);
@@ -164,106 +155,39 @@ fn main() -> ! {
         );
     }
 
-    let bus = usb_bus().expect("USB bus initialization failed");
-
-    // The large endpoint buffers remain in their existing DMA-visible SRAM
-    // allocation. The UsbDevice itself remains in CCM as in the original code.
-    static mut CAMERA: MaybeUninit<BoardUvcClass> = MaybeUninit::uninit();
-    static mut AUDIO_IMPL: MaybeUninit<BoardAudioHandler> = MaybeUninit::uninit();
-    static mut AUDIO: MaybeUninit<BoardAudioClass> = MaybeUninit::uninit();
-
-    #[unsafe(link_section = ".ccmram.usb_device")]
-    static mut USB_DEVICE: MaybeUninit<BoardUsbDevice> = MaybeUninit::uninit();
-
-    // Main owns the renderer; TIM2 callbacks only consume prepared batches.
+    // The main loop owns the renderer; TinyUSB UVC completion callbacks
+    // consume prepared batches from the OTG_HS device interrupt.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
     while prepare_next_video_batch(&mut video_renderer) {}
 
-    // Construct in place and publish raw pointers. No long-lived &mut reference
-    // is kept in main; the TIM2 ISR creates the only mutable references.
-    let camera_ptr = unsafe {
-        (*ptr::addr_of_mut!(CAMERA)).as_mut_ptr()
+    // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
+    // independently initialized on rhport 0.
+    device.RCC.ahb1enr().modify(|_, w| {
+        w.otghsen().set_bit().otghsulpien().set_bit()
+    });
+    let _ = device.RCC.ahb1enr().read().bits();
+
+    unsafe {
+        core.NVIC.set_priority(interrupt::OTG_HS, 0);
+        NVIC::unpend(interrupt::OTG_HS);
+    }
+
+    let hs_device_init = tusb::tusb_rhport_init_t {
+        role: tusb::tusb_role_t::TUSB_ROLE_DEVICE,
+        speed: tusb::tusb_speed_t::TUSB_SPEED_HIGH,
     };
-
-    unsafe {
-        camera_ptr.write(
-            UvcUsbClass::new(bus).expect("UVC USB class initialization failed")
-        );
+    if !unsafe { tusb::tusb_rhport_init(1, &hs_device_init) } {
+        panic!("TinyUSB OTG_HS device initialization failed");
     }
 
-    let audio_ptr = unsafe {
-        (*ptr::addr_of_mut!(AUDIO)).as_mut_ptr()
-    };
-
-    // Keep the UAC2 handler in static storage for the lifetime of the class.
-    let audio_impl_ptr = unsafe {
-        (*ptr::addr_of_mut!(AUDIO_IMPL)).as_mut_ptr()
-    };
+    // Service the DWC2 device controller from its real OTG_HS interrupt.
+    // TIM2 polling is no longer used for USB device servicing.
     unsafe {
-        audio_impl_ptr.write(BkEmulatorAudio::new());
+        core.NVIC.set_priority(interrupt::OTG_HS, 0);
+        NVIC::unpend(interrupt::OTG_HS);
+        NVIC::unmask(interrupt::OTG_HS);
     }
-    let audio_impl: &'static mut BoardAudioHandler = unsafe { &mut *audio_impl_ptr };
-
-    let audio_class = usbd_uac2::UsbAudioClassConfig::new(
-        usbd_uac2::UsbSpeed::High,
-        usbd_uac2::constants::FunctionCode::SoundRecorder,
-        audio_impl,
-    )
-    .with_input_config(
-        usbd_uac2::TerminalConfig::<usb_device::endpoint::In>::builder()
-            .base_id(4)
-            .num_channels(1)
-            .format(usbd_uac2::descriptors::FormatType1 {
-                bytes_per_sample: 2,
-                bit_resolution: 16,
-            })
-            .terminal_type(usbd_uac2::constants::TerminalType::ExtLineConnector)
-            .build(),
-    )
-    .build(bus)
-    .expect("UAC2 Line In class initialization failed");
-
-    unsafe {
-        audio_ptr.write(audio_class);
-    }
-
-    let usb_ptr = unsafe {
-        (*ptr::addr_of_mut!(USB_DEVICE)).as_mut_ptr()
-    };
-
-    unsafe {
-        usb_ptr.write(
-            UsbDeviceBuilder::new(
-                bus,
-                // Development VID/PID; USB class descriptors identify this as UVC.
-                UsbVidPid(0x1209, 0x4071),
-            )
-            .composite_with_iads()
-            .max_packet_size_0(64)
-            .unwrap()
-            .build(),
-        );
-    }
-/*
-    // Experiment: keep UVC registered and polled, but suppress all video payload
-    // submissions to isolate video endpoint traffic from audio scheduling.
-    unsafe {
-        (&mut *camera_ptr).set_video_payloads_enabled(true);
-        (&mut *camera_ptr).set_repeat_video_batch(false);
-    }
-*/
-    CAMERA_PTR.store(camera_ptr, Ordering::Release);
-    AUDIO_PTR.store(audio_ptr, Ordering::Release);
-    USB_DEVICE_PTR.store(usb_ptr, Ordering::Release);
-
-    // Start the independent USB service timers only after all USB objects
-    // are initialized and published. TIM2 services the HS USB device at 16 kHz.
-    configure_usb_poll_timer(
-        &device.RCC,
-        &device.TIM2,
-        &mut core.NVIC,
-    );
 
     // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
     // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
@@ -278,6 +202,13 @@ fn main() -> ! {
     let mut browser_count = 0usize;
     let mut browser_selected = 0usize;
     let mut browser_open = false;
+    // Real-time emulator pacing uses the PDP cycle counter.
+    let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
+    let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
+    #[cfg(feature = "cpu-cycle-diag")]
+    let mut performance_last_ms = pacing_start_ms;
+    #[cfg(feature = "cpu-cycle-diag")]
+    let mut performance_last_cycles = pacing_start_cycles;
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -295,6 +226,14 @@ fn main() -> ! {
             }
         }
 
+        // Drain TinyUSB device control/bus events in thread context. ISO data
+        // endpoints are re-armed directly by their class xfer_isr callbacks.
+        unsafe {
+            let _ = tusb::tud_task_ext(0, false);
+            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
+        }
+
         // Service the USB FS host in thread context. TIM3 only schedules this
         // work; the host task must never run from the timer ISR.
         if USB_FS_READY.load(Ordering::Acquire)
@@ -308,7 +247,7 @@ fn main() -> ! {
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
-            KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+            keyboard_queue_discard();
             match list_root_files(&mut *browser_paths, &mut *browser_path_lengths) {
                 Ok(count) => {
                     browser_count = count;
@@ -371,28 +310,58 @@ fn main() -> ! {
             }
         }
 
-        // Run one emulator iteration in thread context. Video batches are
-        // rendered from the canvas below, never from the USB timer ISR.
-        if !browser_open {
-            unsafe { bk_loop(); }
+        // Replenish USB video buffers before emulator work. The producer
+        // also runs between individual PDP instructions below, so a newly
+        // freed DMA buffer is refilled promptly instead of waiting for a
+        // complete emulator quantum to finish.
+        while prepare_next_video_batch(&mut video_renderer) {}
 
-            let input_len = KEYBOARD_INPUT_LEN.swap(0, Ordering::AcqRel);
-            if input_len > 0 {
-                let mut buffer = [0u8; 32];
-                unsafe {
-                    ptr::copy_nonoverlapping(
-                        core::ptr::addr_of!(KEYBOARD_INPUT_BUFFER).cast::<u8>(),
-                        buffer.as_mut_ptr(),
-                        input_len as usize,
-                    );
-                    sendInput(buffer.as_mut_ptr(), input_len);
-                }
+        #[cfg(feature = "cpu-cycle-diag")]
+        {
+            let now_ms = TICKS.load(Ordering::Relaxed);
+            let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
+            if elapsed_ms >= 1_000 {
+                let now_cycles = unsafe { bk_timing_cycles() };
+                let elapsed_cycles = now_cycles.wrapping_sub(performance_last_cycles);
+                let cycles_per_second =
+                    ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
+                show_performance_status(cycles_per_second);
+                performance_last_ms = now_ms;
+                performance_last_cycles = now_cycles;
             }
         }
 
-        // Keep the two video buffers replenished outside interrupt context.
-        // Do not sleep here: the emulator and USB FS host task need servicing.
-        while prepare_next_video_batch(&mut video_renderer) {}
+        // Pace PDP execution against the 1 ms hardware timebase. This keeps
+        // the emulated 3 MHz clock aligned with real time in both color and
+        // monochrome modes. USB/audio/video servicing continues while ahead.
+        if !browser_open {
+            let now_ms = TICKS.load(Ordering::Relaxed);
+            let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
+            let now_cycles = unsafe { bk_timing_cycles() };
+            let elapsed_cycles = now_cycles.wrapping_sub(pacing_start_cycles);
+
+            // Rebase every second so both wrapping counters remain unambiguous.
+            if elapsed_ms >= 1_000 {
+                pacing_start_ms = now_ms;
+                pacing_start_cycles = now_cycles;
+            } else {
+                let target_cycles =
+                    (elapsed_ms as u64 * PDP_CYCLES_PER_SECOND as u64) / 1_000;
+                if (elapsed_cycles as u64) < target_cycles {
+                    // Execute a small batch to amortize the pacing check. The
+                    // batch is deliberately bounded so USB servicing remains
+                    // responsive; any small cycle overshoot is corrected by
+                    // the next iteration.
+                    for _ in 0..16 {
+                        unsafe { bk_loop(); }
+
+                        // Refill buffers while the emulator runs, outside USB IRQs.
+                        while prepare_next_video_batch(&mut video_renderer) {}
+                    }
+                    service_keyboard_frame_pacing();
+                }
+            }
+        }
     }
 }
 
@@ -521,6 +490,11 @@ fn OTG_FS() {
     unsafe { tusb::hcd_int_handler(0, true); }
 }
 
+#[interrupt]
+fn OTG_HS() {
+    unsafe { tusb::tusb_int_handler(1, true); }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_enum_descriptor_device_cb(_dev_addr: u8, _desc: *const tusb::tusb_desc_device_t) {
     USB_FS_STATUS.store(7, Ordering::Release);
@@ -538,6 +512,31 @@ pub extern "C" fn tuh_mount_cb(_dev_addr: u8) { USB_FS_STATUS.store(3, Ordering:
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_umount_cb(_dev_addr: u8) { USB_FS_STATUS.store(5, Ordering::Release); }
 
+fn keyboard_queue_push(bytes: &[u8]) {
+    for &byte in bytes {
+        let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Acquire);
+        if head.wrapping_sub(tail) >= KEYBOARD_QUEUE_CAPACITY { break; }
+        unsafe { core::ptr::addr_of_mut!(KEYBOARD_QUEUE).cast::<u8>()
+            .add((head & KEYBOARD_QUEUE_MASK) as usize).write(byte); }
+        KEYBOARD_QUEUE_HEAD.store(head.wrapping_add(1), Ordering::Release);
+    }
+}
+fn keyboard_queue_peek() -> Option<u8> {
+    let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
+    if tail == KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire) { return None; }
+    Some(unsafe { core::ptr::addr_of!(KEYBOARD_QUEUE).cast::<u8>()
+        .add((tail & KEYBOARD_QUEUE_MASK) as usize).read() })
+}
+fn keyboard_queue_pop() {
+    let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
+    KEYBOARD_QUEUE_TAIL.store(tail.wrapping_add(1), Ordering::Release);
+}
+fn keyboard_queue_discard() {
+    let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire);
+    KEYBOARD_QUEUE_TAIL.store(head, Ordering::Release);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8, _len: u16) {
     // HID interface protocol 1 is a boot keyboard; ignore unrelated HID
@@ -548,7 +547,7 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
-    KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+    keyboard_queue_discard();
     unsafe {
         PREVIOUS_KEYS = [0; 6];
         PREVIOUS_MODIFIERS = 0;
@@ -577,7 +576,7 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
         KEYBOARD_LOCKS.store(0, Ordering::Release);
-        KEYBOARD_INPUT_LEN.store(0, Ordering::Release);
+        keyboard_queue_discard();
         unsafe {
             PREVIOUS_KEYS = [0; 6];
             PREVIOUS_MODIFIERS = 0;
@@ -769,14 +768,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
 
     // Only decoded key bytes go to the emulator; display labels are not BK input.
     if emulator_used != 0 {
-        unsafe {
-            ptr::copy_nonoverlapping(
-                emulator_input.as_ptr(),
-                core::ptr::addr_of_mut!(KEYBOARD_INPUT_BUFFER).cast::<u8>(),
-                emulator_used,
-            );
-        }
-        KEYBOARD_INPUT_LEN.store(emulator_used as u8, Ordering::Release);
+        keyboard_queue_push(&emulator_input[..emulator_used]);
     }
 }
 
@@ -908,24 +900,6 @@ fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     }
 }
 
-/// TIM2 services the USB HS device at 10 kHz (100 us between polls).
-/// Video rendering is performed by the main-loop producer, not by callbacks.
-#[interrupt]
-fn TIM2() {
-    let tim2 = unsafe { &*pac::TIM2::ptr() };
-    tim2.sr().write(|w| w.uif().clear_bit());
-
-    let usb_ptr = USB_DEVICE_PTR.load(Ordering::Acquire);
-    let camera_ptr = CAMERA_PTR.load(Ordering::Acquire);
-    let audio_ptr = AUDIO_PTR.load(Ordering::Acquire);
-    if !usb_ptr.is_null() && !camera_ptr.is_null() && !audio_ptr.is_null() {
-        let usb = unsafe { &mut *usb_ptr };
-        let camera = unsafe { &mut *camera_ptr };
-        let audio = unsafe { &mut *audio_ptr };
-        let _ = usb.poll(&mut [camera, audio]);
-    }
-}
-
 /// Configure TIM3 as a 1 kHz scheduler tick for the TinyUSB FS host task.
 ///
 /// TinyUSB's host task dispatches callbacks and is not ISR-safe. TIM3 therefore
@@ -942,7 +916,7 @@ fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
     }
 
     // Enable the peripheral clock, then reset only OTG_FS. OTG_HS is
-    // independent and must remain untouched because it carries UVC.
+    // independent and carries the TinyUSB composite UVC/UAC2 device.
     rcc.ahb2enr().modify(|_, w| w.otgfsen().set_bit());
     let _ = rcc.ahb2enr().read().bits();
 
@@ -1021,65 +995,16 @@ fn configure_exception_priorities(scb: &mut SCB) {
 
     unsafe {
         // PRIGROUP=0: all implemented priority bits are preemption priority.
-        let aircr = SCB_AIRCR.read_volatile();
-        SCB_AIRCR.write_volatile((aircr & !(7 << 8)) | (0x5FA << 16));
+        let aircr = core::ptr::read_volatile(SCB_AIRCR);
+        core::ptr::write_volatile(SCB_AIRCR, (aircr & !(7 << 8)) | (0x5FA << 16));
 
-        // TIM2 is priority 0 (highest): USB HS polling must not be delayed
-        // by the 1 ms timebase. SysTick remains enabled at priority 1 so it
-        // can preempt lower-priority work and continue advancing TinyUSB time.
+        // USB controller interrupts preempt the emulator loop. SysTick
+        // remains enabled at priority 1 for TinyUSB's millisecond timebase.
         scb.set_priority(SystemHandler::SysTick, SYSTICK_PRIORITY << 4);
-
-        // This Synopsys driver is polled; it does not provide an OTG_HS NVIC
-        // handler. Keep OTG_HS disabled so the core's GINT output cannot vector
-        // into the default handler. UsbBus::poll reads and services GINTSTS.
+        // OTG_HS is unmasked after successful TinyUSB device initialization.
         NVIC::mask(interrupt::OTG_HS);
         NVIC::unpend(interrupt::OTG_HS);
     }
-}
-
-/// Configure TIM2 for a 100 us update period and enable its NVIC line.
-fn configure_usb_poll_timer(
-    rcc: &pac::RCC,
-    tim2: &pac::TIM2,
-    nvic: &mut NVIC,
-) {
-    // TIM2CLK = 84 MHz, PSC = 0, ARR = 8399 => 10,000 updates/second.
-    let timer_ticks = 84_000_000 / USB_POLL_TIMER_HZ;
-
-    // Enable TIM2 on APB1.
-    rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
-
-    // Reset TIM2 to its known reset state.
-    rcc.apb1rstr().modify(|_, w| w.tim2rst().set_bit());
-    rcc.apb1rstr().modify(|_, w| w.tim2rst().clear_bit());
-
-    // Stop timer and disable update interrupt while configuring.
-    tim2.cr1().write(|w| w.cen().clear_bit());
-    tim2.dier().write(|w| w.uie().clear_bit());
-
-    // PSC and CNT are zero after the peripheral reset.
-    // ARR = 8399 gives a 100 us update period at 84 MHz.
-    tim2.arr().write(|w| unsafe {
-        w.arr().bits(timer_ticks - 1)
-    });
-
-    // Generate an update event to load the prescaler and auto-reload.
-    tim2.egr().write(|w| w.ug().set_bit());
-
-    // Clear the update flag generated by UG.
-    tim2.sr().write(|w| w.uif().clear_bit());
-
-    // Configure NVIC priority and clear any pending interrupt.
-    unsafe {
-        nvic.set_priority(interrupt::TIM2, TIM2_PRIORITY << 4);
-        NVIC::unmask(interrupt::TIM2);
-    }
-
-    NVIC::unpend(interrupt::TIM2);
-
-    // Enable update interrupt and start the timer.
-    tim2.dier().write(|w| w.uie().set_bit());
-    tim2.cr1().write(|w| w.cen().set_bit());
 }
 
 fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
@@ -1092,6 +1017,32 @@ fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
 #[exception]
 fn SysTick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
+}
+
+// Keyboard input is paced in thread context alongside emulator execution.
+fn service_keyboard_frame_pacing() {
+    let now = unsafe { bk_timing_cycles() };
+    if !KEYBOARD_CYCLE_INITIALIZED.load(Ordering::Relaxed) {
+        LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
+        KEYBOARD_CYCLE_INITIALIZED.store(true, Ordering::Relaxed);
+        return;
+    }
+
+    let last = LAST_KEYBOARD_CYCLE.load(Ordering::Relaxed);
+    let elapsed = now.wrapping_sub(last);
+    if (elapsed as i32) < 0 {
+        // The emulator cycle counter was reset; rebase the frame interval.
+        LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
+    } else if elapsed >= PDP_CYCLES_PER_FRAME {
+        if let Some(key) = keyboard_queue_peek() {
+            // Leave the byte at the queue head if the BK keyboard port is busy.
+            if unsafe { bk_try_send_input_byte(key) } != 0 {
+                keyboard_queue_pop();
+            }
+        }
+        // At most one byte per 60,000 PDP cycles, including after delays.
+        LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
+    }
 }
 
 fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::FLASH) {
@@ -1188,11 +1139,11 @@ fn configure_board_pins(
         let pupdr = gpioc.add(0x0c).cast::<u32>();
 
         // Drive low before switching the pin from its reset input state.
-        bsrr.write_volatile(1 << (1 + 16));
-        moder.write_volatile((moder.read_volatile() & !(0b11 << 2)) | (0b01 << 2));
-        otyper.write_volatile(otyper.read_volatile() & !(1 << 1));
-        ospeedr.write_volatile(ospeedr.read_volatile() & !(0b11 << 2));
-        pupdr.write_volatile(pupdr.read_volatile() & !(0b11 << 2));
+        core::ptr::write_volatile(bsrr, 1 << (1 + 16));
+        core::ptr::write_volatile(moder, (core::ptr::read_volatile(moder) & !(0b11 << 2)) | (0b01 << 2));
+        core::ptr::write_volatile(otyper, core::ptr::read_volatile(otyper) & !(1 << 1));
+        core::ptr::write_volatile(ospeedr, core::ptr::read_volatile(ospeedr) & !(0b11 << 2));
+        core::ptr::write_volatile(pupdr, core::ptr::read_volatile(pupdr) & !(0b11 << 2));
     }
 
     // USB3300 ULPI: all data/control pins use AF10 except PA4 SOF (AF12).

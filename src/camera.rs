@@ -162,7 +162,7 @@ fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
 
 /// Fill the entire canvas with one uniform palette color.
 ///
-/// `color` is a palette index (0..63), matching `set_demo_pixel()`.
+/// `color` is a palette index (0..63), matching `set_pixel()`.
 /// In color mode the corresponding Cb/Cr pair is written for every pixel;
 /// in B/W mode the corresponding luma value is written for every pixel.
 pub fn clear_demo_canvas(color: u8) {
@@ -313,19 +313,114 @@ pub(crate) fn rotate_bk_canvas_rows(rows: usize) {
 
 /// Change one logical color pixel. Every source pixel expands to a 2x2 block
 /// in the 512x512 NV12 stream, as in the original C color mode.
-pub fn set_demo_pixel(x: usize, y: usize, color: u8) {
+#[inline]
+pub fn set_pixel(x: usize, y: usize, color: u8) {
     let mode = camera_mode();
-    let width = canvas_width_for(mode);
-    if x < width && y < CANVAS_HEIGHT {
+    let width = if mode == CameraMode::Monochrome { WIDTH } else { WIDTH / 2 };
+    if x >= width || y >= CANVAS_HEIGHT {
+        return;
+    }
+
+    let palette_index = (color & 0x3f) as usize;
+    unsafe {
         if mode == CameraMode::Monochrome {
-            write_canvas(y * width + x, GRAYSCALE[(color & 0x3f) as usize]);
+            let offset = y * WIDTH + x;
+            let value = GRAYSCALE[palette_index];
+            if offset < CANVAS_MAIN_BYTES {
+                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset).write(value);
+            } else {
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                    .cast::<u8>().add(offset - CANVAS_MAIN_BYTES).write(value);
+            }
         } else {
-            let uv = UV_PALETTE[(color & 0x3f) as usize];
-            let offset = (y * width + x) * 2;
-            write_canvas(offset, uv[0]);
-            write_canvas(offset + 1, uv[1]);
+            let offset = (y * (WIDTH / 2) + x) * 2;
+            let [u, v] = UV_PALETTE[palette_index];
+            let destination = if offset < CANVAS_MAIN_BYTES {
+                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
+            } else {
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                    .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
+            };
+            destination.write(u);
+            destination.add(1).write(v);
         }
     }
+}
+
+/// Write one packed BK video byte directly to the compact canvas.
+///
+/// The byte expands to eight luma pixels in monochrome mode or four Cb/Cr
+/// pairs in color mode. The packed group is eight bytes in either mode, and
+/// its aligned offset cannot straddle the SRAM/CCM canvas boundary.
+#[inline]
+pub(crate) fn set_bk_video_byte(byte_x: usize, y: usize, byte: u8, monochrome: bool) -> bool {
+    let mode = camera_mode();
+    if y >= CANVAS_HEIGHT {
+        return false;
+    }
+
+    // During a deferred camera-mode transition, preserve set_pixel()'s
+    // original behavior until the new mode becomes active.
+    if (mode == CameraMode::Monochrome) != monochrome {
+        if monochrome {
+            let x = byte_x * 8;
+            if x >= canvas_width_for(mode) { return false; }
+            for i in 0..8 {
+                let color = if byte & (1 << i) != 0 { 0x3f } else { 0x00 };
+                set_pixel(x + i, y, color);
+            }
+        } else {
+            let x = byte_x * 4;
+            if x >= canvas_width_for(mode) { return false; }
+            for i in 0..4 {
+                let color = match (byte >> (i * 2)) & 0x03 {
+                    0 => 0x00, 1 => 0x30, 2 => 0x0c, _ => 0x03,
+                };
+                set_pixel(x + i, y, color);
+            }
+        }
+        return true;
+    }
+
+    let offset = if monochrome {
+        if byte_x >= WIDTH / 8 { return false; }
+        y * WIDTH + byte_x * 8
+    } else {
+        if byte_x >= (WIDTH / 2) / 4 { return false; }
+        (y * (WIDTH / 2) + byte_x * 4) * 2
+    };
+
+    // CANVAS_MAIN_BYTES is divisible by eight, as are all packed-byte
+    // offsets, so this eight-byte span is wholly within one backing region.
+    unsafe {
+        let destination = if offset < CANVAS_MAIN_BYTES {
+            core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
+        } else {
+            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
+        };
+
+        if monochrome {
+            let set = GRAYSCALE[0x3f];
+            let clear = GRAYSCALE[0];
+            for i in 0..8 {
+                destination.add(i).write(if byte & (1 << i) != 0 { set } else { clear });
+            }
+        } else {
+            for i in 0..4 {
+                let palette_index = match (byte >> (i * 2)) & 0x03 {
+                    0 => 0,
+                    1 => 0x30,
+                    2 => 0x0c,
+                    _ => 0x03,
+                };
+                let [u, v] = UV_PALETTE[palette_index];
+                destination.add(i * 2).write(u);
+                destination.add(i * 2 + 1).write(v);
+            }
+        }
+    }
+    true
 }
 
 /// Read a BK color pixel back from the NV12 source canvas.
@@ -402,7 +497,7 @@ pub fn show_usb_status(message: &[u8]) {
                 } else {
                     BACKGROUND
                 };
-                set_demo_pixel(
+                set_pixel(
                     character_index * 8 + column,
                     text_row * 8 + row,
                     color,
@@ -438,9 +533,43 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
                 } else {
                     background
                 };
-                set_demo_pixel(column * 8 + x, row * 8 + y, color);
+                set_pixel(column * 8 + x, row * 8 + y, color);
             }
         }
+    }
+}
+
+/// Update the emulator throughput row on the camera image.
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn show_performance_status(cycles_per_second: u32) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut line, &mut pos, b"C");
+    append_decimal(&mut line, &mut pos, cycles_per_second);
+    show_file_browser_line(28, &line[..pos], false);
+}
+
+fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
+    for &byte in bytes {
+        if *pos == out.len() { break; }
+        out[*pos] = byte;
+        *pos += 1;
+    }
+}
+
+fn append_decimal(out: &mut [u8; 32], pos: &mut usize, mut value: u32) {
+    let mut digits = [0u8; 10];
+    let mut count = 0usize;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        count += 1;
+        value /= 10;
+        if value == 0 { break; }
+    }
+    while count != 0 && *pos < out.len() {
+        count -= 1;
+        out[*pos] = digits[count];
+        *pos += 1;
     }
 }
 
@@ -464,7 +593,7 @@ pub fn show_keyboard_input(message: &[u8]) {
             let bits = FONT8X8[glyph + row];
             for x in 0..8 {
                 let color = if bits & (0x80 >> x) != 0 { FOREGROUND } else { BACKGROUND };
-                set_demo_pixel(column * 8 + x, TEXT_ROW * 8 + row, color);
+                set_pixel(column * 8 + x, TEXT_ROW * 8 + row, color);
             }
         }
     }
@@ -505,7 +634,7 @@ fn draw_text_pixels(text: &[u8; 10], left: usize, top: usize, foreground: u8, ba
                 } else {
                     background
                 };
-                set_demo_pixel(left + character_index * 8 + column, top + row, color);
+                set_pixel(left + character_index * 8 + column, top + row, color);
             }
         }
     }
@@ -705,14 +834,61 @@ impl Nv12DemoImage {
             let mut i = 0;
             if mode == CameraMode::Monochrome {
                 let destination = unsafe { y_row_ptr().add(pixel_x) };
+                // Process eight luma pixels per iteration to reduce loop
+                // control overhead while keeping the byte-for-byte copy.
+                while i + 8 <= chunk_pixels {
+                    unsafe {
+                        destination.add(i).write(source.add(i).read());
+                        destination.add(i + 1).write(source.add(i + 1).read());
+                        destination.add(i + 2).write(source.add(i + 2).read());
+                        destination.add(i + 3).write(source.add(i + 3).read());
+                        destination.add(i + 4).write(source.add(i + 4).read());
+                        destination.add(i + 5).write(source.add(i + 5).read());
+                        destination.add(i + 6).write(source.add(i + 6).read());
+                        destination.add(i + 7).write(source.add(i + 7).read());
+                    }
+                    i += 8;
+                }
                 while i < chunk_pixels {
-                    let y = unsafe { source.add(i).read() };
-                    unsafe { destination.add(i).write(y) };
+                    unsafe { destination.add(i).write(source.add(i).read()) };
                     i += 1;
                 }
             } else {
                 let source_pairs = source.cast::<u16>();
                 let destination = unsafe { y_row_ptr().cast::<u16>().add(pixel_x) };
+
+                // Process eight Cb/Cr pairs per iteration. The transform and
+                // lookup are unchanged; wider unrolling reduces loop overhead
+                // in this per-row hot path.
+                while i + 8 <= chunk_pixels {
+                    let p0 = unsafe { source_pairs.add(i).read() };
+                    let p1 = unsafe { source_pairs.add(i + 1).read() };
+                    let p2 = unsafe { source_pairs.add(i + 2).read() };
+                    let p3 = unsafe { source_pairs.add(i + 3).read() };
+                    let p4 = unsafe { source_pairs.add(i + 4).read() };
+                    let p5 = unsafe { source_pairs.add(i + 5).read() };
+                    let p6 = unsafe { source_pairs.add(i + 6).read() };
+                    let p7 = unsafe { source_pairs.add(i + 7).read() };
+                    let h0 = (p0 as u8 ^ (p0 >> 8) as u8) as usize;
+                    let h1 = (p1 as u8 ^ (p1 >> 8) as u8) as usize;
+                    let h2 = (p2 as u8 ^ (p2 >> 8) as u8) as usize;
+                    let h3 = (p3 as u8 ^ (p3 >> 8) as u8) as usize;
+                    let h4 = (p4 as u8 ^ (p4 >> 8) as u8) as usize;
+                    let h5 = (p5 as u8 ^ (p5 >> 8) as u8) as usize;
+                    let h6 = (p6 as u8 ^ (p6 >> 8) as u8) as usize;
+                    let h7 = (p7 as u8 ^ (p7 >> 8) as u8) as usize;
+                    unsafe {
+                        destination.add(i).write(DUPLICATED_Y_TABLE[h0]);
+                        destination.add(i + 1).write(DUPLICATED_Y_TABLE[h1]);
+                        destination.add(i + 2).write(DUPLICATED_Y_TABLE[h2]);
+                        destination.add(i + 3).write(DUPLICATED_Y_TABLE[h3]);
+                        destination.add(i + 4).write(DUPLICATED_Y_TABLE[h4]);
+                        destination.add(i + 5).write(DUPLICATED_Y_TABLE[h5]);
+                        destination.add(i + 6).write(DUPLICATED_Y_TABLE[h6]);
+                        destination.add(i + 7).write(DUPLICATED_Y_TABLE[h7]);
+                    }
+                    i += 8;
+                }
                 while i < chunk_pixels {
                     let pair = unsafe { source_pairs.add(i).read() };
                     let hash = pair as u8 ^ (pair >> 8) as u8;

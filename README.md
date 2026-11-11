@@ -53,7 +53,8 @@ probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcor
 
 ## Not implemented / TODO
 
-- Improve emulation timing accuracy
+- Solve mystery with keyboard not working at start
+- Improve performance which playing music
 - Full keyboard support (СУ, АР2)
-- БК-0011 support
 - Ability to save and delete files
+- БК-0011 support

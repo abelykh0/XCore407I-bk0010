@@ -53,27 +53,13 @@ impl BkScreen {
     }
 
     /// Write one packed video byte directly to the camera canvas.
-    /// Camera mode must agree with mode_register: zero for monochrome, nonzero for color.
+    /// mode_register is zero for monochrome and nonzero for color.
     pub fn sl_byte(&self, addr: u32, byte: u8, mode_register: u8) -> bool {
         if !(VIDEO_START..=VIDEO_END).contains(&addr) { return false; }
         let offset = (addr - VIDEO_START) as usize;
         let y = shifted_row(offset / BYTES_PER_ROW);
         let byte_x = offset % BYTES_PER_ROW;
-        if mode_register == 0 {
-            let x = byte_x * 8;
-            for i in 0..8 {
-                let color = if byte & (1 << i) == 0 { 0x00 } else { 0x3f };
-                crate::camera::set_demo_pixel(x + i, y, color);
-            }
-        } else {
-            let x = byte_x * 4;
-            for i in 0..4 {
-                let color = match (byte >> (i * 2)) & 0x03 {
-                    0 => 0x00, 1 => 0x30, 2 => 0x0c, _ => 0x03,
-                };
-                crate::camera::set_demo_pixel(x + i, y, color);
-            }
-        }
+        crate::camera::set_bk_video_byte(byte_x, y, byte, mode_register == 0);
         true
     }
 
