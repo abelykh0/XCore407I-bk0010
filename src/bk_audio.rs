@@ -4,7 +4,9 @@
 //! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
 //! only copies three already-rendered samples from that ring.
 
-use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering};
+#[cfg(feature = "cpu-cycle-diag")]
+use core::sync::atomic::AtomicU32;
 
 const PDP_CLOCK_HZ: u32 = 3_000_000;
 const PHASE_UNITS_PER_CYCLE: u32 = 4;
