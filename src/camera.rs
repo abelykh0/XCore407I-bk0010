@@ -44,23 +44,19 @@ const fn make_duplicated_y_table() -> [u16; 256] {
     }
     table
 }
-const DUPLICATED_Y_TABLE: [u16; 256] = make_duplicated_y_table();
+// Mutable initialized data is placed in SRAM by the startup .data copy.
+static mut DUPLICATED_Y_TABLE: [u16; 256] = make_duplicated_y_table();
 
-/// Two adjacent packed Cb/Cr pixels indexed by their two XOR hashes.
-/// Each entry contains [Y0, Y0, Y1, Y1] in little-endian byte order.
-const fn make_pair_y_table() -> [u32; 65536] {
-    let mut table = [0; 65536];
-    let mut i = 0;
-    while i < table.len() {
-        let y0 = Y_HASH_TABLE[i & 0xff] as u32;
-        let y1 = Y_HASH_TABLE[i >> 8] as u32;
-        table[i] = y0 * 0x0001_0101 | y1 * 0x0101_0000;
-        i += 1;
+#[inline(always)]
+fn duplicated_y_lookup(index: usize) -> u16 {
+    unsafe {
+        core::ptr::addr_of!(DUPLICATED_Y_TABLE)
+            .cast::<u16>()
+            .add(index)
+            .read()
     }
-    table
 }
 
-const PAIR_Y_TABLE: [u32; 65536] = make_pair_y_table();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -994,9 +990,9 @@ impl Nv12DemoImage {
                 let source_pairs = source.cast::<u16>();
                 let destination = unsafe { y_row_ptr().cast::<u16>().add(pixel_x) };
 
-                // Process eight source pixels as four table lookups. Each
-                // 16-bit table index combines the XOR hashes of two pixels.
-                let destination_pairs = destination.cast::<u32>();
+                // Process eight Cb/Cr pairs per iteration. Keep the
+                // original eight-pixel unrolling, now reading the lookup
+                // table from SRAM rather than Flash.
                 while i + 8 <= chunk_pixels {
                     let p0 = unsafe { source_pairs.add(i).read() };
                     let p1 = unsafe { source_pairs.add(i + 1).read() };
@@ -1015,27 +1011,22 @@ impl Nv12DemoImage {
                     let h6 = (p6 as u8 ^ (p6 >> 8) as u8) as usize;
                     let h7 = (p7 as u8 ^ (p7 >> 8) as u8) as usize;
                     unsafe {
-                        destination_pairs.add(i / 2).write(PAIR_Y_TABLE[h0 | (h1 << 8)]);
-                        destination_pairs.add(i / 2 + 1).write(PAIR_Y_TABLE[h2 | (h3 << 8)]);
-                        destination_pairs.add(i / 2 + 2).write(PAIR_Y_TABLE[h4 | (h5 << 8)]);
-                        destination_pairs.add(i / 2 + 3).write(PAIR_Y_TABLE[h6 | (h7 << 8)]);
+                        destination.add(i).write(duplicated_y_lookup(h0));
+                        destination.add(i + 1).write(duplicated_y_lookup(h1));
+                        destination.add(i + 2).write(duplicated_y_lookup(h2));
+                        destination.add(i + 3).write(duplicated_y_lookup(h3));
+                        destination.add(i + 4).write(duplicated_y_lookup(h4));
+                        destination.add(i + 5).write(duplicated_y_lookup(h5));
+                        destination.add(i + 6).write(duplicated_y_lookup(h6));
+                        destination.add(i + 7).write(duplicated_y_lookup(h7));
                     }
                     i += 8;
                 }
-                while i + 1 < chunk_pixels {
-                    let p0 = unsafe { source_pairs.add(i).read() };
-                    let p1 = unsafe { source_pairs.add(i + 1).read() };
-                    let h0 = p0 as u8 ^ (p0 >> 8) as u8;
-                    let h1 = p1 as u8 ^ (p1 >> 8) as u8;
-                    unsafe {
-                        destination_pairs.add(i / 2).write(PAIR_Y_TABLE[h0 as usize | ((h1 as usize) << 8)]);
-                    }
-                    i += 2;
-                }
-                if i < chunk_pixels {
+                while i < chunk_pixels {
                     let pair = unsafe { source_pairs.add(i).read() };
                     let hash = pair as u8 ^ (pair >> 8) as u8;
-                    unsafe { destination.add(i).write(DUPLICATED_Y_TABLE[hash as usize]) };
+                    unsafe { destination.add(i).write(duplicated_y_lookup(hash as usize)) };
+                    i += 1;
                 }
             }
             pixel_x += chunk_pixels;
