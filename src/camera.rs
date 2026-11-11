@@ -539,21 +539,8 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
     }
 }
 
-/// Row 29: DWC2 global interrupt causes at OTG_HS entry.
-/// I=IN endpoint, O=OUT endpoint, S=SOF, R=RX FIFO level, X=incomplete ISO IN.
-pub fn show_usb_irq_causes(iep: u32, video: u32, audio: u32) {
-    let mut line = [b' '; 32];
-    let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"I ");
-    append_decimal(&mut line, &mut pos, iep);
-    append_bytes(&mut line, &mut pos, b" V ");
-    append_decimal(&mut line, &mut pos, video);
-    append_bytes(&mut line, &mut pos, b" A ");
-    append_decimal(&mut line, &mut pos, audio);
-    show_file_browser_line(29, &line[..pos], false);
-}
-
 /// Update the emulator throughput row on the camera image.
+#[cfg(feature = "cpu-cycle-diag")]
 pub fn show_performance_status(cycles_per_second: u32) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
