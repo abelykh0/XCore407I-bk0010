@@ -523,7 +523,7 @@ fn draw_file_browser(
 
 /// Build a root-level filename from the name entered in the F3 save dialog.
 unsafe fn build_save_path(path: &mut [u8; MAX_BROWSER_PATH]) -> usize {
-    let name_len = SAVE_FILENAME_LEN;
+    let name_len = unsafe { SAVE_FILENAME_LEN };
     if name_len == 0 || name_len > SAVE_NAME_CAPACITY {
         return 0;
     }
@@ -605,7 +605,7 @@ unsafe fn draw_save_dialog(state: u8) {
     if state == SAVE_DIALOG_CONFIRM {
         let mut line = [b' '; 64];
         line[..6].copy_from_slice(b"FILE: ");
-        let len = SAVE_FILENAME_LEN.min(SAVE_NAME_CAPACITY);
+        let len = unsafe { SAVE_FILENAME_LEN }.min(SAVE_NAME_CAPACITY);
         let filename = unsafe {
             core::slice::from_raw_parts(
                 core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
