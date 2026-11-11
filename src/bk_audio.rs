@@ -108,10 +108,12 @@ impl BkEmulatorAudio {
             return 0;
         }
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
+        // Keep producer indices local and publish the new head once per batch.
+        // A stale tail is conservative: the USB consumer can only advance it.
+        let mut head = PCM_HEAD.load(Ordering::Relaxed);
+        let tail = PCM_TAIL.load(Ordering::Acquire);
         let mut rendered = 0usize;
         while rendered < max_samples {
-            let head = PCM_HEAD.load(Ordering::Relaxed);
-            let tail = PCM_TAIL.load(Ordering::Acquire);
             if head.wrapping_sub(tail) >= PCM_RING_CAPACITY {
                 break;
             }
@@ -129,10 +131,13 @@ impl BkEmulatorAudio {
                     .add((head & PCM_RING_MASK) as usize)
                     .write(sample);
             }
-            PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
+            head = head.wrapping_add(1);
             self.next_sample_phase = self.next_sample_phase
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
             rendered += 1;
+        }
+        if rendered != 0 {
+            PCM_HEAD.store(head, Ordering::Release);
         }
         rendered
     }
