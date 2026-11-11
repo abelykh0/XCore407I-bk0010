@@ -574,9 +574,9 @@ pub fn show_performance_details(
     let mut pos = 0usize;
     append_bytes(&mut video, &mut pos, b"V B:");
     append_decimal(&mut video, &mut pos, video_batches);
-    append_bytes(&mut video, &mut pos, b" REP:");
+    append_bytes(&mut video, &mut pos, b" R:");
     append_decimal(&mut video, &mut pos, video_repeats);
-    append_bytes(&mut video, &mut pos, b" CPU:");
+    append_bytes(&mut video, &mut pos, b" C:");
     append_decimal(&mut video, &mut pos, video_cpu_percent);
     append_bytes(&mut video, &mut pos, b"% M:");
     append_decimal(&mut video, &mut pos, video_max_us);
