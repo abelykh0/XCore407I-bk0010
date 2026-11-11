@@ -5,6 +5,7 @@
  * This file supplies the machine-specific memory map and CPU lifecycle.
  */
 #include <stdint.h>
+
 #include <stddef.h>
 #include "platform.h"
 
@@ -39,42 +40,42 @@ flag_t bkmodel = 0;
 flag_t io_stop_happened = 0;
 unsigned short last_branch = 0;
 
-uint8_t port0177660 = 0x40;
-uint8_t port0177662 = 0;
-uint16_t port0177716 = 0x0040;
-uint16_t port0177664 = 01330;
-uint16_t port0177714 = 0;
+uint8_t  port0177660 = 0x40;    // Keyboard Status Register
+uint8_t  port0177662 = 0;       // Keyboard Data / Code Register
+uint16_t port0177714 = 0;       // Parallel Port / Peripheral Device Register
+uint16_t port0177716 = 0x0040;  // System Port Register / Control Register (bit 6 - speaker)
+uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 
 // Audio output transition queue. The emulator is the single producer
-// (thread context); USB Audio consumes transitions from the TIM2 ISR.
+// (thread context); the USB Audio endpoint callback consumes transitions.
 #define BK_AUDIO_EDGE_CAPACITY 512u
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
 static volatile uint16_t bk_audio_edge_head;
 static volatile uint16_t bk_audio_edge_tail;
 static volatile uint8_t bk_audio_enabled;
+static volatile uint32_t bk_audio_edge_overflows;
 static uint8_t bk_audio_level;
 static uint32_t bk_audio_edge_cycles[BK_AUDIO_EDGE_CAPACITY];
 static uint8_t bk_audio_edge_levels[BK_AUDIO_EDGE_CAPACITY];
-
-#define DWT_CYCCNT (*(volatile uint32_t *)0xE0001004u)
 
 static void bk_audio_record_level(uint8_t level)
 {
     level = level ? 1u : 0u;
     if (level == bk_audio_level) return;
-    bk_audio_level = level;
-
-    if (!bk_audio_enabled) return;
 
     uint16_t head = bk_audio_edge_head;
     uint16_t tail = bk_audio_edge_tail;
     if ((uint16_t)(head - tail) >= BK_AUDIO_EDGE_CAPACITY) {
-        // Drop the newest edge rather than corrupting unread queue entries.
+        // Preserve the last successfully queued level so a later write can
+        // retry recording the current speaker state after space becomes free.
+        bk_audio_edge_overflows++;
         return;
     }
 
+    bk_audio_level = level;
     uint16_t slot = head & BK_AUDIO_EDGE_MASK;
-    bk_audio_edge_cycles[slot] = DWT_CYCCNT;
+    // Timestamp in the emulator's PDP-cycle domain, not the MCU clock domain.
+    bk_audio_edge_cycles[slot] = bk_timing_cycles();
     bk_audio_edge_levels[slot] = level;
     __asm volatile("dmb" ::: "memory");
     bk_audio_edge_head = (uint16_t)(head + 1u);
@@ -84,6 +85,7 @@ uint8_t bk_audio_start(void)
 {
     // Called from the USB ISR; the emulator producer is paused while this runs.
     bk_audio_edge_tail = bk_audio_edge_head;
+    bk_audio_edge_overflows = 0;
     bk_audio_level = (port0177716 & 0x0040u) ? 1u : 0u;
     __asm volatile("dmb" ::: "memory");
     bk_audio_enabled = 1u;
@@ -94,6 +96,11 @@ void bk_audio_stop(void)
 {
     bk_audio_enabled = 0u;
     __asm volatile("dmb" ::: "memory");
+}
+
+uint32_t bk_audio_get_edge_overflows(void)
+{
+    return bk_audio_edge_overflows;
 }
 
 uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
@@ -110,6 +117,25 @@ uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
     __asm volatile("dmb" ::: "memory");
     bk_audio_edge_tail = (uint16_t)(tail + 1u);
     return 1u;
+}
+
+// Snapshot queued transition count and timestamp of the oldest queued edge.
+// The caller converts the timestamp delta to milliseconds.
+void bk_audio_get_edge_queue_stats(uint16_t *occupancy, uint32_t *oldest_cycles)
+{
+    uint16_t tail = bk_audio_edge_tail;
+    uint16_t head = bk_audio_edge_head;
+    uint16_t count = (uint16_t)(head - tail);
+    if (occupancy != NULL) *occupancy = count;
+
+    if (oldest_cycles != NULL) {
+        if (count == 0u) {
+            *oldest_cycles = bk_timing_cycles();
+        } else {
+            __asm volatile("dmb" ::: "memory");
+            *oldest_cycles = bk_audio_edge_cycles[tail & BK_AUDIO_EDGE_MASK];
+        }
+    }
 }
 
 // STOP key requests the independent hardware IRQ1 (priority 5, vector 000004).
@@ -150,6 +176,7 @@ void bk_reset(void)
     pdp.ir = 0;
     pdp.ea_addr = 0;
     pdp.total = 0;
+    bk_timing_reset();
     pdp.look_time = 0;
     pdp.regs[PC] = MONITOR_BASE;
 
@@ -302,7 +329,9 @@ int sl_byte(pdp_regs *p, c_addr addr, d_byte value)
             break;
         case 0177716:
             port0177716 = (uint16_t)((port0177716 & 0xFF00u) | value);
-            bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            if (bk_audio_enabled) {
+                bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            }
             break;
         case 0177717:
             port0177716 = (uint16_t)((port0177716 & 0x00FFu) | ((uint16_t)value << 8));
@@ -344,7 +373,9 @@ int sl_word(pdp_regs *p, c_addr addr, d_word value)
             break;
         case 0177716:
             port0177716 = value;
-            bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            if (bk_audio_enabled) {
+                bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
+            }
             break;
         default: break;
         }
@@ -382,22 +413,22 @@ static int bk_tty_finish(d_word info)
     return service(060);
 }
 
+uint8_t bk_try_send_input_byte(uint8_t symbol)
+{
+    if (port0177660 & 0x80u) return 0u;
+    if (symbol == 0x0Du) symbol = 0x0Au;
+    port0177660 |= 0x80u;
+    port0177662 = symbol & 0x7Fu;
+    (void)ev_register(TTY_PRI, bk_tty_finish, 0, symbol);
+    return 1u;
+}
+
 void sendInput(uint8_t *buffer, uint8_t size)
 {
     uint8_t i;
     if (buffer == NULL) return;
-
     for (i = 0; i < size; ++i) {
-        while (port0177660 & 0x80u) {
-            bk_loop();
-        }
-
-        uint8_t symbol = buffer[i];
-        if (symbol == 0x0D) symbol = 0x0A;
-
-        port0177660 |= 0x80u;
-        port0177662 = symbol & 0x7Fu;
-        (void)ev_register(TTY_PRI, bk_tty_finish, 0, symbol);
+        while (!bk_try_send_input_byte(buffer[i])) bk_loop();
     }
 }
 
@@ -418,11 +449,15 @@ int32_t bk_loop(void)
 
     result = ll_word(p, p->regs[PC], &p->ir);
     p->regs[PC] += 2;
-    if (result == OK) result = itab[p->ir >> 6].func(p);
+    if (result == OK) {
+        // Account the PDP instruction's emulated cycle cost before executing it.
+        timing(p);
+        result = itab[p->ir >> 6].func(p);
+    }
 
     if (result != OK) {
         switch (result) {
-        case BUS_ERROR: ticks += 64; break;
+        case BUS_ERROR: bk_timing_add_cycles(64u); break;
         case ODD_ADDRESS: result2 = service(04); break;
         case CPU_ILLEGAL: result2 = service(010); break;
         case CPU_BPT: result2 = service(014); break;

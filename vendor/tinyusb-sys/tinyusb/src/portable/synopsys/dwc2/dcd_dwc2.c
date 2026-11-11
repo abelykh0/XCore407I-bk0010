@@ -23,6 +23,17 @@
 // Debug level for DWC2
 #define DWC2_DEBUG    2
 
+#ifndef CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER
+  // RM0090: a 3-transaction HS isochronous IN endpoint can sustain the
+  // microframe with 2 x MPS in its TX FIFO; the third packet is refilled
+  // after the first packet has gone on the bus.
+  #define CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER 2
+#endif
+
+#if CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER < 2 || CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER > 3
+  #error "HS isochronous IN FIFO multiplier must be 2 or 3"
+#endif
+
 #include "device/dcd.h"
 #include "device/usbd.h"
 #include "device/usbd_pvt.h"
@@ -36,6 +47,7 @@ typedef struct {
   tu_fifo_t* ff;
   uint16_t total_len;
   uint16_t max_size;
+  uint8_t max_transactions; // HS periodic endpoint transactions per microframe (1..3)
   uint8_t interval;
   uint8_t iso_retry; // ISO retry counter
 } xfer_ctl_t;
@@ -272,6 +284,13 @@ static bool dfifo_alloc(uint8_t rhport, uint8_t ep_addr, uint16_t packet_size, u
   TU_ASSERT(epnum < ep_count);
 
   uint16_t fifo_size = (uint16_t)tu_div_ceil(packet_size, 4);
+  if (dir == TUSB_DIR_IN && xfer_type == TUSB_XFER_ISOCHRONOUS) {
+    const dwc2_dsts_t dsts = {.value = dwc2->dsts};
+    if (dsts.enum_speed == DCFG_SPEED_HIGH) {
+      fifo_size = (uint16_t)(fifo_size * CFG_TUD_DWC2_ISO_IN_FIFO_MULTIPLIER);
+    }
+  }
+
   if (dir == TUSB_DIR_OUT) {
     // Calculate required size of RX FIFO
     dfifo_rx_t rx = _dcd_data.rx;
@@ -318,8 +337,16 @@ static bool dfifo_alloc(uint8_t rhport, uint8_t ep_addr, uint16_t packet_size, u
       fifo_size *= 2;
     }
 
-    // Check if free space is available
-    TU_ASSERT(_dcd_data.dfifo_top >= fifo_size + dwc2->grxfsiz);
+    // Check if free space is available. This accounts for the shared 4 KiB
+    // HS FIFO RAM, including RX FIFO and DMA endpoint-info words.
+    if (_dcd_data.dfifo_top < fifo_size + dwc2->grxfsiz) {
+      const uint16_t free_words = (_dcd_data.dfifo_top > dwc2->grxfsiz)
+                                     ? (uint16_t)(_dcd_data.dfifo_top - dwc2->grxfsiz)
+                                     : 0;
+      TU_LOG1("DWC2: EP %02X needs %u TX FIFO words, only %u free (RX=%u)\r\n",
+              ep_addr, fifo_size, free_words, dwc2->grxfsiz);
+      return false;
+    }
     _dcd_data.dfifo_top -= fifo_size;
     // TU_LOG(DWC2_DEBUG, "    TX FIFO %u: allocated %u words at offset %u\r\n", epnum, fifo_size, dfifo_top);
 
@@ -365,6 +392,10 @@ static void edpt_activate(uint8_t rhport, const tusb_desc_endpoint_t* p_endpoint
 
   xfer_ctl_t* xfer = XFER_CTL_BASE(epnum, dir);
   xfer->max_size = tu_edpt_packet_size(p_endpoint_desc);
+  // High-bandwidth HS periodic endpoints encode transactions-per-microframe
+  // in wMaxPacketSize[12:11]. 00=1, 01=2, 10=3; 11 is reserved.
+  const uint8_t mult = (uint8_t)((p_endpoint_desc->wMaxPacketSize >> 11) & 0x03u);
+  xfer->max_transactions = (mult == 3u) ? 0u : (uint8_t)(mult + 1u);
 
   const dwc2_dsts_t dsts = {.value = dwc2->dsts};
   if (dsts.enum_speed == DCFG_SPEED_HIGH) {
@@ -477,13 +508,21 @@ static void edpt_schedule_packets(uint8_t rhport, const uint8_t epnum, const uin
   }
 
   // transfer size: A full OUT transfer (multiple packets, possibly) triggers XFRC.
+  // control
+  dwc2_depctl_t depctl = {.value = dep->ctl};
+
   dwc2_ep_tsize_t deptsiz = {.value = 0};
   deptsiz.xfer_size = total_bytes;
   deptsiz.packet_count = num_packets;
+  // For isochronous IN, DIEPTSIZ.MC is the number of packets scheduled in
+  // this microframe (1..3). PKTCNT remains the total packet count and
+  // XFRSIZ remains the total byte count. Without MC, the DWC2 core treats
+  // a 3-packet transfer as a single-transaction endpoint transfer.
+  if (dir == TUSB_DIR_IN && depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS) {
+    deptsiz.mc_pid = num_packets;
+  }
   dep->tsiz = deptsiz.value;
 
-  // control
-  dwc2_depctl_t depctl = {.value = dep->ctl};
   depctl.clear_nak = 1;
   depctl.enable = 1;
   if (depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS) {
@@ -750,6 +789,21 @@ bool dcd_edpt_iso_activate(uint8_t rhport,  tusb_desc_endpoint_t const * p_endpo
 
 bool dcd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t* buffer, uint16_t total_bytes, bool is_isr) {
   (void) is_isr;
+
+  // STM32F407 OTG_HS internal DMA can access the 128 KiB SRAM window, but
+  // not CCM RAM. Keep each individual DMA transfer within the application's
+  // 4 KiB buffer budget and require a word-aligned SRAM buffer. The actual
+  // UVC transfer is 768 x 3 = 2304 bytes; audio and EP0 are smaller.
+  if (dma_device_enabled(DWC2_REG(rhport)) && total_bytes != 0) {
+    const uintptr_t dma_addr = (uintptr_t) buffer;
+    const uintptr_t sram_begin = 0x20000000u;
+    const uintptr_t sram_end = 0x20020000u;
+    if (buffer == NULL || (dma_addr & 0x3u) != 0 || total_bytes > 4096u ||
+        dma_addr < sram_begin || dma_addr > sram_end - total_bytes) {
+      return false;
+    }
+  }
+
   uint8_t const epnum = tu_edpt_number(ep_addr);
   uint8_t const dir = tu_edpt_dir(ep_addr);
   xfer_ctl_t* xfer = XFER_CTL_BASE(epnum, dir);
@@ -757,9 +811,15 @@ bool dcd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t* buffer, uint16_t to
 
   usbd_spin_lock(is_isr);
 
-  if (xfer->max_size == 0) {
-    ret = false;  // Endpoint is closed
+  if (xfer->max_size == 0 || xfer->max_transactions == 0) {
+    ret = false;  // Endpoint is closed or has a reserved HS multiplier
   } else {
+    dwc2_depctl_t const depctl = {.value = DWC2_REG(rhport)->ep[dir == TUSB_DIR_IN ? 0 : 1][epnum].ctl};
+    if (dir == TUSB_DIR_IN && depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS &&
+        tu_div_ceil(total_bytes, xfer->max_size) > xfer->max_transactions) {
+      usbd_spin_unlock(is_isr);
+      return false; // One DWC2 ISO IN transfer must fit in one microframe
+    }
     xfer->buffer = buffer;
     xfer->ff = NULL;
     xfer->total_len = total_bytes;
@@ -793,9 +853,15 @@ bool dcd_edpt_xfer_fifo(uint8_t rhport, uint8_t ep_addr, tu_fifo_t* ff, uint16_t
 
   usbd_spin_lock(is_isr);
 
-  if (xfer->max_size == 0) {
-    ret = false;  // Endpoint is closed
+  if (xfer->max_size == 0 || xfer->max_transactions == 0) {
+    ret = false;  // Endpoint is closed or has a reserved HS multiplier
   } else {
+    dwc2_depctl_t const depctl = {.value = DWC2_REG(rhport)->ep[dir == TUSB_DIR_IN ? 0 : 1][epnum].ctl};
+    if (dir == TUSB_DIR_IN && depctl.type == DEPCTL_EPTYPE_ISOCHRONOUS &&
+        tu_div_ceil(total_bytes, xfer->max_size) > xfer->max_transactions) {
+      usbd_spin_unlock(is_isr);
+      return false; // One DWC2 ISO IN transfer must fit in one microframe
+    }
     xfer->buffer = NULL;
     xfer->ff = ff;
     xfer->total_len = total_bytes;
@@ -900,6 +966,10 @@ static void handle_bus_reset(uint8_t rhport) {
 
   xfer_status[0][TUSB_DIR_OUT].max_size = CFG_TUD_ENDPOINT0_SIZE;
   xfer_status[0][TUSB_DIR_IN].max_size = CFG_TUD_ENDPOINT0_SIZE;
+  // EP0 is not opened from a descriptor, so initialize its implicit
+  // single-transaction limit after the bus-reset state clear.
+  xfer_status[0][TUSB_DIR_OUT].max_transactions = 1;
+  xfer_status[0][TUSB_DIR_IN].max_transactions = 1;
 
   uint32_t gintmsk = GINTMSK_OTGINT | GINTMSK_IEPINT;
   // PTI carries missed ISOC IN data to the next frame; IncompISOCIN must stay masked
@@ -1294,6 +1364,10 @@ static void handle_incomplete_iso_in(uint8_t rhport) {
         dwc2_ep_tsize_t deptsiz = {.value = 0};
         deptsiz.xfer_size       = xfer->total_len;
         deptsiz.packet_count    = tu_div_ceil(xfer->total_len, xfer->max_size);
+        if (deptsiz.packet_count == 0) {
+          deptsiz.packet_count = 1; // Zero-length ISO packet still occupies one transaction
+        }
+        deptsiz.mc_pid          = deptsiz.packet_count;
         epin->tsiz              = deptsiz.value;
 
         if (odd_now) {

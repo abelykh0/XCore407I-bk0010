@@ -142,7 +142,7 @@ int ev_fire(int priority);
 typedef struct _event {
 	int (*handler)(d_word info); /* handler function */
 	d_word info;			     /* info or vector number */
-	double when;			     /* when to fire this event */
+	float when;			     /* when to fire this event */
 } event;
 
 
@@ -163,7 +163,9 @@ extern unsigned short last_branch;
 extern flag_t io_stop_happened;
 extern struct _itab itab[];
 extern pdp_regs pdp;
-extern double ticks;
+extern float ticks;
+void timing(pdp_regs *p);
+uint32_t bk_timing_cycles(void);
 extern flag_t in_wait_instr;
 extern unsigned long pending_interrupts;
 
