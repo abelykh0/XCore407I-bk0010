@@ -1010,15 +1010,57 @@ impl Nv12DemoImage {
                     let h5 = (p5 as u8 ^ (p5 >> 8) as u8) as usize;
                     let h6 = (p6 as u8 ^ (p6 >> 8) as u8) as usize;
                     let h7 = (p7 as u8 ^ (p7 >> 8) as u8) as usize;
+                    let y0 = duplicated_y_lookup(h0);
+                    let y1 = duplicated_y_lookup(h1);
+                    let y2 = duplicated_y_lookup(h2);
+                    let y3 = duplicated_y_lookup(h3);
+                    let y4 = duplicated_y_lookup(h4);
+                    let y5 = duplicated_y_lookup(h5);
+                    let y6 = duplicated_y_lookup(h6);
+                    let y7 = duplicated_y_lookup(h7);
+
+                    // Pack two adjacent luma pixels into each word store.
+                    // PKHBT places the low halfword of the first value and
+                    // the low halfword of the second value in the high half.
                     unsafe {
-                        destination.add(i).write(duplicated_y_lookup(h0));
-                        destination.add(i + 1).write(duplicated_y_lookup(h1));
-                        destination.add(i + 2).write(duplicated_y_lookup(h2));
-                        destination.add(i + 3).write(duplicated_y_lookup(h3));
-                        destination.add(i + 4).write(duplicated_y_lookup(h4));
-                        destination.add(i + 5).write(duplicated_y_lookup(h5));
-                        destination.add(i + 6).write(duplicated_y_lookup(h6));
-                        destination.add(i + 7).write(duplicated_y_lookup(h7));
+                        let packed01: u32;
+                        core::arch::asm!(
+                            "pkhbt {out}, {low}, {high}, lsl #16",
+                            out = lateout(reg) packed01,
+                            low = in(reg) y0 as u32,
+                            high = in(reg) y1 as u32,
+                            options(pure, nomem, nostack),
+                        );
+                        let packed23: u32;
+                        core::arch::asm!(
+                            "pkhbt {out}, {low}, {high}, lsl #16",
+                            out = lateout(reg) packed23,
+                            low = in(reg) y2 as u32,
+                            high = in(reg) y3 as u32,
+                            options(pure, nomem, nostack),
+                        );
+                        let packed45: u32;
+                        core::arch::asm!(
+                            "pkhbt {out}, {low}, {high}, lsl #16",
+                            out = lateout(reg) packed45,
+                            low = in(reg) y4 as u32,
+                            high = in(reg) y5 as u32,
+                            options(pure, nomem, nostack),
+                        );
+                        let packed67: u32;
+                        core::arch::asm!(
+                            "pkhbt {out}, {low}, {high}, lsl #16",
+                            out = lateout(reg) packed67,
+                            low = in(reg) y6 as u32,
+                            high = in(reg) y7 as u32,
+                            options(pure, nomem, nostack),
+                        );
+
+                        let output = destination.cast::<u32>().add(i / 2);
+                        output.write(packed01);
+                        output.add(1).write(packed23);
+                        output.add(2).write(packed45);
+                        output.add(3).write(packed67);
                     }
                     i += 8;
                 }
