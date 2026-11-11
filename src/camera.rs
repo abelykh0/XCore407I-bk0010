@@ -847,34 +847,60 @@ impl Nv12DemoImage {
             let mut i = 0;
             if mode == CameraMode::Monochrome {
                 let destination = unsafe { y_row_ptr().add(pixel_x) };
+                // Process eight luma pixels per iteration to reduce loop
+                // control overhead while keeping the byte-for-byte copy.
+                while i + 8 <= chunk_pixels {
+                    unsafe {
+                        destination.add(i).write(source.add(i).read());
+                        destination.add(i + 1).write(source.add(i + 1).read());
+                        destination.add(i + 2).write(source.add(i + 2).read());
+                        destination.add(i + 3).write(source.add(i + 3).read());
+                        destination.add(i + 4).write(source.add(i + 4).read());
+                        destination.add(i + 5).write(source.add(i + 5).read());
+                        destination.add(i + 6).write(source.add(i + 6).read());
+                        destination.add(i + 7).write(source.add(i + 7).read());
+                    }
+                    i += 8;
+                }
                 while i < chunk_pixels {
-                    let y = unsafe { source.add(i).read() };
-                    unsafe { destination.add(i).write(y) };
+                    unsafe { destination.add(i).write(source.add(i).read()) };
                     i += 1;
                 }
             } else {
                 let source_pairs = source.cast::<u16>();
                 let destination = unsafe { y_row_ptr().cast::<u16>().add(pixel_x) };
 
-                // Process four Cb/Cr pairs per loop iteration. The transform
-                // and lookup are identical to the scalar path; unrolling only
-                // reduces loop-control overhead in this per-row hot path.
-                while i + 4 <= chunk_pixels {
+                // Process eight Cb/Cr pairs per iteration. The transform and
+                // lookup are unchanged; wider unrolling reduces loop overhead
+                // in this per-row hot path.
+                while i + 8 <= chunk_pixels {
                     let p0 = unsafe { source_pairs.add(i).read() };
                     let p1 = unsafe { source_pairs.add(i + 1).read() };
                     let p2 = unsafe { source_pairs.add(i + 2).read() };
                     let p3 = unsafe { source_pairs.add(i + 3).read() };
+                    let p4 = unsafe { source_pairs.add(i + 4).read() };
+                    let p5 = unsafe { source_pairs.add(i + 5).read() };
+                    let p6 = unsafe { source_pairs.add(i + 6).read() };
+                    let p7 = unsafe { source_pairs.add(i + 7).read() };
                     let h0 = (p0 as u8 ^ (p0 >> 8) as u8) as usize;
                     let h1 = (p1 as u8 ^ (p1 >> 8) as u8) as usize;
                     let h2 = (p2 as u8 ^ (p2 >> 8) as u8) as usize;
                     let h3 = (p3 as u8 ^ (p3 >> 8) as u8) as usize;
+                    let h4 = (p4 as u8 ^ (p4 >> 8) as u8) as usize;
+                    let h5 = (p5 as u8 ^ (p5 >> 8) as u8) as usize;
+                    let h6 = (p6 as u8 ^ (p6 >> 8) as u8) as usize;
+                    let h7 = (p7 as u8 ^ (p7 >> 8) as u8) as usize;
                     unsafe {
                         destination.add(i).write(DUPLICATED_Y_TABLE[h0]);
                         destination.add(i + 1).write(DUPLICATED_Y_TABLE[h1]);
                         destination.add(i + 2).write(DUPLICATED_Y_TABLE[h2]);
                         destination.add(i + 3).write(DUPLICATED_Y_TABLE[h3]);
+                        destination.add(i + 4).write(DUPLICATED_Y_TABLE[h4]);
+                        destination.add(i + 5).write(DUPLICATED_Y_TABLE[h5]);
+                        destination.add(i + 6).write(DUPLICATED_Y_TABLE[h6]);
+                        destination.add(i + 7).write(DUPLICATED_Y_TABLE[h7]);
                     }
-                    i += 4;
+                    i += 8;
                 }
                 while i < chunk_pixels {
                     let pair = unsafe { source_pairs.add(i).read() };
