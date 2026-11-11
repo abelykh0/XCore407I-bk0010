@@ -11,9 +11,7 @@ use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
-use xcore407i_blinker::camera::{
-    show_performance_details, show_performance_status, show_video_phase_status,
-};
+use xcore407i_blinker::camera::{show_performance_details, show_performance_status};
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -332,14 +330,8 @@ fn main() -> ! {
                     xcore407i_blinker::bk_audio::take_performance_stats();
                 let (video_batches, video_repeats, video_generation_cycles, video_max_cycles) =
                     xcore407i_blinker::uvc::take_video_performance_stats();
-                let (video_y_cycles, video_uv_cycles) =
-                    xcore407i_blinker::camera::take_video_phase_stats();
                 let video_cpu_percent =
                     ((video_generation_cycles as u64 * 100) / 168_000_000) as u32;
-                let video_y_percent =
-                    ((video_y_cycles as u64 * 100) / 168_000_000) as u32;
-                let video_uv_percent =
-                    ((video_uv_cycles as u64 * 100) / 168_000_000) as u32;
                 let video_max_us = video_max_cycles / 168;
                 show_performance_details(
                     audio_rendered,
@@ -350,7 +342,6 @@ fn main() -> ! {
                     video_cpu_percent,
                     video_max_us,
                 );
-                show_video_phase_status(video_y_percent, video_uv_percent);
                 performance_last_ms = now_ms;
                 performance_last_cycles = now_cycles;
             }
