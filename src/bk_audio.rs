@@ -41,6 +41,7 @@ pub struct BkEmulatorAudio {
     next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
+    edge_queue_empty: bool,
     active: bool,
 }
 
@@ -50,6 +51,7 @@ impl BkEmulatorAudio {
             next_sample_phase: 0,
             sample_level: false,
             pending_edge: None,
+            edge_queue_empty: false,
             active: false,
         }
     }
@@ -62,9 +64,13 @@ impl BkEmulatorAudio {
     fn apply_edges_through(&mut self, sample_phase: u32) {
         loop {
             if self.pending_edge.is_none() {
+                if self.edge_queue_empty {
+                    break;
+                }
                 let mut cycles = 0u32;
                 let mut level = 0u8;
                 if unsafe { bk_audio_pop_edge(&mut cycles, &mut level) } == 0 {
+                    self.edge_queue_empty = true;
                     break;
                 }
                 self.pending_edge = Some((cycles, level != 0));
@@ -108,6 +114,9 @@ impl BkEmulatorAudio {
             return 0;
         }
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
+        // Emulator execution and rendering are sequential in the main loop, so
+        // an empty edge queue stays empty for the rest of this render batch.
+        self.edge_queue_empty = false;
         // Keep producer indices local and publish the new head once per batch.
         // A stale tail is conservative: the USB consumer can only advance it.
         let mut head = PCM_HEAD.load(Ordering::Relaxed);
