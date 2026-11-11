@@ -4,7 +4,7 @@
 //! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
 //! only copies three already-rendered samples from that ring.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 
 const PDP_CLOCK_HZ: u32 = 3_000_000;
 const PHASE_UNITS_PER_CYCLE: u32 = 4;
@@ -27,6 +27,22 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
+
+#[cfg(feature = "cpu-cycle-diag")]
+static AUDIO_RENDERED_SAMPLES: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "cpu-cycle-diag")]
+static AUDIO_UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "cpu-cycle-diag")]
+static AUDIO_HIGH_WATER: AtomicU16 = AtomicU16::new(0);
+
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn take_performance_stats() -> (u32, u32, u16) {
+    (
+        AUDIO_RENDERED_SAMPLES.swap(0, Ordering::Relaxed),
+        AUDIO_UNDERRUN_SAMPLES.swap(0, Ordering::Relaxed),
+        AUDIO_HIGH_WATER.swap(0, Ordering::Relaxed),
+    )
+}
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
@@ -109,6 +125,8 @@ impl BkEmulatorAudio {
         }
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
         let mut rendered = 0usize;
+        #[cfg(feature = "cpu-cycle-diag")]
+        let mut high_water = 0u16;
         while rendered < max_samples {
             let head = PCM_HEAD.load(Ordering::Relaxed);
             let tail = PCM_TAIL.load(Ordering::Acquire);
@@ -130,9 +148,19 @@ impl BkEmulatorAudio {
                     .write(sample);
             }
             PCM_HEAD.store(head.wrapping_add(1), Ordering::Release);
+            #[cfg(feature = "cpu-cycle-diag")]
+            {
+                let occupancy = head.wrapping_add(1).wrapping_sub(tail);
+                high_water = high_water.max(occupancy);
+            }
             self.next_sample_phase = self.next_sample_phase
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
             rendered += 1;
+        }
+        #[cfg(feature = "cpu-cycle-diag")]
+        {
+            AUDIO_RENDERED_SAMPLES.fetch_add(rendered as u32, Ordering::Relaxed);
+            AUDIO_HIGH_WATER.fetch_max(high_water, Ordering::Relaxed);
         }
         rendered
     }
@@ -157,6 +185,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             tail = tail.wrapping_add(1);
             value
         } else {
+            #[cfg(feature = "cpu-cycle-diag")]
+            AUDIO_UNDERRUN_SAMPLES.fetch_add(1, Ordering::Relaxed);
             0
         };
         unsafe {
