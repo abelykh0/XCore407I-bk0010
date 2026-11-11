@@ -524,7 +524,13 @@ unsafe fn build_save_path(path: &mut [u8; MAX_BROWSER_PATH]) -> usize {
         return 0;
     }
     path[0] = b'/';
-    path[1..1 + name_len].copy_from_slice(&SAVE_FILENAME[..name_len]);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
+            path.as_mut_ptr().add(1),
+            name_len,
+        );
+    }
     path[1 + name_len..1 + name_len + 4].copy_from_slice(b".bin");
     path[total - 1] = 0;
     total
@@ -551,36 +557,33 @@ fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(), ()> {
             |options| options.write(true).create(true).truncate(true),
             path,
             |file| {
-            let header = [
-                (SAVE_RAM_START as u16).to_le_bytes()[0],
-                (SAVE_RAM_START as u16).to_le_bytes()[1],
-                (SAVE_RAM_LENGTH as u16).to_le_bytes()[0],
-                (SAVE_RAM_LENGTH as u16).to_le_bytes()[1],
-            ];
-            let mut header_written = 0usize;
-            while header_written < header.len() {
-                let count = file.write(&header[header_written..])?;
-                if count == 0 {
-                    return Err(littlefs2::io::Error::IO);
+                let start = (SAVE_RAM_START as u16).to_le_bytes();
+                let size = (SAVE_RAM_LENGTH as u16).to_le_bytes();
+                let header = [start[0], start[1], size[0], size[1]];
+                let mut header_written = 0usize;
+                while header_written < header.len() {
+                    let count = file.write(&header[header_written..])?;
+                    if count == 0 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+                    header_written += count;
                 }
-                header_written += count;
-            }
 
-            let ram = unsafe {
-                core::slice::from_raw_parts(
-                    core::ptr::addr_of!(RamBuffer).cast::<u8>().add(SAVE_RAM_START),
-                    SAVE_RAM_LENGTH,
-                )
-            };
-            let mut total = 0usize;
-            while total < ram.len() {
-                let count = file.write(&ram[total..])?;
-                if count == 0 {
-                    return Err(littlefs2::io::Error::IO);
+                let ram = unsafe {
+                    core::slice::from_raw_parts(
+                        core::ptr::addr_of!(RamBuffer).cast::<u8>().add(SAVE_RAM_START),
+                        SAVE_RAM_LENGTH,
+                    )
+                };
+                let mut total = 0usize;
+                while total < ram.len() {
+                    let count = file.write(&ram[total..])?;
+                    if count == 0 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+                    total += count;
                 }
-                total += count;
-            }
-            Ok(())
+                Ok(())
             },
         )
     })
@@ -595,7 +598,13 @@ unsafe fn draw_save_dialog(state: u8) {
         let mut line = [b' '; 64];
         line[..6].copy_from_slice(b"FILE: ");
         let len = SAVE_FILENAME_LEN.min(SAVE_NAME_CAPACITY);
-        line[6..6 + len].copy_from_slice(&SAVE_FILENAME[..len]);
+        let filename = unsafe {
+            core::slice::from_raw_parts(
+                core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
+                len,
+            )
+        };
+        line[6..6 + len].copy_from_slice(filename);
         line[6 + len..10 + len].copy_from_slice(b".bin");
         show_file_browser_line(2, &line, false);
         show_file_browser_line(4, b"FILE EXISTS - OVERWRITE? Y/N", true);
@@ -866,7 +875,10 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
                 0x2a => unsafe {
                     if SAVE_FILENAME_LEN != 0 {
                         SAVE_FILENAME_LEN -= 1;
-                        SAVE_FILENAME[SAVE_FILENAME_LEN] = 0;
+                        core::ptr::addr_of_mut!(SAVE_FILENAME)
+                            .cast::<u8>()
+                            .add(SAVE_FILENAME_LEN)
+                            .write(0);
                         SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
                     }
                 },
@@ -875,7 +887,10 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
                         if ch.is_ascii_alphanumeric() || ch == b'_' || ch == b'-' || ch == b' ' {
                             unsafe {
                                 if SAVE_FILENAME_LEN < SAVE_NAME_CAPACITY {
-                                    SAVE_FILENAME[SAVE_FILENAME_LEN] = ch;
+                                    core::ptr::addr_of_mut!(SAVE_FILENAME)
+                                        .cast::<u8>()
+                                        .add(SAVE_FILENAME_LEN)
+                                        .write(ch);
                                     SAVE_FILENAME_LEN += 1;
                                     SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
                                 }
@@ -948,7 +963,11 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
         // F3 starts a RAM save; the extension is appended automatically.
         if key == 0x3c {
             unsafe {
-                SAVE_FILENAME.fill(0);
+                core::ptr::write_bytes(
+                    core::ptr::addr_of_mut!(SAVE_FILENAME).cast::<u8>(),
+                    0,
+                    SAVE_NAME_CAPACITY,
+                );
                 SAVE_FILENAME_LEN = 0;
             }
             SAVE_DIALOG_RESULT.store(0, Ordering::Release);
