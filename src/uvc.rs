@@ -7,7 +7,7 @@
 //! ISO IN endpoint at `ENDPOINT_IN`.
 
 use crate::camera::{Nv12DemoImage, HEIGHT, WIDTH};
-use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, Ordering};
 
 pub const CONTROL_INTERFACE: u8 = 0;
 pub const STREAMING_INTERFACE: u8 = 1;
@@ -44,6 +44,19 @@ static VIDEO_BUFFER_STATE: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
 static VIDEO_BUFFER_LENGTH: [AtomicU16; 2] = [AtomicU16::new(0), AtomicU16::new(0)];
 static VIDEO_BUFFER_PACKETS: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
 
+#[cfg(feature = "cpu-cycle-diag")]
+static VIDEO_BATCHES_PREPARED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "cpu-cycle-diag")]
+static VIDEO_BATCHES_REPEATED: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn take_video_performance_stats() -> (u32, u32) {
+    (
+        VIDEO_BATCHES_PREPARED.swap(0, Ordering::Relaxed),
+        VIDEO_BATCHES_REPEATED.swap(0, Ordering::Relaxed),
+    )
+}
+
 /// Generate one batch in thread context. Only a FREE buffer can be claimed;
 /// publishing READY with Release makes its bytes and metadata visible to TIM2.
 pub fn prepare_next_video_batch(camera: &mut Nv12DemoImage) -> bool {
@@ -66,6 +79,8 @@ pub fn prepare_next_video_batch(camera: &mut Nv12DemoImage) -> bool {
             VIDEO_BUFFER_LENGTH[index].store(payload.len as u16, Ordering::Relaxed);
             VIDEO_BUFFER_PACKETS[index].store(packets, Ordering::Relaxed);
             VIDEO_BUFFER_STATE[index].store(2, Ordering::Release);
+            #[cfg(feature = "cpu-cycle-diag")]
+            VIDEO_BATCHES_PREPARED.fetch_add(1, Ordering::Relaxed);
             return true;
         }
         VIDEO_BUFFER_STATE[index].store(0, Ordering::Release);
@@ -238,7 +253,12 @@ impl UvcClass {
             }
             Some((bytes, packets))
         } else {
-            self.current_in_batch()
+            let current = self.current_in_batch();
+            #[cfg(feature = "cpu-cycle-diag")]
+            if current.is_some() {
+                VIDEO_BATCHES_REPEATED.fetch_add(1, Ordering::Relaxed);
+            }
+            current
         }
     }
 
