@@ -9,7 +9,9 @@ use panic_halt as _;
 use stm32f4xx_hal::gpio::{GpioExt, Speed};
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_performance_status, show_usb_irq_causes, show_usb_status, Nv12DemoImage};
+use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
+#[cfg(feature = "cpu-cycle-diag")]
+use xcore407i_blinker::camera::show_performance_status;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -63,10 +65,6 @@ const USB_FS_RETRY_INTERVAL_MS: u32 = 500;
 // TIM3 schedules TinyUSB host work; the actual task runs in thread context.
 static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
 
-// Count IN endpoint IRQ entries by endpoint (EP1 video, EP2 audio).
-static USB_IRQ_IEP: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_VIDEO: AtomicU32 = AtomicU32::new(0);
-static USB_IRQ_AUDIO: AtomicU32 = AtomicU32::new(0);
 
 // HID boot-keyboard state. TinyUSB invokes HID callbacks from tuh_task_ext(),
 // so these non-atomic key snapshots are only accessed serially there.
@@ -204,11 +202,13 @@ fn main() -> ! {
     let mut browser_count = 0usize;
     let mut browser_selected = 0usize;
     let mut browser_open = false;
-    // Performance display and real-time emulator pacing use the same PDP clock.
-    let mut performance_last_ms = TICKS.load(Ordering::Relaxed);
-    let mut performance_last_cycles = unsafe { bk_timing_cycles() };
-    let mut pacing_start_ms = performance_last_ms;
-    let mut pacing_start_cycles = performance_last_cycles;
+    // Real-time emulator pacing uses the PDP cycle counter.
+    let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
+    let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
+    #[cfg(feature = "cpu-cycle-diag")]
+    let mut performance_last_ms = pacing_start_ms;
+    #[cfg(feature = "cpu-cycle-diag")]
+    let mut performance_last_cycles = pacing_start_cycles;
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -316,22 +316,19 @@ fn main() -> ! {
         // complete emulator quantum to finish.
         while prepare_next_video_batch(&mut video_renderer) {}
 
-        let now_ms = TICKS.load(Ordering::Relaxed);
-        let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
-        if elapsed_ms >= 1_000 {
-            let now_cycles = unsafe { bk_timing_cycles() };
-            let elapsed_cycles = now_cycles.wrapping_sub(performance_last_cycles);
-            let cycles_per_second =
-                ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
-            // Keep the throughput counter and only the DWC2 causes needed next.
-            show_performance_status(cycles_per_second);
-            show_usb_irq_causes(
-                USB_IRQ_IEP.swap(0, Ordering::AcqRel),
-                USB_IRQ_VIDEO.swap(0, Ordering::AcqRel),
-                USB_IRQ_AUDIO.swap(0, Ordering::AcqRel),
-            );
-            performance_last_ms = now_ms;
-            performance_last_cycles = now_cycles;
+        #[cfg(feature = "cpu-cycle-diag")]
+        {
+            let now_ms = TICKS.load(Ordering::Relaxed);
+            let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
+            if elapsed_ms >= 1_000 {
+                let now_cycles = unsafe { bk_timing_cycles() };
+                let elapsed_cycles = now_cycles.wrapping_sub(performance_last_cycles);
+                let cycles_per_second =
+                    ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
+                show_performance_status(cycles_per_second);
+                performance_last_ms = now_ms;
+                performance_last_cycles = now_cycles;
+            }
         }
 
         // Pace PDP execution against the 1 ms hardware timebase. This keeps
@@ -495,24 +492,6 @@ fn OTG_FS() {
 
 #[interrupt]
 fn OTG_HS() {
-    // STM32F407 OTG_HS global registers: GINTSTS +0x14, GINTMSK +0x18.
-    // Capture enabled causes before TinyUSB acknowledges them.
-    let status = unsafe {
-        let gintsts = ptr::read_volatile(0x4004_0014 as *const u32);
-        let gintmsk = ptr::read_volatile(0x4004_0018 as *const u32);
-        gintsts & gintmsk
-    };
-    if status & (1 << 18) != 0 {
-        // DAINT is at OTG_HS +0x818; bits 0..15 are pending IN endpoints.
-        let daint = unsafe { ptr::read_volatile(0x4004_0818 as *const u32) };
-        USB_IRQ_IEP.fetch_add(1, Ordering::Relaxed);
-        if daint & (1 << 1) != 0 {
-            USB_IRQ_VIDEO.fetch_add(1, Ordering::Relaxed);
-        }
-        if daint & (1 << 2) != 0 {
-            USB_IRQ_AUDIO.fetch_add(1, Ordering::Relaxed);
-        }
-    }
     unsafe { tusb::tusb_int_handler(1, true); }
 }
 
