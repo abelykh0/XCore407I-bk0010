@@ -81,7 +81,7 @@ static mut KEYBOARD_QUEUE: [u8; KEYBOARD_QUEUE_CAPACITY as usize] = [0; KEYBOARD
 static KEYBOARD_QUEUE_HEAD: AtomicU16 = AtomicU16::new(0);
 static KEYBOARD_QUEUE_TAIL: AtomicU16 = AtomicU16::new(0);
 const PDP_CYCLES_PER_FRAME: u32 = 60_000;
-const PDP_CYCLES_PER_SECOND: u32 = 3_000_000;
+const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
