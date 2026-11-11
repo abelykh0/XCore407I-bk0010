@@ -328,14 +328,19 @@ fn main() -> ! {
                 show_performance_status(cycles_per_second);
                 let (audio_rendered, audio_underruns, audio_high_water) =
                     xcore407i_blinker::bk_audio::take_performance_stats();
-                let (video_batches, video_repeats) =
+                let (video_batches, video_repeats, video_generation_cycles, video_max_cycles) =
                     xcore407i_blinker::uvc::take_video_performance_stats();
+                let video_cpu_percent =
+                    ((video_generation_cycles as u64 * 100) / 168_000_000) as u32;
+                let video_max_us = video_max_cycles / 168;
                 show_performance_details(
                     audio_rendered,
                     audio_underruns,
                     audio_high_water,
                     video_batches,
                     video_repeats,
+                    video_cpu_percent,
+                    video_max_us,
                 );
                 performance_last_ms = now_ms;
                 performance_last_cycles = now_cycles;
