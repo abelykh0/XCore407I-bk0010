@@ -417,7 +417,7 @@ unsafe fn set_dhara_error(error: *mut i32, value: i32) {
 }
 
 /// Read-only Dhara callback: every exposed block is a factory-good spare block.
-#[cfg(feature = "dhara-eval")]
+#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> i32 {
     let context = unsafe { dhara_context_for(nand) };
@@ -430,7 +430,7 @@ pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> i32 {
 /// Read-only Dhara callback. The existing STM32 FSMC ECC path validates and
 /// corrects the complete 2 KiB page before the requested slice is returned.
 /// Dhara error values: 0 = none, 1 = bad block, 2 = ECC.
-#[cfg(feature = "dhara-eval")]
+#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_read(
     nand: *const DharaNand,
@@ -477,7 +477,7 @@ pub extern "C" fn dhara_nand_read(
 
 /// Read-only free-page callback. It checks the complete data+OOB page, so a
 /// page with programmed ECC metadata is not mistaken for erased NAND.
-#[cfg(feature = "dhara-eval")]
+#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> i32 {
     let physical_page = match unsafe { dhara_physical_page(nand, page) } {
@@ -494,7 +494,7 @@ pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> i32 {
 /// Verify callback address translation and ECC reads without modifying NAND.
 /// The test reads page zero of each isolated block and separately checks
 /// whether that page is completely erased (including OOB).
-#[cfg(feature = "dhara-eval")]
+#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
 pub fn verify_dhara_read_only_callbacks() -> Option<(usize, usize)> {
     let context = unsafe { core::ptr::addr_of!(DHARA_NAND_CONTEXT) };
     let nand = unsafe { core::ptr::addr_of!((*context).nand) };
