@@ -81,6 +81,7 @@ fn main() {
         dhara
             .target(&target)
             .flag("-std=gnu11")
+            .flag("-w") // Suppress all compiler warnings from Dhara and its adapter only.
             .flag("-ffunction-sections")
             .flag("-fdata-sections")
             .include("vendor/dhara/include")
