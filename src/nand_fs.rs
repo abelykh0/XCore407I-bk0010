@@ -306,7 +306,11 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return true;
     }
     if tag != ECC_TAG {
-        ECC_DIAG_STAGE.store(2, Ordering::Relaxed); // Invalid ECC tag
+        ECC_DIAG_SYNDROME.store(
+            u32::from(tag[0]) | (u32::from(tag[1]) << 8),
+            Ordering::Relaxed,
+        );
+        ECC_DIAG_STAGE.store(2, Ordering::Relaxed); // Invalid ECC tag; diagnostic holds raw tag bytes
         return false;
     }
 
