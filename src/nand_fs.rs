@@ -992,7 +992,7 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
         append_hex(&mut report, &mut len, storage.dhara_test_blocks().len() as u32, 2);
         append(&mut report, &mut len, b" (");
         append_hex(&mut report, &mut len, storage.dhara_test_capacity_bytes() as u32, 8);
-        append(&mut report, &mut len, b" bytes)\\r\\n");
+        append(&mut report, &mut len, b" bytes)\r\n");
     }
 
     let mountable = Filesystem::<NandStorage>::is_mountable(&mut storage);
