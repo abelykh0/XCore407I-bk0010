@@ -4,9 +4,10 @@
 //! physical blocks. Sixteen good blocks are held in reserve for bad-block
 //! tolerance; LittleFS sees 1,008 logical blocks.
 //!
-//! This first implementation uses raw NAND data with ECC disabled. It keeps
-//! factory bad blocks out of the logical address space but does not yet
-//! implement ECC correction or grown-bad-block remapping.
+//! New page writes store the STM32 FSMC's 512-byte Hamming ECC values in the
+//! spare area. Reads verify ECC-tagged pages and retain compatibility with
+//! legacy pages that have no ECC tag. This stage detects corruption but does
+//! not yet correct bit errors or remap grown-bad blocks.
 
 use core::ptr::{read_volatile, write_volatile};
 use stm32f4::stm32f407 as pac;
@@ -69,8 +70,6 @@ fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
 fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
 /// Prepare the FSMC ECC engine for one 512-byte data chunk.
-/// Not connected to page I/O until OOB storage and legacy-page handling land.
-#[allow(dead_code)]
 fn ecc_begin_chunk() {
     unsafe {
         let pcr = read_volatile(FSMC_PCR2);
@@ -84,7 +83,6 @@ fn ecc_begin_chunk() {
 }
 
 /// Read the 24-bit ECC result and disable the engine before reuse.
-#[allow(dead_code)]
 fn ecc_end_chunk() -> u32 {
     unsafe {
         let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
@@ -144,8 +142,22 @@ fn erase_physical_block(block: u16) -> bool {
     read_data() & 0x01 == 0
 }
 
+// OOB bytes 0..1 are reserved for the NAND factory bad-block marker.
+// Bytes 2..13 hold four 3-byte ECC values; bytes 14..15 identify ECC pages.
+const ECC_OOB_OFFSET: u16 = 2;
+const ECC_TAG: [u8; 2] = [0xA5, 0x5A];
+const ECC_BYTES_PER_CHUNK: usize = 3;
+const ECC_OOB_BYTES: usize = FSMC_ECC_CHUNKS_PER_PAGE * ECC_BYTES_PER_CHUNK;
+
+fn encode_ecc(ecc: u32, out: &mut [u8]) {
+    out[0] = ecc as u8;
+    out[1] = (ecc >> 8) as u8;
+    out[2] = (ecc >> 16) as u8;
+}
+
 fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
+
     command(0x80);
     address(0);
     address(0);
@@ -153,11 +165,63 @@ fn program_physical_page(page: u32, data: &[u8]) -> bool {
     address((page >> 8) as u8);
     // K9F1G08U0E tADL minimum is 100 ns.
     cortex_m::asm::delay(1_000);
-    for &byte in data { write_data(byte); }
+
+    let mut ecc = [0u8; ECC_OOB_BYTES];
+    for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        ecc_begin_chunk();
+        for &byte in chunk { write_data(byte); }
+        encode_ecc(ecc_end_chunk(), &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
+    }
+
+    // Continue the same sequential page-program operation into the spare area.
+    // The two leading 0xFF bytes leave the factory marker positions untouched.
+    write_data(0xFF);
+    write_data(0xFF);
+    for &byte in &ecc { write_data(byte); }
+    for &byte in &ECC_TAG { write_data(byte); }
+
     command(0x10);
     if !wait_ready_rb() { return false; }
     command(0x70);
     read_data() & 0x01 == 0
+}
+
+/// Read a full data page, computing ECC as the four 512-byte chunks are read.
+/// Pages without the tag are treated as legacy raw-NAND pages.
+fn read_data_page(page: u32, out: &mut [u8]) -> bool {
+    if out.len() != PAGE_SIZE { return false; }
+
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb() { return false; }
+
+    let mut calculated = [0u8; ECC_OOB_BYTES];
+    for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        ecc_begin_chunk();
+        for byte in chunk {
+            *byte = read_data();
+        }
+        encode_ecc(ecc_end_chunk(), &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
+    }
+
+    let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
+    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut stored) {
+        return false;
+    }
+
+    let tag = &stored[ECC_OOB_BYTES..];
+    if tag == [0xFF, 0xFF] {
+        return true;
+    }
+    if tag != ECC_TAG {
+        return false;
+    }
+
+    stored[..ECC_OOB_BYTES] == calculated
 }
 
 fn configure_fsmc() {
@@ -170,8 +234,8 @@ fn configure_fsmc() {
         write_volatile(pcr2, 0);
         write_volatile((FSMC_BASE + 0x68) as *mut u32, timing);
         write_volatile((FSMC_BASE + 0x6C) as *mut u32, timing);
-        // NAND bank 2, 8-bit bus, NWAIT enabled. Configure a 512-byte
-        // ECC chunk size, but leave ECCEN clear until OOB handling is ready.
+        // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
+        // individual 512-byte data chunks; ECCEN remains clear while idle.
         let control = (1 << 1) | (1 << 2) | (1 << 3) | (2 << 9) | (2 << 13) | (1 << 17);
         write_volatile(pcr2, control);
         let _ = read_volatile(pcr2);
@@ -266,7 +330,7 @@ impl Storage for NandStorage {
             let page_in_block = (absolute % ERASE_BLOCK_SIZE) / PAGE_SIZE;
             let physical = self.physical_block(logical_block).ok_or(LfsError::IO)?;
             let page = physical as u32 * PAGES_PER_BLOCK + page_in_block as u32;
-            if !read_page(page, 0, page_buf) { return Err(LfsError::IO); }
+            if !read_data_page(page, page_buf) { return Err(LfsError::IO); }
         }
         Ok(buf.len())
     }
@@ -356,7 +420,7 @@ pub fn with_mounted_report<R>(
             8,
         );
         append(&mut report, &mut len, b" bytes\r\n");
-        append(&mut report, &mut len, b"ECC: prepared (not yet applied)\r\n");
+        append(&mut report, &mut len, b"ECC: tagged-page verification only (no correction)\r\n");
         service(fs, &report, len)
     })
     .map_err(|_| InitError::MountFailed)
@@ -419,7 +483,7 @@ pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
             append(&mut report, &mut len, b" bytes\r\nFree: ");
             append_hex(&mut report, &mut len, free as u32, 8);
             append(&mut report, &mut len, b" bytes\r\n");
-            append(&mut report, &mut len, b"ECC: prepared (not yet applied)\r\n");
+            append(&mut report, &mut len, b"ECC: tagged-page verification only (no correction)\r\n");
         }
         Err(_) => append(&mut report, &mut len, b"ERROR: mount failed; NAND unchanged\r\n"),
     }
