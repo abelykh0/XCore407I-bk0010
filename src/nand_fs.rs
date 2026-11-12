@@ -627,6 +627,49 @@ impl NandStorage {
         (count != u32::MAX).then_some(count as usize)
     }
 
+    /// Perform a read-only factory-marker scan to count the physical blocks
+    /// excluded from LittleFS and its two mapping metadata blocks.
+    /// This deliberately does not initialize or mount either filesystem.
+    #[cfg(feature = "dhara-eval")]
+    pub fn scan_dhara_spare_inventory() -> Option<usize> {
+        configure_fsmc();
+        command(0xFF);
+        if !wait_ready_status() {
+            return None;
+        }
+
+        let mut good_blocks = 0usize;
+        let mut spare_blocks = 0usize;
+        let mut marker = [0u8; 1];
+
+        for block in 0..PHYSICAL_BLOCKS {
+            let first = block * PAGES_PER_BLOCK;
+            if !read_page(first, PAGE_SIZE as u16, &mut marker) {
+                return None;
+            }
+            let first_good = marker[0] == 0xFF;
+
+            if !read_page(first + 1, PAGE_SIZE as u16, &mut marker) {
+                return None;
+            }
+            let second_good = marker[0] == 0xFF;
+
+            if first_good && second_good {
+                if good_blocks >= LOGICAL_BLOCKS + 2 {
+                    spare_blocks += 1;
+                }
+                good_blocks += 1;
+            }
+        }
+
+        if good_blocks < LOGICAL_BLOCKS + 2 {
+            return None;
+        }
+
+        DHARA_TEST_BLOCK_COUNT.store(spare_blocks as u32, Ordering::Relaxed);
+        Some(spare_blocks)
+    }
+
     fn physical_block(&self, logical: usize) -> Option<u16> {
         self.physical_blocks.get(logical).copied()
     }
