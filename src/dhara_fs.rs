@@ -48,6 +48,7 @@ unsafe extern "C" {
 
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
     [0; PAGE_SIZE + SPARE_SIZE];
+static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
 
 fn valid_nand(nand: *const DharaNand) -> bool {
     if nand.is_null() {
@@ -323,7 +324,8 @@ impl DharaStorage {
         // signature. It prevents arbitrary raw-NAND contents from being
         // mistaken for a valid Dhara volume during first provisioning.
         if resumed {
-            let mut marker = [0xFFu8; PAGE_SIZE];
+            let marker = unsafe { &mut *core::ptr::addr_of_mut!(VOLUME_MARKER_BUFFER) };
+            marker.fill(0xFF);
             let mut error = 0i32;
             resumed = unsafe {
                 xcore_dhara_map_read(
@@ -340,7 +342,8 @@ impl DharaStorage {
                 bad_blocks = erase_all_good_blocks()?;
                 unsafe { xcore_dhara_map_init(); }
 
-                let mut marker = [0xFFu8; PAGE_SIZE];
+                let marker = unsafe { &mut *core::ptr::addr_of_mut!(VOLUME_MARKER_BUFFER) };
+                marker.fill(0xFF);
                 marker[..VOLUME_MARKER.len()].copy_from_slice(VOLUME_MARKER);
                 let mut error = 0i32;
                 if unsafe {
