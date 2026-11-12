@@ -5,7 +5,6 @@
 //! to Dhara sectors. The NAND OOB layout remains unchanged: factory markers
 //! at bytes 0..1 and STM32 FSMC Hamming ECC/tag at bytes 2..15.
 
-#![cfg(feature = "dhara-littlefs")]
 
 use core::ffi::c_int;
 use core::slice;
