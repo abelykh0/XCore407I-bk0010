@@ -51,6 +51,7 @@ fn main() {
     println!("cargo:rerun-if-changed=usb/tusb_class_drivers.c");
     println!("cargo:rerun-if-changed=usb/tusb_class_drivers.h");
     println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
+    println!("cargo:rerun-if-changed=vendor/dhara");
 
     let target = env::var("TARGET").expect("TARGET not set");
 
@@ -73,6 +74,24 @@ fn main() {
             "csrc/bk/platform.c",
         ])
         .compile("bk_cpu");
+
+    // Compile upstream Dhara only when explicitly requested. This stage
+    // does not connect it to the live NAND or initialize its on-flash journal.
+    if env::var_os("CARGO_FEATURE_DHARA_EVAL").is_some() {
+        let mut dhara = Build::new();
+        dhara
+            .target(&target)
+            .flag("-std=gnu11")
+            .flag("-ffunction-sections")
+            .flag("-fdata-sections")
+            .include("vendor/dhara/include")
+            .files([
+                "vendor/dhara/dhara/error.c",
+                "vendor/dhara/dhara/journal.c",
+                "vendor/dhara/dhara/map.c",
+            ])
+            .compile("dhara");
+    }
 
     // Build TinyUSB directly from its upstream C sources. This removes the
     // tinyusb-sys Rust wrapper while retaining the existing checked-in
