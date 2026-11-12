@@ -7,8 +7,8 @@
 //! New page writes store the STM32 FSMC's 512-byte Hamming ECC values in the
 //! spare area. Reads verify ECC-tagged pages and retain compatibility with
 //! legacy pages that have no ECC tag. Reads correct single-bit errors in
-//! tagged pages and reject uncorrectable
-//! syndromes. Corrected data is returned in RAM; NAND pages are not scrubbed
+//! tagged pages and reject uncorrectable syndromes. Corrected data is returned
+//! in RAM; NAND pages are not scrubbed
 //! yet, and grown-bad blocks are not remapped.
 
 use core::ptr::{read_volatile, write_volatile};
