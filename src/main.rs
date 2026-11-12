@@ -168,6 +168,7 @@ fn main() -> ! {
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
     let mut save_dialog_was_active = false;
+    let mut format_screen_state = FORMAT_IDLE;
     #[cfg(feature = "cpu-cycle-diag")]
     let mut diagnostic_last_dwt = read_dwt_cycle_count();
     #[cfg(feature = "cpu-cycle-diag")]
@@ -210,8 +211,7 @@ fn main() -> ! {
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
         match FORMAT_STATE.load(Ordering::Acquire) {
-            FORMAT_CONFIRM => draw_format_confirmation(false, FORMAT_ERROR.load(Ordering::Acquire)),
-            FORMAT_CONFIRM_FINAL => draw_format_confirmation(true, FORMAT_ERROR.load(Ordering::Acquire)),
+            FORMAT_CONFIRM | FORMAT_CONFIRM_FINAL => {}
             FORMAT_CANCELLED => {
                 FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
                 clear_demo_canvas(0x10);
@@ -236,6 +236,16 @@ fn main() -> ! {
                 show_usb_status(b"LITTLEFS FORMAT FAILED");
             }
             _ => {}
+        }
+
+        let current_format_state = FORMAT_STATE.load(Ordering::Acquire);
+        if current_format_state != format_screen_state {
+            match current_format_state {
+                FORMAT_CONFIRM => draw_format_confirmation(false, FORMAT_ERROR.load(Ordering::Acquire)),
+                FORMAT_CONFIRM_FINAL => draw_format_confirmation(true, FORMAT_ERROR.load(Ordering::Acquire)),
+                _ => {}
+            }
+            format_screen_state = current_format_state;
         }
 
         let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
@@ -329,7 +339,6 @@ fn main() -> ! {
                         };
                         FORMAT_ERROR.store(detail, Ordering::Release);
                         FORMAT_STATE.store(FORMAT_CONFIRM, Ordering::Release);
-                        draw_format_confirmation(false, detail);
                     } else {
                     let message: &[u8] = match error {
                         xcore407i_blinker::nand_fs::FsAccessError::Init(error) => {
