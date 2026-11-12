@@ -156,10 +156,6 @@ fn main() -> ! {
         &mut core.NVIC,
     );
 
-    #[cfg(feature = "nand-ecc-test")]
-    let _nand_ecc_test_result =
-        xcore407i_blinker::nand_fs::run_ecc_fault_injection_test();
-
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
     let mut browser_count = 0usize;
