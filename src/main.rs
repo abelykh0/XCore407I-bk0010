@@ -39,6 +39,8 @@ use file_browser::{
     FORMAT_STATE, FORMAT_ERROR, FORMAT_IDLE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL,
     FORMAT_REQUEST, FORMAT_CANCELLED, FORMAT_DONE, FORMAT_FAILED,
     draw_format_confirmation,
+    INIT_STATE, INIT_IDLE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST,
+    INIT_CANCELLED, INIT_DONE, INIT_FAILED, draw_init_confirmation,
 };
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
@@ -169,6 +171,7 @@ fn main() -> ! {
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
     let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
+    let mut init_screen_state = INIT_IDLE;
     #[cfg(feature = "cpu-cycle-diag")]
     let mut diagnostic_last_dwt = read_dwt_cycle_count();
     #[cfg(feature = "cpu-cycle-diag")]
@@ -209,6 +212,44 @@ fn main() -> ! {
         }
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
+
+        match INIT_STATE.load(Ordering::Acquire) {
+            INIT_CONFIRM | INIT_CONFIRM_FINAL => {}
+            INIT_CANCELLED => {
+                INIT_STATE.store(INIT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"NAND INIT CANCELLED");
+            }
+            INIT_REQUEST => {
+                let result = xcore407i_blinker::nand_fs::initialize_nand_volume();
+                if result.is_ok() {
+                    INIT_STATE.store(INIT_DONE, Ordering::Release);
+                } else {
+                    INIT_STATE.store(INIT_FAILED, Ordering::Release);
+                }
+            }
+            INIT_DONE => {
+                INIT_STATE.store(INIT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"NAND READY - EMPTY LFS");
+            }
+            INIT_FAILED => {
+                INIT_STATE.store(INIT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"NAND INIT FAILED");
+            }
+            _ => {}
+        }
+
+        let current_init_state = INIT_STATE.load(Ordering::Acquire);
+        if current_init_state != init_screen_state {
+            match current_init_state {
+                INIT_CONFIRM => draw_init_confirmation(false),
+                INIT_CONFIRM_FINAL => draw_init_confirmation(true),
+                _ => {}
+            }
+            init_screen_state = current_init_state;
+        }
 
         match FORMAT_STATE.load(Ordering::Acquire) {
             FORMAT_CONFIRM | FORMAT_CONFIRM_FINAL => {}
@@ -322,6 +363,13 @@ fn main() -> ! {
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
                     if matches!(
                         error,
+                        xcore407i_blinker::nand_fs::FsAccessError::Init(
+                            xcore407i_blinker::nand_fs::InitError::DharaNoJournal
+                        )
+                    ) {
+                        INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
+                    } else if matches!(
+                        error,
                         xcore407i_blinker::nand_fs::FsAccessError::Mount(_)
                     ) {
                         let detail = match error {
@@ -346,6 +394,8 @@ fn main() -> ! {
                                     b"DHARA JOURNAL MISSING",
                                 xcore407i_blinker::nand_fs::InitError::DharaCapacity =>
                                     b"DHARA CAPACITY LOW",
+                                xcore407i_blinker::nand_fs::InitError::ProvisionFailed =>
+                                    b"DHARA PROVISION FAILED",
                             }
                         },
                         xcore407i_blinker::nand_fs::FsAccessError::Mount(_) =>
@@ -407,7 +457,7 @@ fn main() -> ! {
             || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
             || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
             || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE
-;
+            || INIT_STATE.load(Ordering::Acquire) != INIT_IDLE;
         if emulator_paused != emulator_was_paused {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
             pacing_start_cycles = unsafe { bk_timing_cycles() };
