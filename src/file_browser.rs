@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, AtomicU8};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8};
 
 use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line, show_usb_status};
 
@@ -23,7 +23,7 @@ pub(crate) const FORMAT_CANCELLED: u8 = 4;
 pub(crate) const FORMAT_DONE: u8 = 5;
 pub(crate) const FORMAT_FAILED: u8 = 6;
 pub(crate) static FORMAT_STATE: AtomicU8 = AtomicU8::new(FORMAT_IDLE);
-pub(crate) static FORMAT_ERROR: AtomicU8 = AtomicU8::new(0);
+pub(crate) static FORMAT_ERROR: AtomicI32 = AtomicI32::new(0);
 pub(crate) const SAVE_RAM_START: usize = 0x0200;
 pub(crate) const SAVE_RAM_LENGTH: usize = 15_872;
 pub(crate) const SAVE_NAME_CAPACITY: usize = 24;
@@ -276,16 +276,29 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
 
 
 
-/// Display the LittleFS mount failure and the two-step destructive confirmation.
-pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: u8) {
+/// Display the exact LittleFS mount failure and the two-step destructive confirmation.
+pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
     clear_demo_canvas(0);
     show_file_browser_line(0, b"LITTLEFS MOUNT FAILED", true);
+    show_file_browser_line(3, b"STAGE: LITTLEFS MOUNT", false);
     let detail: &[u8] = match error {
-        1 => b"Filesystem not mountable",
-        2 => b"Mount returned I/O error",
-        _ => b"Unknown mount error",
+        -5 => b"LFS_ERR_IO (-5): device I/O failure",
+        -84 => b"LFS_ERR_CORRUPTION (-84): invalid filesystem",
+        -2 => b"LFS_ERR_NO_SUCH_ENTRY (-2)",
+        -17 => b"LFS_ERR_ENTRY_ALREADY_EXISTED (-17)",
+        -20 => b"LFS_ERR_PATH_NOT_DIR (-20)",
+        -21 => b"LFS_ERR_PATH_IS_DIR (-21)",
+        -39 => b"LFS_ERR_DIR_NOT_EMPTY (-39)",
+        -9 => b"LFS_ERR_BAD_FILE_DESCRIPTOR (-9)",
+        -27 => b"LFS_ERR_FILE_TOO_BIG (-27)",
+        -22 => b"LFS_ERR_INVALID (-22)",
+        -28 => b"LFS_ERR_NO_SPACE (-28)",
+        -12 => b"LFS_ERR_NO_MEMORY (-12)",
+        -61 => b"LFS_ERR_NO_ATTRIBUTE (-61)",
+        -36 => b"LFS_ERR_FILENAME_TOO_LONG (-36)",
+        _ => b"Unknown LittleFS error code",
     };
-    show_file_browser_line(3, detail, false);
+    show_file_browser_line(4, detail, false);
     if final_confirmation {
         show_file_browser_line(7, b"ARE YOU REALLY SURE?", true);
         show_file_browser_line(9, b"ALL LITTLEFS FILES WILL BE LOST", false);
