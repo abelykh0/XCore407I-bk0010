@@ -324,7 +324,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
         // Ctrl+Alt+F12 opens the explicit NAND reinitialization flow.
         // This is intentionally available even when a valid Dhara volume
         // already exists; the two confirmation screens guard the erase.
-        if key == 0x45 && modifiers & 0x55 == 0x55 {
+        if key == 0x45 && modifiers & 0x11 != 0 && modifiers & 0x44 != 0 {
             if INIT_STATE.load(Ordering::Acquire) == 0 {
                 keyboard_queue_discard();
                 INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
