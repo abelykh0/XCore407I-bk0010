@@ -76,9 +76,7 @@ fn main() {
         ])
         .compile("bk_cpu");
 
-    // Compile upstream Dhara only when explicitly requested. The optional
-    // LittleFS adapter is linked into the same archive as the Dhara core.
-    if env::var_os("CARGO_FEATURE_DHARA_LITTLEFS").is_some() {
+    // Dhara is the only NAND storage backend. Compile it unconditionally.
         let mut dhara = Build::new();
         dhara
             .target(&target)
@@ -91,13 +89,10 @@ fn main() {
                 "vendor/dhara/dhara/journal.c",
                 "vendor/dhara/dhara/map.c",
             ]);
-        if env::var_os("CARGO_FEATURE_DHARA_LITTLEFS").is_some() {
-            // Keep the adapter in the same archive as Dhara to avoid
-            // static-library link-order dependencies between the two.
-            dhara.file("csrc/dhara_adapter.c");
-        }
+        // Keep the adapter in the same archive as Dhara to avoid
+        // static-library link-order dependencies between the two.
+        dhara.file("csrc/dhara_adapter.c");
         dhara.compile("dhara");
-    }
 
     // Build TinyUSB directly from its upstream C sources. This removes the
     // tinyusb-sys Rust wrapper while retaining the existing checked-in
