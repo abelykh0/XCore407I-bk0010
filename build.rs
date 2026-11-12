@@ -52,6 +52,7 @@ fn main() {
     println!("cargo:rerun-if-changed=usb/tusb_class_drivers.h");
     println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
     println!("cargo:rerun-if-changed=vendor/dhara");
+    println!("cargo:rerun-if-changed=csrc/dhara_adapter.c");
 
     let target = env::var("TARGET").expect("TARGET not set");
 
@@ -77,7 +78,9 @@ fn main() {
 
     // Compile upstream Dhara only when explicitly requested. This stage
     // does not connect it to the live NAND or initialize its on-flash journal.
-    if env::var_os("CARGO_FEATURE_DHARA_EVAL").is_some() {
+    if env::var_os("CARGO_FEATURE_DHARA_EVAL").is_some()
+        || env::var_os("CARGO_FEATURE_DHARA_LITTLEFS").is_some()
+    {
         let mut dhara = Build::new();
         dhara
             .target(&target)
@@ -91,6 +94,18 @@ fn main() {
                 "vendor/dhara/dhara/map.c",
             ])
             .compile("dhara");
+
+        if env::var_os("CARGO_FEATURE_DHARA_LITTLEFS").is_some() {
+            let mut adapter = Build::new();
+            adapter
+                .target(&target)
+                .flag("-std=gnu11")
+                .flag("-ffunction-sections")
+                .flag("-fdata-sections")
+                .include("vendor/dhara/include")
+                .file("csrc/dhara_adapter.c")
+                .compile("dhara_adapter");
+        }
     }
 
     // Build TinyUSB directly from its upstream C sources. This removes the
