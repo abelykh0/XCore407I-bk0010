@@ -13,8 +13,6 @@
 //! yet, and grown-bad blocks are not remapped.
 
 use core::ptr::{read_volatile, write_volatile};
-#[cfg(feature = "dhara-eval")]
-use core::sync::atomic::{AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -52,59 +50,6 @@ pub const ERASE_BLOCK_SIZE: usize = PAGE_SIZE * PAGES_PER_BLOCK as usize;
 pub const RESERVED_BLOCKS: usize = 16;
 pub const LOGICAL_BLOCKS: usize = PHYSICAL_BLOCKS as usize - RESERVED_BLOCKS;
 
-/// Maximum number of factory-good blocks available after LittleFS and its
-/// two mapping-metadata blocks. Dhara receives only this isolated tail region.
-#[cfg(feature = "dhara-eval")]
-pub const DHARA_TEST_MAX_BLOCKS: usize = RESERVED_BLOCKS - 2;
-
-/// Keep the 2 KiB logical-to-physical map in static RAM, not on the
-/// small startup stack while LittleFS is being mounted/formatted.
-static mut PHYSICAL_BLOCK_MAP: [u16; LOGICAL_BLOCKS] = [0; LOGICAL_BLOCKS];
-
-// A complete mapping record fits in one NAND data page. Keep one scratch page
-// in static RAM so NAND initialization does not consume 2 KiB of stack.
-static mut MAP_METADATA_PAGE: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
-
-#[cfg(feature = "dhara-eval")]
-static DHARA_TEST_BLOCK_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
-
-#[cfg(feature = "dhara-eval")]
-#[repr(C)]
-pub struct DharaNand {
-    log2_page_size: u8,
-    log2_ppb: u8,
-    num_blocks: u32,
-}
-
-#[cfg(feature = "dhara-eval")]
-#[repr(C)]
-struct DharaNandContext {
-    nand: DharaNand,
-    block_count: u32,
-    physical_blocks: [u16; DHARA_TEST_MAX_BLOCKS],
-}
-
-#[cfg(feature = "dhara-eval")]
-static mut DHARA_NAND_CONTEXT: DharaNandContext = DharaNandContext {
-    nand: DharaNand { log2_page_size: 11, log2_ppb: 6, num_blocks: 0 },
-    block_count: 0,
-    physical_blocks: [u16::MAX; DHARA_TEST_MAX_BLOCKS],
-};
-
-// Shared only by the synchronous read-only callbacks; never accessed from an ISR.
-#[cfg(feature = "dhara-eval")]
-static mut DHARA_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
-    [0; PAGE_SIZE + SPARE_SIZE];
-
-#[cfg(feature = "dhara-eval")]
-static DHARA_READ_OK: AtomicU32 = AtomicU32::new(u32::MAX);
-
-#[cfg(feature = "dhara-eval")]
-static DHARA_FIRST_PAGE_FREE: AtomicU32 = AtomicU32::new(u32::MAX);
-
-#[cfg(feature = "dhara-eval")]
-static DHARA_ERASE_STATUS: AtomicU32 = AtomicU32::new(u32::MAX);
-
 const MAP_METADATA_MAGIC: [u8; 8] = *b"XCMAP001";
 const MAP_METADATA_VERSION: u16 = 1;
 const MAP_METADATA_HEADER_SIZE: usize = 20;
@@ -128,11 +73,6 @@ pub struct NandStorage {
     /// A spare good block beyond LittleFS and mapping metadata, reserved for ECC self-test.
     #[cfg(feature = "nand-ecc-test")]
     ecc_test_block: Option<u16>,
-    /// Factory-good physical blocks excluded from LittleFS and mapping metadata.
-    #[cfg(feature = "dhara-eval")]
-    dhara_test_blocks: [u16; DHARA_TEST_MAX_BLOCKS],
-    #[cfg(feature = "dhara-eval")]
-    dhara_test_block_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -382,220 +322,6 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 }
 
 
-#[cfg(feature = "dhara-eval")]
-unsafe fn dhara_context_for(nand: *const DharaNand) -> Option<*mut DharaNandContext> {
-    let context = unsafe { core::ptr::addr_of_mut!(DHARA_NAND_CONTEXT) };
-    let expected = unsafe { core::ptr::addr_of!((*context).nand) };
-    if nand == expected { Some(context) } else { None }
-}
-
-#[cfg(feature = "dhara-eval")]
-unsafe fn dhara_physical_page(nand: *const DharaNand, page: u32) -> Option<u32> {
-    let context = unsafe { dhara_context_for(nand)? };
-    let pages_per_block = 1u32.checked_shl(unsafe { (*context).nand.log2_ppb as u32 })?;
-    if pages_per_block != PAGES_PER_BLOCK {
-        return None;
-    }
-    let block_index = (page / pages_per_block) as usize;
-    if block_index >= unsafe { (*context).block_count as usize }
-        || block_index >= unsafe { (*context).nand.num_blocks as usize }
-    {
-        return None;
-    }
-    let physical_block = unsafe { (*context).physical_blocks[block_index] };
-    if physical_block == u16::MAX {
-        return None;
-    }
-    Some(physical_block as u32 * pages_per_block + (page % pages_per_block))
-}
-
-#[cfg(feature = "dhara-eval")]
-unsafe fn set_dhara_error(error: *mut i32, value: i32) {
-    if !error.is_null() {
-        unsafe { *error = value; }
-    }
-}
-
-/// Read-only Dhara callback: every exposed block is a factory-good spare block.
-#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
-#[unsafe(no_mangle)]
-pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> i32 {
-    let context = unsafe { dhara_context_for(nand) };
-    match context {
-        Some(context) if block < unsafe { (*context).block_count } => 0,
-        _ => 1,
-    }
-}
-
-/// Read-only Dhara callback. The existing STM32 FSMC ECC path validates and
-/// corrects the complete 2 KiB page before the requested slice is returned.
-/// Dhara error values: 0 = none, 1 = bad block, 2 = ECC.
-#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
-#[unsafe(no_mangle)]
-pub extern "C" fn dhara_nand_read(
-    nand: *const DharaNand,
-    page: u32,
-    offset: usize,
-    length: usize,
-    data: *mut u8,
-    error: *mut i32,
-) -> i32 {
-    let context = unsafe { dhara_context_for(nand) };
-    let page_size = match context {
-        Some(context) => 1usize << unsafe { (*context).nand.log2_page_size },
-        None => 0,
-    };
-    if page_size != PAGE_SIZE
-        || offset > page_size
-        || length > page_size.saturating_sub(offset)
-        || (length != 0 && data.is_null())
-    {
-        unsafe { set_dhara_error(error, 2); }
-        return -1;
-    }
-    let physical_page = match unsafe { dhara_physical_page(nand, page) } {
-        Some(page) => page,
-        None => {
-            unsafe { set_dhara_error(error, 1); }
-            return -1;
-        }
-    };
-
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_PAGE_SCRATCH) };
-    if !read_data_page(physical_page, &mut scratch[..PAGE_SIZE]) {
-        unsafe { set_dhara_error(error, 2); }
-        return -1;
-    }
-    if length != 0 {
-        unsafe {
-            core::ptr::copy_nonoverlapping(scratch.as_ptr().add(offset), data, length);
-        }
-    }
-    unsafe { set_dhara_error(error, 0); }
-    0
-}
-
-/// Read-only free-page callback. It checks the complete data+OOB page, so a
-/// page with programmed ECC metadata is not mistaken for erased NAND.
-#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
-#[unsafe(no_mangle)]
-pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> i32 {
-    let physical_page = match unsafe { dhara_physical_page(nand, page) } {
-        Some(page) => page,
-        None => return 0,
-    };
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_PAGE_SCRATCH) };
-    if !read_page(physical_page, 0, scratch) {
-        return 0;
-    }
-    if scratch.iter().all(|&byte| byte == 0xFF) { 1 } else { 0 }
-}
-
-/// Verify callback address translation and ECC reads without modifying NAND.
-/// The test reads page zero of each isolated block and separately checks
-/// whether that page is completely erased (including OOB).
-#[cfg(all(feature = "dhara-eval", not(feature = "dhara-littlefs")))]
-pub fn verify_dhara_read_only_callbacks() -> Option<(usize, usize)> {
-    let context = unsafe { core::ptr::addr_of!(DHARA_NAND_CONTEXT) };
-    let nand = unsafe { core::ptr::addr_of!((*context).nand) };
-    let count = unsafe { (*context).block_count as usize };
-    if count == 0 || count > DHARA_TEST_MAX_BLOCKS {
-        return None;
-    }
-
-    let mut read_ok = 0usize;
-    let mut first_page_free = 0usize;
-    for block in 0..count {
-        if dhara_nand_is_bad(nand, block as u32) != 0 {
-            continue;
-        }
-        let mut error = 0i32;
-        let page = (block as u32) << 6;
-        let mut first_byte = 0u8;
-        if dhara_nand_read(
-            nand,
-            page,
-            0,
-            1,
-            &mut first_byte,
-            &mut error,
-        ) == 0 {
-            read_ok += 1;
-            if dhara_nand_is_free(nand, page) == 1 {
-                first_page_free += 1;
-            }
-        }
-    }
-
-    DHARA_READ_OK.store(read_ok as u32, Ordering::Relaxed);
-    DHARA_FIRST_PAGE_FREE.store(first_page_free as u32, Ordering::Relaxed);
-    Some((read_ok, first_page_free))
-}
-
-/// Destructively erase and verify every block in the isolated Dhara list.
-/// This is compiled only with dhara-eval-erase-spares. Remove that feature
-/// after one successful provisioning boot; leaving it enabled repeats erasure
-/// on every reset. No LittleFS or mapping-metadata block is addressable here.
-#[cfg(feature = "dhara-eval-erase-spares")]
-pub fn erase_dhara_spare_blocks_once() -> bool {
-    let context = unsafe { core::ptr::addr_of!(DHARA_NAND_CONTEXT) };
-    let count = unsafe { (*context).block_count as usize };
-    if count != DHARA_TEST_MAX_BLOCKS {
-        DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
-        return false;
-    }
-
-    configure_fsmc();
-    command(0xFF);
-    if !wait_ready_status() {
-        DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
-        return false;
-    }
-
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_PAGE_SCRATCH) };
-    for index in 0..count {
-        let block = unsafe { (*context).physical_blocks[index] };
-        if block == u16::MAX || !erase_physical_block(block) {
-            DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
-            return false;
-        }
-
-        // Verify every data and OOB byte in all 64 pages, not just page zero.
-        for page_in_block in 0..PAGES_PER_BLOCK {
-            let physical_page = block as u32 * PAGES_PER_BLOCK + page_in_block;
-            if !read_page(physical_page, 0, scratch)
-                || scratch.iter().any(|&byte| byte != 0xFF)
-            {
-                DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
-                return false;
-            }
-        }
-    }
-
-    DHARA_ERASE_STATUS.store(1, Ordering::Relaxed);
-    true
-}
-
-#[cfg(feature = "dhara-eval")]
-pub fn dhara_erase_status_cached() -> Option<bool> {
-    match DHARA_ERASE_STATUS.load(Ordering::Relaxed) {
-        0 => Some(false),
-        1 => Some(true),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "dhara-eval")]
-pub fn dhara_read_only_test_cached() -> Option<(usize, usize)> {
-    let read_ok = DHARA_READ_OK.load(Ordering::Relaxed);
-    let free = DHARA_FIRST_PAGE_FREE.load(Ordering::Relaxed);
-    if read_ok == u32::MAX || free == u32::MAX {
-        None
-    } else {
-        Some((read_ok as usize, free as usize))
-    }
-}
-
 /// CRC-32/IEEE used to reject incomplete or corrupted mapping records.
 fn mapping_crc32(bytes: &[u8]) -> u32 {
     let mut crc = !0u32;
@@ -772,10 +498,6 @@ impl NandStorage {
             mapping_generation: 0,
             #[cfg(feature = "nand-ecc-test")]
             ecc_test_block: None,
-            #[cfg(feature = "dhara-eval")]
-            dhara_test_blocks: [u16::MAX; DHARA_TEST_MAX_BLOCKS],
-            #[cfg(feature = "dhara-eval")]
-            dhara_test_block_count: 0,
         };
         let mut metadata_count = 0usize;
         let mut marker = [0u8; 1];
@@ -807,18 +529,6 @@ impl NandStorage {
                         // The opt-in destructive test uses a spare, not metadata.
                         storage.ecc_test_block = Some(block as u16);
                     }
-                    #[cfg(feature = "dhara-eval")]
-                    {
-                        // Keep every remaining factory-good block out of the
-                        // LittleFS map. Dhara will receive this list as its
-                        // complete physical device; it cannot address the
-                        // LittleFS or mapping-metadata regions.
-                        let index = storage.dhara_test_block_count;
-                        if index < DHARA_TEST_MAX_BLOCKS {
-                            storage.dhara_test_blocks[index] = block as u16;
-                            storage.dhara_test_block_count += 1;
-                        }
-                    }
                 }
             } else {
                 storage.factory_bad_blocks += 1;
@@ -828,9 +538,6 @@ impl NandStorage {
         if storage.good_blocks != LOGICAL_BLOCKS || metadata_count != 2 {
             return Err(InitError::TooManyBadBlocks);
         }
-
-        #[cfg(feature = "dhara-eval")]
-        DHARA_TEST_BLOCK_COUNT.store(storage.dhara_test_block_count as u32, Ordering::Relaxed);
 
         // Prefer the newest valid snapshot. Generation comparison uses
         // wrapping arithmetic so rollover does not make an older copy win.
@@ -866,79 +573,6 @@ impl NandStorage {
 
     pub fn factory_bad_blocks(&self) -> u16 { self.factory_bad_blocks }
     pub fn logical_capacity(&self) -> usize { LOGICAL_BLOCKS * ERASE_BLOCK_SIZE }
-
-    /// Physical blocks available for isolated Dhara testing. This list never
-    /// includes LittleFS-mapped blocks or either mapping-metadata block.
-    #[cfg(feature = "dhara-eval")]
-    pub fn dhara_test_blocks(&self) -> &[u16] {
-        &self.dhara_test_blocks[..self.dhara_test_block_count]
-    }
-
-    #[cfg(feature = "dhara-eval")]
-    pub fn dhara_test_capacity_bytes(&self) -> usize {
-        self.dhara_test_block_count * ERASE_BLOCK_SIZE
-    }
-
-    /// Cached spare-block count from the most recent NAND inventory scan.
-    /// None means NAND has not yet been initialized during this boot.
-    #[cfg(feature = "dhara-eval")]
-    pub fn dhara_test_block_count_cached() -> Option<usize> {
-        let count = DHARA_TEST_BLOCK_COUNT.load(Ordering::Relaxed);
-        (count != u32::MAX).then_some(count as usize)
-    }
-
-    /// Perform a read-only factory-marker scan to count the physical blocks
-    /// excluded from LittleFS and its two mapping metadata blocks.
-    /// This deliberately does not initialize or mount either filesystem.
-    #[cfg(feature = "dhara-eval")]
-    pub fn scan_dhara_spare_inventory() -> Option<usize> {
-        configure_fsmc();
-        command(0xFF);
-        if !wait_ready_status() {
-            return None;
-        }
-
-        let mut good_blocks = 0usize;
-        let mut spare_blocks = 0usize;
-        let mut marker = [0u8; 1];
-        let dhara_context = unsafe { core::ptr::addr_of_mut!(DHARA_NAND_CONTEXT) };
-
-        for block in 0..PHYSICAL_BLOCKS {
-            let first = block * PAGES_PER_BLOCK;
-            if !read_page(first, PAGE_SIZE as u16, &mut marker) {
-                return None;
-            }
-            let first_good = marker[0] == 0xFF;
-
-            if !read_page(first + 1, PAGE_SIZE as u16, &mut marker) {
-                return None;
-            }
-            let second_good = marker[0] == 0xFF;
-
-            if first_good && second_good {
-                if good_blocks >= LOGICAL_BLOCKS + 2 {
-                    if spare_blocks < DHARA_TEST_MAX_BLOCKS {
-                        unsafe {
-                            (*dhara_context).physical_blocks[spare_blocks] = block as u16;
-                        }
-                    }
-                    spare_blocks += 1;
-                }
-                good_blocks += 1;
-            }
-        }
-
-        if good_blocks < LOGICAL_BLOCKS + 2 {
-            return None;
-        }
-
-        DHARA_TEST_BLOCK_COUNT.store(spare_blocks as u32, Ordering::Relaxed);
-        unsafe {
-            (*dhara_context).block_count = spare_blocks as u32;
-            (*dhara_context).nand.num_blocks = spare_blocks as u32;
-        }
-        Some(spare_blocks)
-    }
 
     fn physical_block(&self, logical: usize) -> Option<u16> {
         self.physical_blocks.get(logical).copied()
@@ -1280,15 +914,6 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
     append(&mut report, &mut len, b"Factory bad blocks: ");
     append_hex(&mut report, &mut len, storage.factory_bad_blocks() as u32, 4);
     append(&mut report, &mut len, b"\r\n");
-
-    #[cfg(feature = "dhara-eval")]
-    {
-        append(&mut report, &mut len, b"Dhara spare blocks: ");
-        append_hex(&mut report, &mut len, storage.dhara_test_blocks().len() as u32, 2);
-        append(&mut report, &mut len, b" (");
-        append_hex(&mut report, &mut len, storage.dhara_test_capacity_bytes() as u32, 8);
-        append(&mut report, &mut len, b" bytes)\r\n");
-    }
 
     let mountable = Filesystem::<ActiveStorage>::is_mountable(&mut storage);
     let mut formatted_now = false;
