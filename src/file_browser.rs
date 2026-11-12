@@ -24,10 +24,6 @@ pub(crate) const FORMAT_DONE: u8 = 5;
 pub(crate) const FORMAT_FAILED: u8 = 6;
 pub(crate) static FORMAT_STATE: AtomicU8 = AtomicU8::new(FORMAT_IDLE);
 pub(crate) static FORMAT_ERROR: AtomicI32 = AtomicI32::new(0);
-#[cfg(feature = "destructive-lfs-test")]
-pub(crate) static LFS_TEST_REQUEST: AtomicBool = AtomicBool::new(false);
-#[cfg(feature = "destructive-lfs-test")]
-pub(crate) static LFS_TEST_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub(crate) const SAVE_RAM_START: usize = 0x0200;
 pub(crate) const SAVE_RAM_LENGTH: usize = 15_872;
 pub(crate) const SAVE_NAME_CAPACITY: usize = 24;
@@ -339,18 +335,3 @@ pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
     }
 }
 
-
-#[cfg(feature = "destructive-lfs-test")]
-pub(crate) fn draw_lfs_corruption_result(success: bool) {
-    clear_demo_canvas(0);
-    show_file_browser_line(0, b"DESTRUCTIVE LFS TEST", true);
-    if success {
-        show_file_browser_line(5, b"LITTLEFS METADATA ERASED", false);
-        show_file_browser_line(7, b"DHARA JOURNAL UNCHANGED", false);
-        show_file_browser_line(27, b"RESET BOARD TO TEST RECOVERY", false);
-    } else {
-        show_file_browser_line(5, b"METADATA ERASE FAILED", false);
-        show_file_browser_line(7, b"CHECK NAND / DHARA STATUS", false);
-        show_file_browser_line(27, b"RESET BOARD", false);
-    }
-}
