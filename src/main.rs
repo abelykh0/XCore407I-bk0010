@@ -303,8 +303,22 @@ fn main() -> ! {
                     browser_open = false;
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
                     let message: &[u8] = match error {
-                        xcore407i_blinker::nand_fs::FsAccessError::Init(_) =>
-                            b"NAND INIT FAILED",
+                        xcore407i_blinker::nand_fs::FsAccessError::Init(error) => {
+                            match error {
+                                xcore407i_blinker::nand_fs::InitError::Timeout =>
+                                    b"NAND TIMEOUT",
+                                xcore407i_blinker::nand_fs::InitError::WrongDevice =>
+                                    b"NAND WRONG DEVICE",
+                                xcore407i_blinker::nand_fs::InitError::MarkerRead =>
+                                    b"NAND MARKER READ",
+                                xcore407i_blinker::nand_fs::InitError::TooManyBadBlocks =>
+                                    b"NAND TOO MANY BAD",
+                                xcore407i_blinker::nand_fs::InitError::MetadataFailure =>
+                                    b"NAND MAP META FAIL",
+                                xcore407i_blinker::nand_fs::InitError::MountFailed =>
+                                    b"NAND INIT MOUNT FAIL",
+                            }
+                        },
                         xcore407i_blinker::nand_fs::FsAccessError::NotMountable =>
                             b"LFS NOT MOUNTABLE",
                         xcore407i_blinker::nand_fs::FsAccessError::Mount =>
