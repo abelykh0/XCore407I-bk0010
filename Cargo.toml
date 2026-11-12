@@ -11,6 +11,7 @@ glob = "0.3"
 [features]
 default = []
 cpu-cycle-diag = []
+nand-ecc-test = []
 
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
