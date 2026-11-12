@@ -78,6 +78,33 @@ fn block_is_bad(block: u32) -> Result<bool, ()> {
     Ok(marker[0] != 0xFF)
 }
 
+fn program_bad_marker(page: u32) -> bool {
+    // K9F1G08U0E grown-bad marker: spare-area byte zero.
+    nand_fs::command(0x80);
+    nand_fs::address(0);
+    nand_fs::address((PAGE_SIZE >> 8) as u8);
+    nand_fs::address(page as u8);
+    nand_fs::address((page >> 8) as u8);
+    cortex_m::asm::delay(1_000);
+    nand_fs::write_data(0x00);
+    nand_fs::command(0x10);
+    if !nand_fs::wait_ready_rb() {
+        return false;
+    }
+    nand_fs::command(0x70);
+    nand_fs::read_data() & 0x01 == 0
+}
+
+fn mark_block_bad(block: u32) -> bool {
+    if block >= PHYSICAL_BLOCKS {
+        return false;
+    }
+    let first = block * PAGES_PER_BLOCK;
+    let first_ok = program_bad_marker(first);
+    let second_ok = program_bad_marker(first + 1);
+    first_ok || second_ok
+}
+
 unsafe fn set_error(error: *mut i32, value: i32) {
     if !error.is_null() {
         unsafe { *error = value; }
