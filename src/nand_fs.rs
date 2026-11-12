@@ -258,7 +258,8 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
 
 fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     ECC_DIAG_STAGE.store(0, Ordering::Relaxed);
-    ECC_DIAG_CHUNK.store(0, Ordering::Relaxed);
+    // Chunk 9 means no nonzero syndrome has been observed yet.
+    ECC_DIAG_CHUNK.store(9, Ordering::Relaxed);
     ECC_DIAG_SYNDROME.store(0, Ordering::Relaxed);
     if out.len() != PAGE_SIZE {
         ECC_DIAG_STAGE.store(5, Ordering::Relaxed); // Invalid output buffer size
@@ -318,10 +319,13 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             calculated[offset + 2],
             0,
         ]);
-        // Preserve the raw 24-bit syndrome for the startup self-test. This
-        // lets us distinguish ECC-generation/layout problems from decoding.
-        ECC_DIAG_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
-        ECC_DIAG_SYNDROME.store(stored_ecc ^ calculated_ecc, Ordering::Relaxed);
+        // Keep the first nonzero syndrome; later clean chunks must not
+        // overwrite the diagnostic for the corrupted chunk.
+        let syndrome = stored_ecc ^ calculated_ecc;
+        if syndrome != 0 && ECC_DIAG_CHUNK.load(Ordering::Relaxed) == 9 {
+            ECC_DIAG_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
+            ECC_DIAG_SYNDROME.store(syndrome, Ordering::Relaxed);
+        }
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
             ECC_DIAG_STAGE.store(10, Ordering::Relaxed);
             return false;
