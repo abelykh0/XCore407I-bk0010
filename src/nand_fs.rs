@@ -6,8 +6,9 @@
 //!
 //! New page writes store the STM32 FSMC's 512-byte Hamming ECC values in the
 //! spare area. Reads verify ECC-tagged pages and retain compatibility with
-//! legacy pages that have no ECC tag. This stage detects corruption but does
-//! not yet correct bit errors or remap grown-bad blocks.
+//! legacy pages that have no ECC tag. Reads correct single-bit errors in tagged pages and reject uncorrectable
+//! syndromes. Corrected data is returned in RAM; NAND pages are not scrubbed
+//! yet, and grown-bad blocks are not remapped.
 
 use core::ptr::{read_volatile, write_volatile};
 use stm32f4::stm32f407 as pac;
@@ -481,7 +482,7 @@ pub fn with_mounted_report<R>(
             8,
         );
         append(&mut report, &mut len, b" bytes\r\n");
-        append(&mut report, &mut len, b"ECC: tagged-page verification only (no correction)\r\n");
+        append(&mut report, &mut len, b"ECC: single-bit correction; uncorrectable errors rejected\r\n");
         service(fs, &report, len)
     })
     .map_err(|_| InitError::MountFailed)
@@ -544,7 +545,7 @@ pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
             append(&mut report, &mut len, b" bytes\r\nFree: ");
             append_hex(&mut report, &mut len, free as u32, 8);
             append(&mut report, &mut len, b" bytes\r\n");
-            append(&mut report, &mut len, b"ECC: tagged-page verification only (no correction)\r\n");
+            append(&mut report, &mut len, b"ECC: single-bit correction; uncorrectable errors rejected\r\n");
         }
         Err(_) => append(&mut report, &mut len, b"ERROR: mount failed; NAND unchanged\r\n"),
     }
