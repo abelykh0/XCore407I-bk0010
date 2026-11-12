@@ -299,10 +299,20 @@ fn main() -> ! {
                         browser_selected,
                     );
                 }
-                Err(()) => {
+                Err(error) => {
                     browser_open = false;
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
-                    show_usb_status(b"NAND FILE LIST FAILED");
+                    let message: &[u8] = match error {
+                        xcore407i_blinker::nand_fs::FsAccessError::Init(_) =>
+                            b"NAND INIT FAILED",
+                        xcore407i_blinker::nand_fs::FsAccessError::NotMountable =>
+                            b"LFS NOT MOUNTABLE",
+                        xcore407i_blinker::nand_fs::FsAccessError::Mount =>
+                            b"LFS MOUNT FAILED",
+                        xcore407i_blinker::nand_fs::FsAccessError::Operation =>
+                            b"LFS ROOT READ FAILED",
+                    };
+                    show_usb_status(message);
                 }
             }
         }
