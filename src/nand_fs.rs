@@ -38,10 +38,10 @@ const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
-const RB_MASK: u32 = 1 << 6;
-const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
-const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
-const DATA: *mut u8 = NAND_BASE as *mut u8;
+pub(crate) const RB_MASK: u32 = 1 << 6;
+pub(crate) const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
+pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
+pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
 
 pub const PAGE_SIZE: usize = 2048;
@@ -140,10 +140,10 @@ pub enum InitError {
     MountFailed,
 }
 
-fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
-fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
-fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
-fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
+pub(crate) fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
+pub(crate) fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
+pub(crate) fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
+pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
 /// Prepare the FSMC ECC engine for one 512-byte data chunk.
 fn ecc_begin_chunk() {
@@ -169,7 +169,7 @@ fn ecc_end_chunk() -> u32 {
     }
 }
 
-fn wait_ready_status() -> bool {
+pub(crate) fn wait_ready_status() -> bool {
     for _ in 0..TIMEOUT {
         command(0x70);
         if read_data() & 0x40 != 0 { return true; }
@@ -178,7 +178,7 @@ fn wait_ready_status() -> bool {
     false
 }
 
-fn wait_ready_rb() -> bool {
+pub(crate) fn wait_ready_rb() -> bool {
     let mut busy_seen = false;
     for _ in 0..TIMEOUT {
         let ready = unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0;
@@ -192,7 +192,7 @@ fn wait_ready_rb() -> bool {
     false
 }
 
-fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
+pub(crate) fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
     if out.is_empty() || column as usize + out.len() > PAGE_SIZE + SPARE_SIZE {
         return false;
     }
@@ -207,7 +207,7 @@ fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
     true
 }
 
-fn erase_physical_block(block: u16) -> bool {
+pub(crate) fn erase_physical_block(block: u16) -> bool {
     let first_page = block as u32 * PAGES_PER_BLOCK;
     command(0x60);
     address(first_page as u8);
@@ -231,7 +231,7 @@ fn encode_ecc(ecc: u32, out: &mut [u8]) {
     out[2] = (ecc >> 16) as u8;
 }
 
-fn program_physical_page(page: u32, data: &[u8]) -> bool {
+pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
 
     command(0x80);
@@ -314,7 +314,7 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     true
 }
 
-fn read_data_page(page: u32, out: &mut [u8]) -> bool {
+pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE {
         return false;
     }
@@ -714,7 +714,7 @@ fn write_initial_mapping(
     validate_mapping_record(page, &[u16::MAX; 2]) == Some(generation)
 }
 
-fn configure_fsmc() {
+pub(crate) fn configure_fsmc() {
     unsafe {
         let rcc = &*pac::RCC::ptr();
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
