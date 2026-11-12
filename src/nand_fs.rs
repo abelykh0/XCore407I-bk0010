@@ -102,6 +102,9 @@ static DHARA_READ_OK: AtomicU32 = AtomicU32::new(u32::MAX);
 #[cfg(feature = "dhara-eval")]
 static DHARA_FIRST_PAGE_FREE: AtomicU32 = AtomicU32::new(u32::MAX);
 
+#[cfg(feature = "dhara-eval")]
+static DHARA_ERASE_STATUS: AtomicU32 = AtomicU32::new(u32::MAX);
+
 const MAP_METADATA_MAGIC: [u8; 8] = *b"XCMAP001";
 const MAP_METADATA_VERSION: u16 = 1;
 const MAP_METADATA_HEADER_SIZE: usize = 20;
@@ -518,6 +521,60 @@ pub fn verify_dhara_read_only_callbacks() -> Option<(usize, usize)> {
     DHARA_READ_OK.store(read_ok as u32, Ordering::Relaxed);
     DHARA_FIRST_PAGE_FREE.store(first_page_free as u32, Ordering::Relaxed);
     Some((read_ok, first_page_free))
+}
+
+/// Destructively erase and verify every block in the isolated Dhara list.
+—
+/// This is compiled only with dhara-eval-erase-spares. Remove that feature
+/// after one successful provisioning boot; leaving it enabled repeats erasure
+/// on every reset. No LittleFS or mapping-metadata block is addressable here.
+#[cfg(feature = "dhara-eval-erase-spares")]
+pub fn erase_dhara_spare_blocks_once() -> bool {
+    let context = unsafe { core::ptr::addr_of!(DHARA_NAND_CONTEXT) };
+    let count = unsafe { (*context).block_count as usize };
+    if count != DHARA_TEST_MAX_BLOCKS {
+        DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
+        return false;
+    }
+
+    configure_fsmc();
+    command(0xFF);
+    if !wait_ready_status() {
+        DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
+        return false;
+    }
+
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_PAGE_SCRATCH) };
+    for index in 0..count {
+        let block = unsafe { (*context).physical_blocks[index] };
+        if block == u16::MAX || !erase_physical_block(block) {
+            DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
+            return false;
+        }
+
+        // Verify every data and OOB byte in all 64 pages, not just page zero.
+        for page_in_block in 0..PAGES_PER_BLOCK {
+            let physical_page = block as u32 * PAGES_PER_BLOCK + page_in_block;
+            if !read_page(physical_page, 0, scratch)
+                || scratch.iter().any(|&byte| byte != 0xFF)
+            {
+                DHARA_ERASE_STATUS.store(0, Ordering::Relaxed);
+                return false;
+            }
+        }
+    }
+
+    DHARA_ERASE_STATUS.store(1, Ordering::Relaxed);
+    true
+}
+
+#[cfg(feature = "dhara-eval")]
+pub fn dhara_erase_status_cached() -> Option<bool> {
+    match DHARA_ERASE_STATUS.load(Ordering::Relaxed) {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
 }
 
 #[cfg(feature = "dhara-eval")]
