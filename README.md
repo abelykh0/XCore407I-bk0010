@@ -75,13 +75,17 @@ This operation formats **only the existing LittleFS volume**. It does not
 initialize or format raw NAND, create a Dhara journal, or recover a missing
 Dhara volume.
 
-The firmware expects the NAND to have already been provisioned for this
-Dhara-backed layout. On NAND containing arbitrary data, or on a new/unprepared
-device, Dhara initialization will normally fail with `DHARA JOURNAL MISSING`
-because the expected journal and private volume marker are absent or invalid.
-The firmware fails safely and does not automatically erase or provision that
-NAND. Initial Dhara provisioning must be performed separately before the
-LittleFS format option can be used.
+On a new or unprovisioned NAND, opening the file browser detects the
+missing Dhara journal and offers a separate two-step **NAND initialization**
+confirmation. Confirming it erases every usable physical NAND block (factory
+bad blocks are preserved), creates a fresh Dhara journal and private volume
+marker, then formats and verifies an empty LittleFS volume. This destroys all
+pre-existing data on the NAND and must only be used when that data can be lost.
+
+The initialization prompt is not automatic: declining it leaves NAND
+unchanged. A valid existing Dhara journal and marker are resumed normally;
+they are never reinitialized just because LittleFS is corrupt. In that case,
+use the separate LittleFS-only format confirmation above.
 
 ## Commands to Build and Flash
 
