@@ -78,9 +78,7 @@ fn main() {
 
     // Compile upstream Dhara only when explicitly requested. The optional
     // LittleFS adapter is linked into the same archive as the Dhara core.
-    if env::var_os("CARGO_FEATURE_DHARA_EVAL").is_some()
-        || env::var_os("CARGO_FEATURE_DHARA_LITTLEFS").is_some()
-    {
+    if env::var_os("CARGO_FEATURE_DHARA_LITTLEFS").is_some() {
         let mut dhara = Build::new();
         dhara
             .target(&target)
