@@ -286,19 +286,6 @@ fn main() -> ! {
             }
         }
 
-        // Freeze PDP execution while any modal UI owns input. Rebase the
-        // pacing clock on both entry and exit so the emulator never tries to
-        // catch up for time spent in the file chooser or format recovery UI.
-        let emulator_paused = browser_open
-            || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
-            || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
-            || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE;
-        if emulator_paused != emulator_was_paused {
-            pacing_start_ms = TICKS.load(Ordering::Relaxed);
-            pacing_start_cycles = unsafe { bk_timing_cycles() };
-            emulator_was_paused = emulator_paused;
-        }
-
         match SAVE_DIALOG_RESULT.swap(0, Ordering::AcqRel) {
             SAVE_RESULT_CANCELLED => {
                 clear_demo_canvas(0x10);
@@ -415,6 +402,19 @@ fn main() -> ! {
                     browser_selected,
                 );
             }
+        }
+
+        // Freeze PDP execution while any modal UI owns input. Rebase the
+        // pacing clock on both entry and exit so the emulator never tries to
+        // catch up for time spent in the file chooser or format recovery UI.
+        let emulator_paused = browser_open
+            || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
+            || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
+            || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE;
+        if emulator_paused != emulator_was_paused {
+            pacing_start_ms = TICKS.load(Ordering::Relaxed);
+            pacing_start_cycles = unsafe { bk_timing_cycles() };
+            emulator_was_paused = emulator_paused;
         }
 
         // Replenish USB video buffers before emulator work. The producer
