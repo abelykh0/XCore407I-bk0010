@@ -186,6 +186,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     // AZBK modifier keys are only forwarded while the emulator owns input.
     let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
         || FORMAT_STATE.load(Ordering::Acquire) != 0
+        || INIT_STATE.load(Ordering::Acquire) != 0
         || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
 ;
     if !keyboard_captured && control_pressed {
