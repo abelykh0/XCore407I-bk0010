@@ -1172,15 +1172,39 @@ impl Storage for NandStorage {
 /// NAND initialization and all filesystem operations run in the caller's
 /// context (never in the USB polling ISR). This is deliberately mount-only:
 /// it never formats or erases the NAND.
+/// Failure stage for a read/write operation on the existing LittleFS volume.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FsAccessError {
+    Init(InitError),
+    NotMountable,
+    Mount,
+    Operation,
+}
+
+/// Mount the existing volume and preserve whether failure occurred during
+/// NAND initialization, mount, or the caller's filesystem operation.
+/// This function never formats or modifies NAND by itself.
+pub fn with_mounted_detailed<R>(
+    service: impl FnOnce(&Filesystem<'_, NandStorage>) -> LfsResult<R>,
+) -> Result<R, FsAccessError> {
+    let mut storage = NandStorage::new().map_err(FsAccessError::Init)?;
+    if !Filesystem::<NandStorage>::is_mountable(&mut storage) {
+        return Err(FsAccessError::NotMountable);
+    }
+
+    // Nest the service result so an error returned by the caller is not
+    // confused with an error returned while mounting LittleFS.
+    let mounted = Filesystem::<NandStorage>::mount_and_then(&mut storage, |fs| {
+        Ok(service(fs))
+    }).map_err(|_| FsAccessError::Mount)?;
+    mounted.map_err(|_| FsAccessError::Operation)
+}
+
+/// Compatibility wrapper for existing callers that only need success/failure.
 pub fn with_mounted<R>(
     service: impl FnOnce(&Filesystem<'_, NandStorage>) -> LfsResult<R>,
 ) -> Result<R, InitError> {
-    let mut storage = NandStorage::new()?;
-    if !Filesystem::<NandStorage>::is_mountable(&mut storage) {
-        return Err(InitError::MountFailed);
-    }
-    Filesystem::<NandStorage>::mount_and_then(&mut storage, service)
-        .map_err(|_| InitError::MountFailed)
+    with_mounted_detailed(service).map_err(|_| InitError::MountFailed)
 }
 
 /// Mount the existing volume once, publish its diagnostic report, and keep
