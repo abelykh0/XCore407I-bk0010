@@ -170,9 +170,10 @@ fn main() -> ! {
             Err(E::NoReservedGoodBlock) => 2,
             Err(E::EraseFailed) => 3,
             Err(E::ProgramFailed) => 4,
-            Err(E::SingleBitCorrectionFailed) => 5,
-            Err(E::DoubleBitDetectionFailed) => 6,
-            Err(E::CleanupFailed) => 7,
+            Err(E::SingleBitReadRejected) => 5,
+            Err(E::SingleBitDataMismatch) => 6,
+            Err(E::DoubleBitDetectionFailed) => 7,
+            Err(E::CleanupFailed) => 8,
         }
     } else {
         0
@@ -378,9 +379,10 @@ fn main() -> ! {
                     2 => b"NAND ECC: NO SPARE BLOCK",
                     3 => b"NAND ECC: ERASE FAILED",
                     4 => b"NAND ECC: PROGRAM FAILED",
-                    5 => b"NAND ECC: 1-BIT FIX FAILED",
-                    6 => b"NAND ECC: 2-BIT CHECK FAILED",
-                    7 => b"NAND ECC: CLEANUP FAILED",
+                    5 => b"NAND ECC: 1-BIT READ REJECTED",
+                    6 => b"NAND ECC: 1-BIT DATA WRONG",
+                    7 => b"NAND ECC: 2-BIT CHECK FAILED",
+                    8 => b"NAND ECC: CLEANUP FAILED",
                     _ => b"NAND ECC: NOT RUN",
                 };
                 xcore407i_blinker::camera::show_file_browser_line(29, ecc_line, false);
