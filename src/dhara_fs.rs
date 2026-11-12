@@ -410,17 +410,3 @@ impl Storage for DharaStorage {
     }
 }
 
-
-/// Destructive test hook: remove only LittleFS's two initial metadata blocks.
-///
-/// This uses Dhara logical sectors, never raw physical NAND addresses. The
-/// Dhara journal and the private volume-marker sector are outside this range.
-/// The function is compiled only with the destructive-lfs-test feature.
-#[cfg(feature = "destructive-lfs-test")]
-pub fn corrupt_littlefs_metadata_for_test() -> Result<(), crate::nand_fs::InitError> {
-    let mut storage = DharaStorage::new()?;
-    storage
-        .erase(0, 2 * ERASE_BLOCK_SIZE)
-        .map_err(|_| crate::nand_fs::InitError::MountFailed)?;
-    Ok(())
-}
