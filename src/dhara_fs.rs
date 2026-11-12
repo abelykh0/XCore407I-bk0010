@@ -101,7 +101,9 @@ fn mark_block_bad(block: u32) -> bool {
         return false;
     }
     let first = block * PAGES_PER_BLOCK;
-    program_bad_marker(first) && program_bad_marker(first + 1)
+    let first_ok = program_bad_marker(first);
+    let second_ok = program_bad_marker(first + 1);
+    first_ok || second_ok
 }
 
 fn erase_all_good_blocks() -> Result<u16, crate::nand_fs::InitError> {
