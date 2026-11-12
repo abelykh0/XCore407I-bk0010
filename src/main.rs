@@ -15,6 +15,8 @@ use panic_halt as _;
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, Nv12DemoImage};
+#[cfg(feature = "dhara-eval")]
+use xcore407i_blinker::camera::show_dhara_spare_inventory;
 #[cfg(feature = "cpu-cycle-diag")]
 use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
@@ -169,6 +171,8 @@ fn main() -> ! {
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
     let mut save_dialog_was_active = false;
+    #[cfg(feature = "dhara-eval")]
+    let mut dhara_diag_last_ms = TICKS.load(Ordering::Relaxed).wrapping_sub(1_000);
     #[cfg(feature = "cpu-cycle-diag")]
     let mut diagnostic_last_dwt = read_dwt_cycle_count();
     #[cfg(feature = "cpu-cycle-diag")]
@@ -357,6 +361,17 @@ fn main() -> ! {
                 show_pdp_cycles_per_second(pdp_cycles_per_second);
                 diagnostic_last_dwt = now_dwt;
                 diagnostic_last_pdp = now_pdp;
+            }
+        }
+
+        #[cfg(feature = "dhara-eval")]
+        {
+            let now = TICKS.load(Ordering::Relaxed);
+            if now.wrapping_sub(dhara_diag_last_ms) >= 1_000 {
+                show_dhara_spare_inventory(
+                    xcore407i_blinker::nand_fs::dhara_test_block_count_cached(),
+                );
+                dhara_diag_last_ms = now;
             }
         }
 

@@ -13,6 +13,8 @@
 //! yet, and grown-bad blocks are not remapped.
 
 use core::ptr::{read_volatile, write_volatile};
+#[cfg(feature = "dhara-eval")]
+use core::sync::atomic::{AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -62,6 +64,9 @@ static mut PHYSICAL_BLOCK_MAP: [u16; LOGICAL_BLOCKS] = [0; LOGICAL_BLOCKS];
 // A complete mapping record fits in one NAND data page. Keep one scratch page
 // in static RAM so NAND initialization does not consume 2 KiB of stack.
 static mut MAP_METADATA_PAGE: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
+
+#[cfg(feature = "dhara-eval")]
+static DHARA_TEST_BLOCK_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 const MAP_METADATA_MAGIC: [u8; 8] = *b"XCMAP001";
 const MAP_METADATA_VERSION: u16 = 1;
@@ -564,6 +569,9 @@ impl NandStorage {
             return Err(InitError::TooManyBadBlocks);
         }
 
+        #[cfg(feature = "dhara-eval")]
+        DHARA_TEST_BLOCK_COUNT.store(storage.dhara_test_block_count as u32, Ordering::Relaxed);
+
         // Prefer the newest valid snapshot. Generation comparison uses
         // wrapping arithmetic so rollover does not make an older copy win.
         let generation0 = read_mapping_record(storage.metadata_blocks[0], &storage.metadata_blocks);
@@ -609,6 +617,14 @@ impl NandStorage {
     #[cfg(feature = "dhara-eval")]
     pub fn dhara_test_capacity_bytes(&self) -> usize {
         self.dhara_test_block_count * ERASE_BLOCK_SIZE
+    }
+
+    /// Cached spare-block count from the most recent NAND inventory scan.
+    /// None means NAND has not yet been initialized during this boot.
+    #[cfg(feature = "dhara-eval")]
+    pub fn dhara_test_block_count_cached() -> Option<usize> {
+        let count = DHARA_TEST_BLOCK_COUNT.load(Ordering::Relaxed);
+        (count != u32::MAX).then_some(count as usize)
     }
 
     fn physical_block(&self, logical: usize) -> Option<u16> {
