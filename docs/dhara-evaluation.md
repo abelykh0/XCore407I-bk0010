@@ -13,8 +13,15 @@ Do not call `dhara_map_resume()`, `dhara_map_clear()`, or any write/erase
 operation against the board's current NAND volume during this evaluation.
 Dhara uses its own on-flash journal format. It cannot adopt the existing raw
 LittleFS block layout; a future migration would require an explicit backup and
-restore procedure. For now, keep the current LittleFS volume and test Dhara
-only against a simulator or a separately designated test NAND.
+restore procedure.
+
+The firmware now records the factory-good physical blocks remaining after
+LittleFS's 1,008-block mapping and the two mapping-metadata blocks. Under
+`dhara-eval`, `NandStorage::dhara_test_blocks()` exposes only this isolated
+tail region. The list is read-only inventory at this stage: Dhara is not yet
+connected, and no blocks in this region are erased or programmed by the new
+code. The region contains at most 14 blocks (1.75 MiB); factory-bad blocks
+reduce that count.
 
 ## Hardware fit
 
