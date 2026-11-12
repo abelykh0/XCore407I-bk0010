@@ -13,7 +13,6 @@ use core::slice;
 use littlefs2::{
     consts::{U2048, U32},
     driver::Storage,
-    fs::Filesystem,
     io::{Error as LfsError, Result as LfsResult},
 };
 
@@ -77,77 +76,6 @@ fn block_is_bad(block: u32) -> Result<bool, ()> {
         return Err(());
     }
     Ok(marker[0] != 0xFF)
-}
-
-fn program_bad_marker(page: u32) -> bool {
-    // K9F1G08U0E factory/grown-bad marker: spare-area byte zero.
-    nand_fs::command(0x80);
-    nand_fs::address(0);
-    nand_fs::address((PAGE_SIZE >> 8) as u8);
-    nand_fs::address(page as u8);
-    nand_fs::address((page >> 8) as u8);
-    cortex_m::asm::delay(1_000);
-    nand_fs::write_data(0x00);
-    nand_fs::command(0x10);
-    if !nand_fs::wait_ready_rb() {
-        return false;
-    }
-    nand_fs::command(0x70);
-    nand_fs::read_data() & 0x01 == 0
-}
-
-fn mark_block_bad(block: u32) -> bool {
-    if block >= PHYSICAL_BLOCKS {
-        return false;
-    }
-    let first = block * PAGES_PER_BLOCK;
-    let first_ok = program_bad_marker(first);
-    let second_ok = program_bad_marker(first + 1);
-    first_ok || second_ok
-}
-
-fn mark_bad_and_verify(block: u32) -> bool {
-    mark_block_bad(block) && matches!(block_is_bad(block), Ok(true))
-}
-
-fn erase_all_good_blocks() -> Result<u16, crate::nand_fs::InitError> {
-    let mut bad_blocks = 0u16;
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
-
-    for block in 0..PHYSICAL_BLOCKS {
-        match block_is_bad(block) {
-            Ok(true) => {
-                bad_blocks = bad_blocks.saturating_add(1);
-                continue;
-            }
-            Ok(false) => {}
-            Err(()) => return Err(crate::nand_fs::InitError::MarkerRead),
-        }
-
-        if !nand_fs::erase_physical_block(block as u16) {
-            if !mark_bad_and_verify(block) {
-                return Err(crate::nand_fs::InitError::DharaErase);
-            }
-            bad_blocks = bad_blocks.saturating_add(1);
-            continue;
-        }
-
-        // Verify both ends of each erased block, including OOB/ECC bytes.
-        for page_in_block in [0, PAGES_PER_BLOCK - 1] {
-            let page = block * PAGES_PER_BLOCK + page_in_block;
-            if !nand_fs::read_page(page, 0, scratch)
-                || scratch.iter().any(|&byte| byte != 0xFF)
-            {
-                if !mark_block_bad(block) {
-                    return Err(crate::nand_fs::InitError::DharaErase);
-                }
-                bad_blocks = bad_blocks.saturating_add(1);
-                break;
-            }
-        }
-    }
-
-    Ok(bad_blocks)
 }
 
 unsafe fn set_error(error: *mut i32, value: i32) {
@@ -343,30 +271,8 @@ impl DharaStorage {
         }
 
         if !resumed {
-            #[cfg(feature = "dhara-format-nand")]
-            {
-                bad_blocks = erase_all_good_blocks()?;
-                unsafe { xcore_dhara_map_init(); }
-
-                let marker = unsafe { &mut *core::ptr::addr_of_mut!(VOLUME_MARKER_BUFFER) };
-                marker.fill(0xFF);
-                marker[..VOLUME_MARKER.len()].copy_from_slice(VOLUME_MARKER);
-                let mut error = 0i32;
-                if unsafe {
-                    xcore_dhara_map_write(
-                        VOLUME_MARKER_SECTOR,
-                        marker.as_ptr(),
-                        &mut error,
-                    )
-                } != 0 || unsafe { xcore_dhara_map_sync(&mut error) } != 0 {
-                    return Err(crate::nand_fs::InitError::DharaFormat);
-                }
-            }
-            #[cfg(not(feature = "dhara-format-nand"))]
-            {
-                let _ = dhara_error;
-                return Err(crate::nand_fs::InitError::DharaNoJournal);
-            }
+            let _ = dhara_error;
+            return Err(crate::nand_fs::InitError::DharaNoJournal);
         } else {
             for block in 0..PHYSICAL_BLOCKS {
                 match block_is_bad(block) {
@@ -385,20 +291,6 @@ impl DharaStorage {
         }
 
         let mut storage = Self { factory_bad_blocks: bad_blocks };
-
-        // This feature is explicitly destructive. On an uninitialized device,
-        // the failed journal resume above caused a full erase and a fresh map.
-        // If a valid Dhara journal exists but LittleFS is absent, format only
-        // the Dhara logical volume; never erase the physical NAND again.
-        #[cfg(feature = "dhara-format-nand")]
-        if !Filesystem::<Self>::is_mountable(&mut storage) {
-            Filesystem::<Self>::format(&mut storage)
-                .map_err(|_| crate::nand_fs::InitError::DharaFormat)?;
-            let mut error = 0i32;
-            if unsafe { xcore_dhara_map_sync(&mut error) } != 0 {
-                return Err(crate::nand_fs::InitError::DharaFormat);
-            }
-        }
 
         Ok(storage)
     }
