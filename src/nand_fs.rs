@@ -21,6 +21,14 @@ use littlefs2::{
 const FSMC_BASE: usize = 0xA000_0000;
 const NAND_BASE: usize = 0x7000_0000;
 
+// STM32F407 FSMC NAND Bank 2 registers.
+const FSMC_PCR2: *mut u32 = (FSMC_BASE + 0x60) as *mut u32;
+const FSMC_ECCR2: *const u32 = (FSMC_BASE + 0x54) as *const u32;
+const FSMC_PCR_ECCEN: u32 = 1 << 6;
+const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
+const FSMC_ECC_CHUNK_SIZE: usize = 512;
+const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
+
 const RB_MASK: u32 = 1 << 6;
 const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
 const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
@@ -58,6 +66,33 @@ fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
 fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
 fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
 fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
+
+/// Prepare the FSMC ECC engine for one 512-byte data chunk.
+/// Not connected to page I/O until OOB storage and legacy-page handling land.
+#[allow(dead_code)]
+fn ecc_begin_chunk() {
+    unsafe {
+        let pcr = read_volatile(FSMC_PCR2);
+        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
+        write_volatile(
+            FSMC_PCR2,
+            (pcr & !FSMC_PCR_ECCPS_MASK) | (1 << 17) | FSMC_PCR_ECCEN,
+        );
+        let _ = read_volatile(FSMC_PCR2);
+    }
+}
+
+/// Read the 24-bit ECC result and disable the engine before reuse.
+#[allow(dead_code)]
+fn ecc_end_chunk() -> u32 {
+    unsafe {
+        let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
+        let pcr = read_volatile(FSMC_PCR2);
+        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(FSMC_PCR2);
+        ecc
+    }
+}
 
 fn wait_ready_status() -> bool {
     for _ in 0..TIMEOUT {
@@ -129,13 +164,14 @@ fn configure_fsmc() {
         let rcc = &*pac::RCC::ptr();
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
-        let pcr2 = (FSMC_BASE + 0x60) as *mut u32;
+        let pcr2 = FSMC_PCR2;
         let timing = 4 | (8 << 8) | (4 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
         write_volatile((FSMC_BASE + 0x68) as *mut u32, timing);
         write_volatile((FSMC_BASE + 0x6C) as *mut u32, timing);
-        // NAND bank 2, 8-bit bus, NWAIT enabled; ECC remains disabled.
-        let control = (1 << 1) | (1 << 2) | (1 << 3) | (2 << 9) | (2 << 13);
+        // NAND bank 2, 8-bit bus, NWAIT enabled. Configure a 512-byte
+        // ECC chunk size, but leave ECCEN clear until OOB handling is ready.
+        let control = (1 << 1) | (1 << 2) | (1 << 3) | (2 << 9) | (2 << 13) | (1 << 17);
         write_volatile(pcr2, control);
         let _ = read_volatile(pcr2);
     }
@@ -319,7 +355,7 @@ pub fn with_mounted_report<R>(
             8,
         );
         append(&mut report, &mut len, b" bytes\r\n");
-        append(&mut report, &mut len, b"ECC: OFF (raw NAND)\r\n");
+        append(&mut report, &mut len, b"ECC: prepared (not yet applied)\r\n");
         service(fs, &report, len)
     })
     .map_err(|_| InitError::MountFailed)
@@ -382,7 +418,7 @@ pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
             append(&mut report, &mut len, b" bytes\r\nFree: ");
             append_hex(&mut report, &mut len, free as u32, 8);
             append(&mut report, &mut len, b" bytes\r\n");
-            append(&mut report, &mut len, b"ECC: OFF (raw NAND)\r\n");
+            append(&mut report, &mut len, b"ECC: prepared (not yet applied)\r\n");
         }
         Err(_) => append(&mut report, &mut len, b"ERROR: mount failed; NAND unchanged\r\n"),
     }
