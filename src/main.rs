@@ -369,7 +369,7 @@ fn main() -> ! {
             let now = TICKS.load(Ordering::Relaxed);
             if now.wrapping_sub(dhara_diag_last_ms) >= 1_000 {
                 show_dhara_spare_inventory(
-                    xcore407i_blinker::nand_fs::dhara_test_block_count_cached(),
+                    xcore407i_blinker::nand_fs::NandStorage::dhara_test_block_count_cached(),
                 );
                 dhara_diag_last_ms = now;
             }

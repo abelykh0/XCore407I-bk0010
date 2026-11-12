@@ -585,7 +585,7 @@ pub fn show_pdp_cycles_per_second(pdp_cycles_per_second: u32) {
     show_file_browser_line(30, &line[..pos], false);
 }
 
-#[cfg(any(feature = "cpu-cycle-diag", feature = "dhara-eval"))]
+#[cfg(feature = "cpu-cycle-diag")]
 fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
     for &byte in bytes {
         if *pos == out.len() { break; }
