@@ -5,9 +5,14 @@ flash translation layer, as the physical-management layer beneath LittleFS.
 
 ## Safety boundary
 
-The `dhara-eval` Cargo feature currently **only compiles the vendored Dhara
-library**. No Dhara instance is created, no NAND callbacks are connected, and
-no Dhara API is called at runtime. The existing LittleFS path remains active.
+The `dhara-eval` Cargo feature compiles the vendored Dhara library and
+provides a deliberately read-only NAND callback subset: `is_bad`, `read`,
+and `is_free`. At startup, firmware inventories the isolated physical block
+list and exercises those callbacks by reading page zero from each spare block.
+The display reports the number of successful ECC-checked reads and how many
+of those first pages are erased. No Dhara map is initialized or resumed, and
+no program, erase, or bad-block-mark operation is enabled. The existing
+LittleFS path remains active.
 
 Do not call `dhara_map_resume()`, `dhara_map_clear()`, or any write/erase
 operation against the board's current NAND volume during this evaluation.
@@ -21,7 +26,9 @@ LittleFS's 1,008-block mapping and the two mapping-metadata blocks. Under
 tail region. The list is read-only inventory at this stage: Dhara is not yet
 connected, and no blocks in this region are erased or programmed by the new
 code. The region contains at most 14 blocks (1.75 MiB); factory-bad blocks
-reduce that count.
+reduce that count. The callback self-test checks one page per spare block; it
+does not scan every page for stale contents. A reported erased first page is
+not proof that the entire block is erased.
 
 ## Hardware fit
 
