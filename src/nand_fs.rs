@@ -380,15 +380,21 @@ unsafe fn dhara_context_for(nand: *const DharaNand) -> Option<*mut DharaNandCont
 #[cfg(feature = "dhara-eval")]
 unsafe fn dhara_physical_page(nand: *const DharaNand, page: u32) -> Option<u32> {
     let context = unsafe { dhara_context_for(nand)? };
-    let block_index = (page >> 6) as usize;
-    if block_index >= unsafe { (*context).block_count as usize } {
+    let pages_per_block = 1u32.checked_shl(unsafe { (*context).nand.log2_ppb as u32 })?;
+    if pages_per_block != PAGES_PER_BLOCK {
+        return None;
+    }
+    let block_index = (page / pages_per_block) as usize;
+    if block_index >= unsafe { (*context).block_count as usize }
+        || block_index >= unsafe { (*context).nand.num_blocks as usize }
+    {
         return None;
     }
     let physical_block = unsafe { (*context).physical_blocks[block_index] };
     if physical_block == u16::MAX {
         return None;
     }
-    Some(physical_block as u32 * PAGES_PER_BLOCK + (page & 63))
+    Some(physical_block as u32 * pages_per_block + (page % pages_per_block))
 }
 
 #[cfg(feature = "dhara-eval")]
@@ -422,7 +428,16 @@ pub extern "C" fn dhara_nand_read(
     data: *mut u8,
     error: *mut i32,
 ) -> i32 {
-    if offset > PAGE_SIZE || length > PAGE_SIZE - offset || (length != 0 && data.is_null()) {
+    let context = unsafe { dhara_context_for(nand) };
+    let page_size = match context {
+        Some(context) => 1usize << unsafe { (*context).nand.log2_page_size },
+        None => 0,
+    };
+    if page_size != PAGE_SIZE
+        || offset > page_size
+        || length > page_size.saturating_sub(offset)
+        || (length != 0 && data.is_null())
+    {
         unsafe { set_dhara_error(error, 2); }
         return -1;
     }
