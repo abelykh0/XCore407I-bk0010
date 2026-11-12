@@ -389,17 +389,31 @@ fn main() -> ! {
                     || nand_ecc_test_status == 5
                     || nand_ecc_test_status == 6
                 {
-                    let (stage, chunk, syndrome) =
+                    let (stage, chunk, syndrome, stored_ecc, calculated_ecc) =
                         xcore407i_blinker::nand_fs::ecc_diagnostic();
                     let mut detail = [b' '; 32];
-                    detail[..4].copy_from_slice(b"ECC ");
-                    detail[4] = b'S';
-                    detail[5] = b'0' + (stage.min(9) as u8);
-                    detail[7] = b'C';
-                    detail[8] = b'0' + (chunk.min(9) as u8);
+                    detail[..2].copy_from_slice(b"S ");
+                    detail[2] = b'0' + (stage.min(9) as u8);
+                    detail[4] = b'C';
+                    detail[5] = b'0' + (chunk.min(9) as u8);
+                    detail[7] = b'P';
+                    detail[16] = b'R';
+                    for i in 0..6 {
+                        let shift = (5 - i) * 4;
+                        for (value, start) in [(stored_ecc, 8usize), (calculated_ecc, 17usize)] {
+                            let nibble = ((value >> shift) & 0xF) as u8;
+                            detail[start + i] = if nibble < 10 {
+                                b'0' + nibble
+                            } else {
+                                b'A' + nibble - 10
+                            };
+                        }
+                    }
+                    // Keep the syndrome visible at the end of the row.
+                    detail[24] = b'X';
                     for i in 0..6 {
                         let nibble = ((syndrome >> ((5 - i) * 4)) & 0xF) as u8;
-                        detail[10 + i] = if nibble < 10 {
+                        detail[25 + i] = if nibble < 10 {
                             b'0' + nibble
                         } else {
                             b'A' + nibble - 10
