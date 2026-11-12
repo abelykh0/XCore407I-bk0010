@@ -1,16 +1,13 @@
-//! LittleFS block device for the XCore407I Samsung K9F1G08U0E NAND.
+//! Low-level raw NAND driver for the XCore407I Samsung K9F1G08U0E.
 //!
-//! Geometry: 2 KiB data pages, 64 pages per 128 KiB erase block, 1,024
-//! physical blocks. Sixteen good blocks are held in reserve for bad-block
-//! tolerance; LittleFS sees 1,008 logical blocks. Two additional good blocks
-//! hold redundant, CRC-protected physical mapping snapshots.
+//! Dhara is the sole logical storage layer and owns physical block mapping,
+//! bad-block handling, and wear leveling. This module provides the NAND
+//! command, erase, page-program, and page-read primitives used by Dhara.
 //!
-//! New page writes store the STM32 FSMC's 512-byte Hamming ECC values in the
-//! spare area. Reads verify ECC-tagged pages and retain compatibility with
-//! legacy pages that have no ECC tag. Reads correct single-bit errors in
-//! tagged pages and reject uncorrectable syndromes. Corrected data is returned
-//! in RAM; NAND pages are not scrubbed
-//! yet, and grown-bad blocks are not remapped.
+//! Geometry: 2 KiB data pages, 64 pages per 128 KiB erase block, and 1,024
+//! physical blocks. Page programs store the STM32 FSMC's four 512-byte
+//! Hamming ECC values and an ECC tag in the spare area. Reads correct
+//! single-bit data errors and reject uncorrectable ECC syndromes.
 
 use core::ptr::{read_volatile, write_volatile};
 use stm32f4::stm32f407 as pac;
