@@ -539,52 +539,6 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
     }
 }
 
-/// Show the isolated NAND capacity on a fixed diagnostic row.
-/// The value is cached from NandStorage initialization; this routine performs
-/// no NAND access and is safe to call periodically from the main loop.
-#[cfg(feature = "dhara-eval")]
-pub fn show_dhara_spare_inventory(
-    block_count: Option<usize>,
-    read_test: Option<(usize, usize)>,
-    erase_status: Option<bool>,
-) {
-    let mut line = [b' '; 32];
-    let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"DHARA ");
-    match block_count {
-        Some(count) => {
-            append_hex(&mut line, &mut pos, count as u32, 2);
-            if let Some((read_ok, first_page_free)) = read_test {
-                append_bytes(&mut line, &mut pos, b" RD ");
-                append_hex(&mut line, &mut pos, read_ok as u32, 2);
-                append_bytes(&mut line, &mut pos, b"/");
-                append_hex(&mut line, &mut pos, count as u32, 2);
-                append_bytes(&mut line, &mut pos, b" F");
-                append_hex(&mut line, &mut pos, first_page_free as u32, 2);
-            } else {
-                append_bytes(&mut line, &mut pos, b" READ TEST PENDING");
-            }
-            if let Some(success) = erase_status {
-                let status: &[u8] = if success { b" ERASE OK" } else { b" ERASE FAIL" };
-                append_bytes(&mut line, &mut pos, status);
-            }
-        }
-        None => append_bytes(&mut line, &mut pos, b"WAITING FOR NAND"),
-    }
-    show_file_browser_line(29, &line[..pos], false);
-}
-
-#[cfg(feature = "dhara-eval")]
-fn append_hex(out: &mut [u8; 32], pos: &mut usize, value: u32, digits: usize) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for shift in (0..digits).rev() {
-        if *pos == out.len() { break; }
-        let nibble = ((value >> (shift * 4)) & 0xF) as usize;
-        out[*pos] = HEX[nibble];
-        *pos += 1;
-    }
-}
-
 /// Show the measured PDP clock rate over a one-second DWT interval.
 #[cfg(feature = "cpu-cycle-diag")]
 pub fn show_pdp_cycles_per_second(pdp_cycles_per_second: u32) {
@@ -595,7 +549,7 @@ pub fn show_pdp_cycles_per_second(pdp_cycles_per_second: u32) {
     show_file_browser_line(30, &line[..pos], false);
 }
 
-#[cfg(any(feature = "cpu-cycle-diag", feature = "dhara-eval"))]
+#[cfg(feature = "cpu-cycle-diag")]
 fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
     for &byte in bytes {
         if *pos == out.len() { break; }
