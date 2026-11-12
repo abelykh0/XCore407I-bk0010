@@ -14,6 +14,7 @@ cpu-cycle-diag = []
 nand-ecc-test = []
 # Compile the vendored Dhara FTL for evaluation; no NAND access is enabled.
 dhara-eval = []
+dhara-eval-erase-spares = ["dhara-eval"]
 
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
