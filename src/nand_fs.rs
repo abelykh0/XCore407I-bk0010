@@ -58,6 +58,7 @@ pub struct NandStorage {
     good_blocks: usize,
     factory_bad_blocks: u16,
     /// First good block beyond LittleFS capacity, reserved for ECC self-test.
+    #[cfg(feature = "nand-ecc-test")]
     ecc_test_block: Option<u16>,
 }
 
@@ -346,6 +347,7 @@ impl NandStorage {
             physical_blocks,
             good_blocks: 0,
             factory_bad_blocks: 0,
+            #[cfg(feature = "nand-ecc-test")]
             ecc_test_block: None,
         };
         let mut marker = [0u8; 1];
@@ -364,9 +366,13 @@ impl NandStorage {
                 if storage.good_blocks < LOGICAL_BLOCKS {
                     storage.physical_blocks[storage.good_blocks] = block as u16;
                     storage.good_blocks += 1;
-                } else if storage.ecc_test_block.is_none() {
-                    // This block is outside LittleFS's logical address space.
-                    storage.ecc_test_block = Some(block as u16);
+                }
+                #[cfg(feature = "nand-ecc-test")]
+                {
+                    if storage.good_blocks == LOGICAL_BLOCKS && storage.ecc_test_block.is_none() {
+                        // This block is outside LittleFS's logical address space.
+                        storage.ecc_test_block = Some(block as u16);
+                    }
                 }
             } else {
                 storage.factory_bad_blocks += 1;
