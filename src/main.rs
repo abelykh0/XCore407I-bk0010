@@ -167,7 +167,7 @@ fn main() -> ! {
     // Real-time emulator pacing uses the PDP cycle counter.
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
-    let mut save_dialog_was_active = false;
+    let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
     #[cfg(feature = "cpu-cycle-diag")]
     let mut diagnostic_last_dwt = read_dwt_cycle_count();
@@ -286,12 +286,17 @@ fn main() -> ! {
             }
         }
 
-        let save_dialog_active = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
+        // Freeze PDP execution while any modal UI owns input. Rebase the
+        // pacing clock on both entry and exit so the emulator never tries to
+        // catch up for time spent in the file chooser or format recovery UI.
+        let emulator_paused = browser_open
+            || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
+            || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
             || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE;
-        if save_dialog_active != save_dialog_was_active {
+        if emulator_paused != emulator_was_paused {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
             pacing_start_cycles = unsafe { bk_timing_cycles() };
-            save_dialog_was_active = save_dialog_active;
+            emulator_was_paused = emulator_paused;
         }
 
         match SAVE_DIALOG_RESULT.swap(0, Ordering::AcqRel) {
@@ -331,11 +336,11 @@ fn main() -> ! {
                     if matches!(
                         error,
                         xcore407i_blinker::nand_fs::FsAccessError::NotMountable
-                            | xcore407i_blinker::nand_fs::FsAccessError::Mount
+                            | xcore407i_blinker::nand_fs::FsAccessError::Mount(_)
                     ) {
                         let detail = match error {
-                            xcore407i_blinker::nand_fs::FsAccessError::NotMountable => 1,
-                            xcore407i_blinker::nand_fs::FsAccessError::Mount => 2,
+                            xcore407i_blinker::nand_fs::FsAccessError::Mount(code) => code,
+                            xcore407i_blinker::nand_fs::FsAccessError::NotMountable => -84,
                             _ => 0,
                         };
                         FORMAT_ERROR.store(detail, Ordering::Release);
@@ -360,7 +365,7 @@ fn main() -> ! {
                         },
                         xcore407i_blinker::nand_fs::FsAccessError::NotMountable =>
                             b"LFS NOT MOUNTABLE",
-                        xcore407i_blinker::nand_fs::FsAccessError::Mount =>
+                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_) =>
                             b"LFS MOUNT FAILED",
                         xcore407i_blinker::nand_fs::FsAccessError::Operation =>
                             b"LFS ROOT READ FAILED",
@@ -440,10 +445,7 @@ fn main() -> ! {
         // Pace PDP execution against the 1 ms hardware timebase. This keeps
         // the emulated 3 MHz clock aligned with real time in both color and
         // monochrome modes. USB/audio/video servicing continues while ahead.
-        if !browser_open
-            && SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_IDLE
-            && FORMAT_STATE.load(Ordering::Acquire) == FORMAT_IDLE
-        {
+        if !emulator_paused {
             let now_ms = TICKS.load(Ordering::Relaxed);
             let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
             let now_cycles = unsafe { bk_timing_cycles() };
