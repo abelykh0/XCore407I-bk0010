@@ -50,6 +50,13 @@ pub const ERASE_BLOCK_SIZE: usize = PAGE_SIZE * PAGES_PER_BLOCK as usize;
 pub const RESERVED_BLOCKS: usize = 16;
 pub const LOGICAL_BLOCKS: usize = PHYSICAL_BLOCKS as usize - RESERVED_BLOCKS;
 
+ // Shared static buffers retained for the legacy raw-NAND implementation.
+ // Dhara mode does not use the legacy map, but these definitions are required
+ // for builds where that backend remains available.
+ static mut PHYSICAL_BLOCK_MAP: [u16; LOGICAL_BLOCKS] = [0; LOGICAL_BLOCKS];
+ static mut MAP_METADATA_PAGE: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
+
+
 const MAP_METADATA_MAGIC: [u8; 8] = *b"XCMAP001";
 const MAP_METADATA_VERSION: u16 = 1;
 const MAP_METADATA_HEADER_SIZE: usize = 20;
