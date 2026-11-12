@@ -52,6 +52,7 @@ pub enum InitError {
     MountFailed,
     DharaNoJournal,
     DharaCapacity,
+    ProvisionFailed,
 }
 
 pub(crate) fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
@@ -442,10 +443,22 @@ fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
         InitError::MountFailed => b"LittleFS mount failed",
         InitError::DharaNoJournal => b"Dhara journal missing",
         InitError::DharaCapacity => b"Dhara capacity too small",
+        InitError::ProvisionFailed => b"Dhara provisioning failed",
     };
     append(out, len, message);
 }
 
+
+/// Initialize an unprovisioned NAND after explicit user confirmation.
+/// This erases every non-factory-bad physical block, creates a new Dhara
+/// journal and marker, then formats and verifies an empty LittleFS volume.
+pub fn initialize_nand_volume() -> Result<(), InitError> {
+    let mut storage = ActiveStorage::initialize_new_volume()?;
+    Filesystem::<ActiveStorage>::format(&mut storage)
+        .map_err(|_| InitError::MountFailed)?;
+    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
+        .map_err(|_| InitError::MountFailed)
+}
 
 /// Format only the LittleFS logical volume on an already-valid Dhara journal.
 /// DharaStorage::new() verifies NAND identity, resumes Dhara, checks the
