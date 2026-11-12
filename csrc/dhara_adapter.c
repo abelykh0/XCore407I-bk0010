@@ -37,6 +37,25 @@ int xcore_dhara_map_resume(int32_t *error)
 	return ret;
 }
 
+int xcore_dhara_map_provision(uint32_t sector, const uint8_t *data, int32_t *error)
+{
+	dhara_error_t err = DHARA_E_NONE;
+	int ret;
+
+	if (!xcore_initialized || !data) {
+		if (error)
+			*error = DHARA_E_CORRUPT;
+		return -1;
+	}
+
+	ret = dhara_map_write(&xcore_map, sector, data, &err);
+	if (!ret)
+		ret = dhara_map_sync(&xcore_map, &err);
+	if (error)
+		*error = (int32_t)err;
+	return ret;
+}
+
 uint32_t xcore_dhara_map_capacity(void)
 {
 	return xcore_initialized ? dhara_map_capacity(&xcore_map) : 0;
