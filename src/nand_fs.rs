@@ -372,7 +372,7 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
 #[cfg(feature = "dhara-eval")]
 unsafe fn dhara_context_for(nand: *const DharaNand) -> Option<*mut DharaNandContext> {
-    let context = core::ptr::addr_of_mut!(DHARA_NAND_CONTEXT);
+    let context = unsafe { core::ptr::addr_of_mut!(DHARA_NAND_CONTEXT) };
     let expected = unsafe { core::ptr::addr_of!((*context).nand) };
     if nand == expected { Some(context) } else { None }
 }
