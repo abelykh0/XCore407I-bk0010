@@ -68,6 +68,45 @@ static mut MAP_METADATA_PAGE: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
 #[cfg(feature = "dhara-eval")]
 static DHARA_TEST_BLOCK_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 
+#[cfg(feature = "dhara-eval")]
+#[repr(C)]
+struct DharaNand {
+    log2_page_size: u8,
+    log2_ppb: u8,
+    num_blocks: u32,
+}
+
+#[cfg(feature = "dhara-eval")]
+#[repr(C)]
+struct DharaNandContext {
+    nand: DharaNand,
+    block_count: u32,
+    physical_blocks: [u16; DHARA_TEST_MAX_BLOCKS],
+}
+
+#[cfg(feature = "dhara-eval")]
+static mut DHARA_NAND_CONTEXT: DharaNandContext = DharaNandContext {
+    nand: DharaNand { log2_page_size: 11, log2_ppb: 6, num_blocks: 0 },
+    block_count: 0,
+    physical_blocks: [u16::MAX; DHARA_TEST_MAX_BLOCKS],
+};
+
+#[cfg(feature = "dhara-eval")]
+static mut DHARA_READ_SCRATCH: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
+
+#[cfg(feature = "dhara-eval")]
+static mut DHARA_FREE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
+    [0; PAGE_SIZE + SPARE_SIZE];
+
+#[cfg(feature = "dhara-eval")]
+static mut DHARA_VERIFY_SCRATCH: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
+
+#[cfg(feature = "dhara-eval")]
+static DHARA_READ_OK: AtomicU32 = AtomicU32::new(u32::MAX);
+
+#[cfg(feature = "dhara-eval")]
+static DHARA_FIRST_PAGE_FREE: AtomicU32 = AtomicU32::new(u32::MAX);
+
 const MAP_METADATA_MAGIC: [u8; 8] = *b"XCMAP001";
 const MAP_METADATA_VERSION: u16 = 1;
 const MAP_METADATA_HEADER_SIZE: usize = 20;
@@ -335,6 +374,153 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     true
 }
 
+
+#[cfg(feature = "dhara-eval")]
+unsafe fn dhara_context_for(nand: *const DharaNand) -> Option<*mut DharaNandContext> {
+    let context = core::ptr::addr_of_mut!(DHARA_NAND_CONTEXT);
+    let expected = core::ptr::addr_of!((*context).nand);
+    if nand == expected { Some(context) } else { None }
+}
+
+#[cfg(feature = "dhara-eval")]
+unsafe fn dhara_physical_page(nand: *const DharaNand, page: u32) -> Option<u32> {
+    let context = unsafe { dhara_context_for(nand)? };
+    let block_index = (page >> 6) as usize;
+    if block_index >= unsafe { (*context).block_count as usize } {
+        return None;
+    }
+    let physical_block = unsafe { (*context).physical_blocks[block_index] };
+    if physical_block == u16::MAX {
+        return None;
+    }
+    Some(physical_block as u32 * PAGES_PER_BLOCK + (page & 63))
+}
+
+#[cfg(feature = "dhara-eval")]
+unsafe fn set_dhara_error(error: *mut i32, value: i32) {
+    if !error.is_null() {
+        unsafe { *error = value; }
+    }
+}
+
+/// Read-only Dhara callback: every exposed block is a factory-good spare block.
+#[cfg(feature = "dhara-eval")]
+#[unsafe(no_mangle)]
+pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> i32 {
+    let context = unsafe { dhara_context_for(nand) };
+    match context {
+        Some(context) if block < unsafe { (*context).block_count } => 0,
+        _ => 1,
+    }
+}
+
+/// Read-only Dhara callback. The existing STM32 FSMC ECC path validates and
+/// corrects the complete 2 KiB page before the requested slice is returned.
+/// Dhara error values: 0 = none, 1 = bad block, 2 = ECC.
+#[cfg(feature = "dhara-eval")]
+#[unsafe(no_mangle)]
+pub extern "C" fn dhara_nand_read(
+    nand: *const DharaNand,
+    page: u32,
+    offset: usize,
+    length: usize,
+    data: *mut u8,
+    error: *mut i32,
+) -> i32 {
+    if offset > PAGE_SIZE || length > PAGE_SIZE - offset || (length != 0 && data.is_null()) {
+        unsafe { set_dhara_error(error, 2); }
+        return -1;
+    }
+    let physical_page = match unsafe { dhara_physical_page(nand, page) } {
+        Some(page) => page,
+        None => {
+            unsafe { set_dhara_error(error, 1); }
+            return -1;
+        }
+    };
+
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_READ_SCRATCH) };
+    if !read_data_page(physical_page, scratch) {
+        unsafe { set_dhara_error(error, 2); }
+        return -1;
+    }
+    if length != 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(scratch.as_ptr().add(offset), data, length);
+        }
+    }
+    unsafe { set_dhara_error(error, 0); }
+    0
+}
+
+/// Read-only free-page callback. It checks the complete data+OOB page, so a
+/// page with programmed ECC metadata is not mistaken for erased NAND.
+#[cfg(feature = "dhara-eval")]
+#[unsafe(no_mangle)]
+pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> i32 {
+    let physical_page = match unsafe { dhara_physical_page(nand, page) } {
+        Some(page) => page,
+        None => return 0,
+    };
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_FREE_SCRATCH) };
+    if !read_page(physical_page, 0, scratch) {
+        return 0;
+    }
+    if scratch.iter().all(|&byte| byte == 0xFF) { 1 } else { 0 }
+}
+
+/// Verify callback address translation and ECC reads without modifying NAND.
+/// The test reads page zero of each isolated block and separately checks
+/// whether that page is completely erased (including OOB).
+#[cfg(feature = "dhara-eval")]
+pub fn verify_dhara_read_only_callbacks() -> Option<(usize, usize)> {
+    let context = unsafe { core::ptr::addr_of!(DHARA_NAND_CONTEXT) };
+    let nand = unsafe { core::ptr::addr_of!((*context).nand) };
+    let count = unsafe { (*context).block_count as usize };
+    if count == 0 || count > DHARA_TEST_MAX_BLOCKS {
+        return None;
+    }
+
+    let mut read_ok = 0usize;
+    let mut first_page_free = 0usize;
+    let output = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_VERIFY_SCRATCH) };
+
+    for block in 0..count {
+        if dhara_nand_is_bad(nand, block as u32) != 0 {
+            continue;
+        }
+        let mut error = 0i32;
+        let page = (block as u32) << 6;
+        if dhara_nand_read(
+            nand,
+            page,
+            0,
+            PAGE_SIZE,
+            output.as_mut_ptr(),
+            &mut error,
+        ) == 0 {
+            read_ok += 1;
+            if dhara_nand_is_free(nand, page) == 1 {
+                first_page_free += 1;
+            }
+        }
+    }
+
+    DHARA_READ_OK.store(read_ok as u32, Ordering::Relaxed);
+    DHARA_FIRST_PAGE_FREE.store(first_page_free as u32, Ordering::Relaxed);
+    Some((read_ok, first_page_free))
+}
+
+#[cfg(feature = "dhara-eval")]
+pub fn dhara_read_only_test_cached() -> Option<(usize, usize)> {
+    let read_ok = DHARA_READ_OK.load(Ordering::Relaxed);
+    let free = DHARA_FIRST_PAGE_FREE.load(Ordering::Relaxed);
+    if read_ok == u32::MAX || free == u32::MAX {
+        None
+    } else {
+        Some((read_ok as usize, free as usize))
+    }
+}
 
 /// CRC-32/IEEE used to reject incomplete or corrupted mapping records.
 fn mapping_crc32(bytes: &[u8]) -> u32 {
@@ -641,6 +827,7 @@ impl NandStorage {
         let mut good_blocks = 0usize;
         let mut spare_blocks = 0usize;
         let mut marker = [0u8; 1];
+        let dhara_context = unsafe { core::ptr::addr_of_mut!(DHARA_NAND_CONTEXT) };
 
         for block in 0..PHYSICAL_BLOCKS {
             let first = block * PAGES_PER_BLOCK;
@@ -656,6 +843,11 @@ impl NandStorage {
 
             if first_good && second_good {
                 if good_blocks >= LOGICAL_BLOCKS + 2 {
+                    if spare_blocks < DHARA_TEST_MAX_BLOCKS {
+                        unsafe {
+                            (*dhara_context).physical_blocks[spare_blocks] = block as u16;
+                        }
+                    }
                     spare_blocks += 1;
                 }
                 good_blocks += 1;
@@ -667,6 +859,10 @@ impl NandStorage {
         }
 
         DHARA_TEST_BLOCK_COUNT.store(spare_blocks as u32, Ordering::Relaxed);
+        unsafe {
+            (*dhara_context).block_count = spare_blocks as u32;
+            (*dhara_context).nand.num_blocks = spare_blocks as u32;
+        }
         Some(spare_blocks)
     }
 
