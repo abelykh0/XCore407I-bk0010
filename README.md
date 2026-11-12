@@ -31,9 +31,24 @@ read. The value wraps every 49.7 days. RTC resolution is approximately 3.9 ms.
 
 ## Implementation
 
+### Video
+
+The camera image is rendered as uncompressed NV12 and packetized as UVC 1.1.
+Rows are generated incrementally from the emulator's canvas; a complete video
+frame is never buffered in RAM. Two small SRAM buffers decouple rendering in
+the main loop from high-speed USB isochronous transfers. The stream runs at
+25 fps over TinyUSB's high-speed device port.
+
+### Audio
+
+The BK-0010 speaker output is captured as timestamped level transitions from
+the emulator. A main-loop worker converts those edges into 24 kHz, mono,
+signed 16-bit PCM in a ring buffer. TinyUSB's UAC2 isochronous IN path sends
+the already-rendered samples to the host.
+
 ### NAND storage
 
-Dhara is the only raw-NAND backend. It handles physical blocks, bad blocks,
+Dhara is the only raw-NAND backend. It manages physical blocks, bad blocks,
 and wear levelling; STM32 FSMC Hamming ECC protects page data. LittleFS uses
 700 logical erase blocks (87.5 MiB).
 
@@ -46,6 +61,22 @@ with the `destructive-nand-init` feature. It opens a two-step confirmation;
 confirming erases usable NAND blocks, creates a Dhara volume, and formats an
 empty LittleFS filesystem. Factory bad blocks are preserved. All NAND data
 is lost. Without this feature, the shortcut is unavailable.
+
+## Third-party libraries
+
+- **TinyUSB 0.21.0** — USB device and host stack, including UVC transport and
+  UAC2 audio.
+- **Dhara** — raw-NAND flash translation layer.
+- **LittleFS 2** (through `littlefs2` / `littlefs2-sys`) — filesystem.
+- **STM32F4 PAC and HAL** (`stm32f4`, `stm32f4xx-hal`) — STM32F407 register
+  access and hardware abstraction.
+- **Cortex-M support** (`cortex-m`, `cortex-m-rt`) — Cortex-M runtime and
+  interrupt support.
+- **`panic-halt`** — panic handler; **`libm`** — math routines.
+- **CMSIS Core and STM32F4 device headers** — processor and device definitions
+  used when compiling TinyUSB.
+- **Build dependencies:** `cc`, `bindgen`, and `glob` — compile C sources,
+  generate Rust bindings, and enumerate TinyUSB sources.
 
 ## Build and flash
 
