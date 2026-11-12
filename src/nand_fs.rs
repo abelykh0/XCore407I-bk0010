@@ -314,7 +314,7 @@ pub(crate) fn configure_fsmc() {
 pub enum FsAccessError {
     Init(InitError),
     NotMountable,
-    Mount,
+    Mount(i32),
     Operation,
 }
 
@@ -324,15 +324,12 @@ pub fn with_mounted_detailed<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
 ) -> Result<R, FsAccessError> {
     let mut storage = ActiveStorage::new().map_err(FsAccessError::Init)?;
-    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
-        return Err(FsAccessError::NotMountable);
-    }
-
-    // Nest the service result so an error returned by the caller is not
-    // confused with an error returned while mounting LittleFS.
+    // Mount directly rather than using is_mountable(): the latter only
+    // returns a bool and discards LittleFS's actual error code.
+    // Nest the service result so a caller-operation error remains distinct.
     let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
         Ok(service(fs))
-    }).map_err(|_| FsAccessError::Mount)?;
+    }).map_err(|error| FsAccessError::Mount(error.code()))?;
     mounted.map_err(|_| FsAccessError::Operation)
 }
 
