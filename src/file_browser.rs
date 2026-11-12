@@ -15,6 +15,15 @@ pub(crate) const SAVE_DIALOG_WRITE: u8 = 4;
 pub(crate) const SAVE_RESULT_CANCELLED: u8 = 1;
 pub(crate) const SAVE_RESULT_OK: u8 = 2;
 pub(crate) const SAVE_RESULT_ERROR: u8 = 3;
+pub(crate) const FORMAT_IDLE: u8 = 0;
+pub(crate) const FORMAT_CONFIRM: u8 = 1;
+pub(crate) const FORMAT_CONFIRM_FINAL: u8 = 2;
+pub(crate) const FORMAT_REQUEST: u8 = 3;
+pub(crate) const FORMAT_CANCELLED: u8 = 4;
+pub(crate) const FORMAT_DONE: u8 = 5;
+pub(crate) const FORMAT_FAILED: u8 = 6;
+pub(crate) static FORMAT_STATE: AtomicU8 = AtomicU8::new(FORMAT_IDLE);
+pub(crate) static FORMAT_ERROR: AtomicU8 = AtomicU8::new(0);
 pub(crate) const SAVE_RAM_START: usize = 0x0200;
 pub(crate) const SAVE_RAM_LENGTH: usize = 15_872;
 pub(crate) const SAVE_NAME_CAPACITY: usize = 24;
@@ -265,3 +274,25 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
+
+
+/// Display the LittleFS mount failure and the two-step destructive confirmation.
+pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: u8) {
+    clear_demo_canvas(0);
+    show_file_browser_line(0, b"LITTLEFS MOUNT FAILED", true);
+    let detail: &[u8] = match error {
+        1 => b"Filesystem not mountable",
+        2 => b"Mount returned I/O error",
+        _ => b"Unknown mount error",
+    };
+    show_file_browser_line(3, detail, false);
+    if final_confirmation {
+        show_file_browser_line(7, b"ARE YOU REALLY SURE?", true);
+        show_file_browser_line(9, b"ALL LITTLEFS FILES WILL BE LOST", false);
+        show_file_browser_line(27, b"Y FORMAT NOW  N/ESC CANCEL", false);
+    } else {
+        show_file_browser_line(7, b"FORMAT THE LITTLEFS VOLUME?", true);
+        show_file_browser_line(9, b"THIS DELETES ALL FILES", false);
+        show_file_browser_line(27, b"Y CONTINUE  N/ESC CANCEL", false);
+    }
+}
