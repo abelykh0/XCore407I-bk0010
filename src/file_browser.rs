@@ -44,7 +44,7 @@ unsafe extern "C" {
 pub(crate) fn list_root_files(
     paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
     path_lengths: &mut [u16; MAX_BROWSER_FILES],
-) -> Result<usize, ()> {
+) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
     xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
             let mut count = 0usize;
