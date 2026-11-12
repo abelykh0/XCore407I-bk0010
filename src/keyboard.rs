@@ -10,8 +10,6 @@ use crate::file_browser::{
     FORMAT_STATE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL, FORMAT_REQUEST,
     FORMAT_CANCELLED,
 };
-#[cfg(feature = "destructive-lfs-test")]
-use crate::file_browser::{LFS_TEST_ACTIVE, LFS_TEST_REQUEST};
 use crate::usb_host::USB_FS_STATUS;
 use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
 use xcore407i_blinker::camera::request_camera_mode_toggle;
@@ -171,8 +169,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     let control = modifiers & 0x11 != 0;
     let gui = modifiers & 0x88 != 0;
     let control_or_alt = modifiers & 0xdd != 0;
-    #[cfg(feature = "destructive-lfs-test")]
-    let destructive_test_modifiers = control && modifiers & 0x44 != 0;
     let previous_modifiers = unsafe { PREVIOUS_MODIFIERS };
     let control_pressed = control && previous_modifiers & 0x11 == 0;
     let gui_pressed = gui && previous_modifiers & 0x88 == 0;
@@ -190,12 +186,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
         || FORMAT_STATE.load(Ordering::Acquire) != 0
         || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
-        || {
-            #[cfg(feature = "destructive-lfs-test")]
-            { destructive_test_modifiers || LFS_TEST_ACTIVE.load(Ordering::Acquire) }
-            #[cfg(not(feature = "destructive-lfs-test"))]
-            { false }
-        };
+;
     if !keyboard_captured && control_pressed {
         append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
     }
@@ -217,24 +208,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     for &key in current.iter() {
         if key == 0 || previous.contains(&key) {
             continue;
-        }
-
-        #[cfg(feature = "destructive-lfs-test")]
-        {
-            // Ctrl+Alt+F12 deliberately destroys the first two LittleFS
-            // logical metadata blocks. This chord exists only in the test build.
-            if LFS_TEST_ACTIVE.load(Ordering::Acquire) {
-                continue;
-            }
-            if key == 0x45 && control && modifiers & 0x44 != 0
-                && SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_IDLE
-                && FORMAT_STATE.load(Ordering::Acquire) == 0
-                && !FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
-            {
-                LFS_TEST_ACTIVE.store(true, Ordering::Release);
-                LFS_TEST_REQUEST.store(true, Ordering::Release);
-                continue;
-            }
         }
 
         // While the save dialog is active, capture filename editing and
