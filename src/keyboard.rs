@@ -9,6 +9,7 @@ use crate::file_browser::{
     SAVE_DIALOG_DIRTY, SAVE_OVERWRITE,
     FORMAT_STATE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL, FORMAT_REQUEST,
     FORMAT_CANCELLED,
+    INIT_STATE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST, INIT_CANCELLED,
 };
 use crate::usb_host::USB_FS_STATUS;
 use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
@@ -290,6 +291,28 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
                     }
                     Some(b'n') | Some(b'N') => {
                         FORMAT_STATE.store(FORMAT_CANCELLED, Ordering::Release);
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        // First-time NAND provisioning is deliberately destructive and
+        // requires two confirmations. The erase/provision operation runs in main().
+        let init_state = INIT_STATE.load(Ordering::Acquire);
+        if init_state == INIT_CONFIRM || init_state == INIT_CONFIRM_FINAL {
+            match key {
+                0x29 => INIT_STATE.store(INIT_CANCELLED, Ordering::Release),
+                _ => match key_to_ascii(key, shift, false, false, control_or_alt) {
+                    Some(b'y') | Some(b'Y') if init_state == INIT_CONFIRM => {
+                        INIT_STATE.store(INIT_CONFIRM_FINAL, Ordering::Release);
+                    }
+                    Some(b'y') | Some(b'Y') if init_state == INIT_CONFIRM_FINAL => {
+                        INIT_STATE.store(INIT_REQUEST, Ordering::Release);
+                    }
+                    Some(b'n') | Some(b'N') => {
+                        INIT_STATE.store(INIT_CANCELLED, Ordering::Release);
                     }
                     _ => {}
                 }
