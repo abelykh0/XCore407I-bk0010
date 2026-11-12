@@ -37,6 +37,7 @@ struct DharaNand {
 unsafe extern "C" {
     fn xcore_dhara_map_init();
     fn xcore_dhara_map_resume(error: *mut i32) -> c_int;
+    fn xcore_dhara_map_provision(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_capacity() -> u32;
     fn xcore_dhara_map_read(sector: u32, data: *mut u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
@@ -250,6 +251,72 @@ pub struct DharaStorage {
 }
 
 impl DharaStorage {
+    /// Destructively provision a blank logical Dhara volume on raw NAND.
+    /// The caller must obtain explicit confirmation before invoking this.
+    pub fn initialize_new_volume() -> Result<Self, crate::nand_fs::InitError> {
+        nand_fs::configure_fsmc();
+        nand_fs::command(0xFF);
+        if !nand_fs::wait_ready_status() {
+            return Err(crate::nand_fs::InitError::Timeout);
+        }
+
+        nand_fs::command(0x90);
+        nand_fs::address(0);
+        let id = [
+            nand_fs::read_data(),
+            nand_fs::read_data(),
+            nand_fs::read_data(),
+            nand_fs::read_data(),
+            nand_fs::read_data(),
+        ];
+        if id[0] != 0xEC || id[1] != 0xF1 {
+            return Err(crate::nand_fs::InitError::WrongDevice);
+        }
+
+        // Dhara requires a genuinely erased medium when creating a new
+        // journal. Preserve factory bad-block markers and skip those blocks.
+        let mut bad_blocks = 0u16;
+        for block in 0..PHYSICAL_BLOCKS {
+            match block_is_bad(block) {
+                Ok(true) => {
+                    bad_blocks = bad_blocks.saturating_add(1);
+                }
+                Ok(false) => {
+                    if !nand_fs::erase_physical_block(block as u16) {
+                        if !mark_block_bad(block) {
+                            return Err(crate::nand_fs::InitError::ProvisionFailed);
+                        }
+                        bad_blocks = bad_blocks.saturating_add(1);
+                    }
+                }
+                Err(()) => return Err(crate::nand_fs::InitError::MarkerRead),
+            }
+        }
+
+        // Start a fresh map only after all usable physical blocks have been
+        // erased. The first durable mapping is the private volume signature.
+        unsafe { xcore_dhara_map_init(); }
+        let marker = unsafe { &mut *core::ptr::addr_of_mut!(VOLUME_MARKER_BUFFER) };
+        marker.fill(0xFF);
+        marker[..VOLUME_MARKER.len()].copy_from_slice(VOLUME_MARKER);
+        let mut error = 0i32;
+        if unsafe {
+            xcore_dhara_map_provision(
+                VOLUME_MARKER_SECTOR,
+                marker.as_ptr(),
+                &mut error,
+            )
+        } != 0 {
+            return Err(crate::nand_fs::InitError::ProvisionFailed);
+        }
+
+        let storage = Self::new()?;
+        if storage.factory_bad_blocks() < bad_blocks {
+            return Err(crate::nand_fs::InitError::ProvisionFailed);
+        }
+        Ok(storage)
+    }
+
     pub fn new() -> Result<Self, crate::nand_fs::InitError> {
         nand_fs::configure_fsmc();
         nand_fs::command(0xFF);
