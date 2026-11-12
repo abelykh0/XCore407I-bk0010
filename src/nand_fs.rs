@@ -471,10 +471,11 @@ fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
         write_data(value);
     }
 
-    // Place the ECC and tag in OOB using another random-data-input address.
+    // Start at OOB byte 0 because the two 0xFF marker placeholders
+    // precede ECC bytes 2..13 and the tag at bytes 14..15.
     command(0x85);
-    address((PAGE_SIZE as u16 + ECC_OOB_OFFSET) as u8);
-    address(((PAGE_SIZE as u16 + ECC_OOB_OFFSET) >> 8) as u8);
+    address(PAGE_SIZE as u16 as u8);
+    address(((PAGE_SIZE as u16) >> 8) as u8);
     cortex_m::asm::delay(1_000);
     write_data(0xFF);
     write_data(0xFF);
