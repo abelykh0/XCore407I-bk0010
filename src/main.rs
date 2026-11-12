@@ -89,12 +89,6 @@ fn main() -> ! {
         device.GPIOI,
     );
 
-    // Perform destructive first-use provisioning before USB enumeration so
-    // the one-time full-chip erase cannot stall the live camera/audio loop.
-    #[cfg(feature = "dhara-format-nand")]
-    let _dhara_provisioning_result =
-        xcore407i_blinker::dhara_fs::DharaStorage::new();
-
     // Read only the factory markers to inventory blocks reserved for Dhara.
     // This does not mount LittleFS or program/erase any NAND block.
     #[cfg(feature = "dhara-eval")]
