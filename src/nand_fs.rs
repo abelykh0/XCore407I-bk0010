@@ -85,8 +85,6 @@ pub enum InitError {
     MountFailed,
     DharaNoJournal,
     DharaCapacity,
-    DharaErase,
-    DharaFormat,
 }
 
 pub(crate) fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
@@ -813,8 +811,7 @@ impl Storage for NandStorage {
 /// Keep the LittleFS mount alive for the duration of the supplied service closure.
 ///
 /// NAND initialization and filesystem operations run in caller context,
-/// never in a USB ISR. Raw-NAND mode is mount-only. Dhara mode may perform
-/// destructive first-use provisioning only when dhara-format-nand is enabled.
+/// never in a USB ISR. Both raw-NAND and Dhara modes are mount-only.
 /// Failure stage for a read/write operation on the active LittleFS volume.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FsAccessError {
@@ -825,8 +822,7 @@ pub enum FsAccessError {
 }
 
 /// Mount the active volume and preserve whether failure occurred during NAND
-/// initialization, mount, or the caller's filesystem operation. With
-/// dhara-format-nand, ActiveStorage::new() may provision the blank volume.
+/// initialization, mount, or the caller's filesystem operation.
 pub fn with_mounted_detailed<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
 ) -> Result<R, FsAccessError> {
@@ -854,8 +850,7 @@ pub fn with_mounted<R>(
 /// the filesystem mounted for the entire service closure.
 ///
 /// Unlike initialize_and_mount_report(), this does not mount and immediately
-/// unmount before the caller starts using the filesystem. Dhara's explicit
-/// provisioning feature may format during ActiveStorage initialization.
+/// unmount before the caller starts using the filesystem.
 pub fn with_mounted_report<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>, &[u8], usize) -> LfsResult<R>,
 ) -> Result<R, InitError> {
@@ -889,13 +884,8 @@ pub fn with_mounted_report<R>(
     .map_err(|_| InitError::MountFailed)
 }
 
-/// Raw-NAND mode keeps formatting disabled. Dhara provisioning is separately
-/// gated by the explicit dhara-format-nand feature and only runs when no
-/// valid Dhara journal exists.
-const FORMAT_NAND_ONCE: bool = cfg!(feature = "dhara-format-nand");
-
-/// Initialize NAND, perform the explicitly enabled initial format if needed,
-/// then mount. Normal boots with FORMAT_NAND_ONCE=false are mount-only.
+/// Initialize NAND and mount the existing LittleFS volume. This routine
+/// never formats or erases NAND.
 pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
     let mut report = [0u8; 256];
     let mut len = 0;
@@ -915,32 +905,16 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
     append_hex(&mut report, &mut len, storage.factory_bad_blocks() as u32, 4);
     append(&mut report, &mut len, b"\r\n");
 
-    let mountable = Filesystem::<ActiveStorage>::is_mountable(&mut storage);
-    let mut formatted_now = false;
-
-    if !mountable {
-        if !FORMAT_NAND_ONCE {
-            append(&mut report, &mut len, b"ERROR: no valid LittleFS; not formatted\r\n");
-            return (report, len);
-        }
-
-        append(&mut report, &mut len, b"Initial LittleFS format...\r\n");
-        if Filesystem::<ActiveStorage>::format(&mut storage).is_err() {
-            append(&mut report, &mut len, b"ERROR: format failed\r\n");
-            return (report, len);
-        }
-        formatted_now = true;
+    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
+        append(&mut report, &mut len, b"ERROR: no valid LittleFS; NAND unchanged\r\n");
+        return (report, len);
     }
 
     match Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
         Ok((fs.total_space(), fs.available_space().unwrap_or(0)))
     }) {
         Ok((total, free)) => {
-            if formatted_now {
-                append(&mut report, &mut len, b"LittleFS: formatted and mounted\r\n");
-            } else {
-                append(&mut report, &mut len, b"LittleFS: existing volume mounted\r\n");
-            }
+            append(&mut report, &mut len, b"LittleFS: existing volume mounted\r\n");
             append(&mut report, &mut len, b"Capacity: ");
             append_hex(&mut report, &mut len, total as u32, 8);
             append(&mut report, &mut len, b" bytes\r\nFree: ");
@@ -977,8 +951,6 @@ fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
         InitError::MountFailed => b"LittleFS mount failed",
         InitError::DharaNoJournal => b"Dhara journal missing",
         InitError::DharaCapacity => b"Dhara capacity too small",
-        InitError::DharaErase => b"Dhara NAND erase failed",
-        InitError::DharaFormat => b"Dhara LittleFS format failed",
     };
     append(out, len, message);
 }
