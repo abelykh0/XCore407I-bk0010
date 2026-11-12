@@ -395,7 +395,8 @@ pub enum EccSelfTestError {
     NoReservedGoodBlock,
     EraseFailed,
     ProgramFailed,
-    SingleBitCorrectionFailed,
+    SingleBitReadRejected,
+    SingleBitDataMismatch,
     DoubleBitDetectionFailed,
     CleanupFailed,
 }
@@ -481,8 +482,11 @@ pub fn run_ecc_fault_injection_test() -> Result<(), EccSelfTestError> {
         }
 
         let mut readback = [0u8; PAGE_SIZE];
-        if !read_data_page(first_page, &mut readback) || readback.iter().any(|&byte| byte != 0xFF) {
-            return Err(EccSelfTestError::SingleBitCorrectionFailed);
+        if !read_data_page(first_page, &mut readback) {
+            return Err(EccSelfTestError::SingleBitReadRejected);
+        }
+        if readback.iter().any(|&byte| byte != 0xFF) {
+            return Err(EccSelfTestError::SingleBitDataMismatch);
         }
 
         if read_data_page(first_page + 1, &mut readback) {
