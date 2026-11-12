@@ -524,7 +524,6 @@ pub fn verify_dhara_read_only_callbacks() -> Option<(usize, usize)> {
 }
 
 /// Destructively erase and verify every block in the isolated Dhara list.
-—
 /// This is compiled only with dhara-eval-erase-spares. Remove that feature
 /// after one successful provisioning boot; leaving it enabled repeats erasure
 /// on every reset. No LittleFS or mapping-metadata block is addressable here.
