@@ -318,7 +318,12 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             calculated[offset + 2],
             0,
         ]);
+        // Preserve the raw 24-bit syndrome for the startup self-test. This
+        // lets us distinguish ECC-generation/layout problems from decoding.
+        ECC_DIAG_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
+        ECC_DIAG_SYNDROME.store(stored_ecc ^ calculated_ecc, Ordering::Relaxed);
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
+            ECC_DIAG_STAGE.store(10, Ordering::Relaxed);
             return false;
         }
     }
@@ -535,11 +540,10 @@ pub fn run_ecc_fault_injection_test() -> Result<(), EccSelfTestError> {
             .enumerate()
             .find(|(_, byte)| **byte != 0xFF)
         {
-            // Pack the first bad byte's page offset and value for the display:
-            // 3 hex digits of offset followed by 2 hex digits of data.
-            ECC_DIAG_CHUNK.store((index / FSMC_ECC_CHUNK_SIZE) as u32, Ordering::Relaxed);
-            ECC_DIAG_SYNDROME.store(((index as u32) << 8) | u32::from(value), Ordering::Relaxed);
-            ECC_DIAG_STAGE.store(8, Ordering::Relaxed);
+            // Stage 9 retains the raw ECC syndrome captured before correction.
+            // The failing byte is known from the self-test (offset 0x0125). 
+            let _ = (index, value);
+            ECC_DIAG_STAGE.store(9, Ordering::Relaxed);
             return Err(EccSelfTestError::SingleBitDataMismatch);
         }
 
