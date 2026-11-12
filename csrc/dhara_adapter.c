@@ -20,6 +20,7 @@ void xcore_dhara_map_init(void)
 
 	dhara_map_init(&xcore_map, &xcore_nand, xcore_page_buffer,
 		       XCORE_DHARA_GC_RATIO);
+	xcore_map.count = 0;
 	xcore_initialized = 1;
 }
 
