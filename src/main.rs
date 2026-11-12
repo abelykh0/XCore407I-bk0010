@@ -41,8 +41,6 @@ use file_browser::{
     draw_format_confirmation,
 };
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
-#[cfg(feature = "destructive-lfs-test")]
-use file_browser::{draw_lfs_corruption_result, LFS_TEST_ACTIVE, LFS_TEST_REQUEST};
 use usb_host::{
     configure_usb_host_task_timer, try_init_usb_fs_host, USB_FS_READY,
     USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING,
@@ -208,13 +206,6 @@ fn main() -> ! {
             unsafe { tusb::tuh_task_ext(0, false); }
         } else {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
-        }
-
-        #[cfg(feature = "destructive-lfs-test")]
-        if LFS_TEST_REQUEST.swap(false, Ordering::AcqRel) {
-            // The fault injection runs in main-loop context, never in USB/HID ISR.
-            let result = xcore407i_blinker::dhara_fs::corrupt_littlefs_metadata_for_test();
-            draw_lfs_corruption_result(result.is_ok());
         }
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
@@ -416,12 +407,7 @@ fn main() -> ! {
             || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
             || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
             || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE
-            || {
-                #[cfg(feature = "destructive-lfs-test")]
-                { LFS_TEST_ACTIVE.load(Ordering::Acquire) }
-                #[cfg(not(feature = "destructive-lfs-test"))]
-                { false }
-            };
+;
         if emulator_paused != emulator_was_paused {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
             pacing_start_cycles = unsafe { bk_timing_cycles() };
