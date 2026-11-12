@@ -50,6 +50,11 @@ pub const ERASE_BLOCK_SIZE: usize = PAGE_SIZE * PAGES_PER_BLOCK as usize;
 pub const RESERVED_BLOCKS: usize = 16;
 pub const LOGICAL_BLOCKS: usize = PHYSICAL_BLOCKS as usize - RESERVED_BLOCKS;
 
+/// Maximum number of factory-good blocks available after LittleFS and its
+/// two mapping-metadata blocks. Dhara receives only this isolated tail region.
+#[cfg(feature = "dhara-eval")]
+pub const DHARA_TEST_MAX_BLOCKS: usize = RESERVED_BLOCKS - 2;
+
 /// Keep the 2 KiB logical-to-physical map in static RAM, not on the
 /// small startup stack while LittleFS is being mounted/formatted.
 static mut PHYSICAL_BLOCK_MAP: [u16; LOGICAL_BLOCKS] = [0; LOGICAL_BLOCKS];
@@ -76,6 +81,11 @@ pub struct NandStorage {
     /// A spare good block beyond LittleFS and mapping metadata, reserved for ECC self-test.
     #[cfg(feature = "nand-ecc-test")]
     ecc_test_block: Option<u16>,
+    /// Factory-good physical blocks excluded from LittleFS and mapping metadata.
+    #[cfg(feature = "dhara-eval")]
+    dhara_test_blocks: [u16; DHARA_TEST_MAX_BLOCKS],
+    #[cfg(feature = "dhara-eval")]
+    dhara_test_block_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -497,6 +507,10 @@ impl NandStorage {
             mapping_generation: 0,
             #[cfg(feature = "nand-ecc-test")]
             ecc_test_block: None,
+            #[cfg(feature = "dhara-eval")]
+            dhara_test_blocks: [u16::MAX; DHARA_TEST_MAX_BLOCKS],
+            #[cfg(feature = "dhara-eval")]
+            dhara_test_block_count: 0,
         };
         let mut metadata_count = 0usize;
         let mut marker = [0u8; 1];
@@ -527,6 +541,18 @@ impl NandStorage {
                     if storage.ecc_test_block.is_none() {
                         // The opt-in destructive test uses a spare, not metadata.
                         storage.ecc_test_block = Some(block as u16);
+                    }
+                    #[cfg(feature = "dhara-eval")]
+                    {
+                        // Keep every remaining factory-good block out of the
+                        // LittleFS map. Dhara will receive this list as its
+                        // complete physical device; it cannot address the
+                        // LittleFS or mapping-metadata regions.
+                        let index = storage.dhara_test_block_count;
+                        if index < DHARA_TEST_MAX_BLOCKS {
+                            storage.dhara_test_blocks[index] = block as u16;
+                            storage.dhara_test_block_count += 1;
+                        }
                     }
                 }
             } else {
@@ -572,6 +598,18 @@ impl NandStorage {
 
     pub fn factory_bad_blocks(&self) -> u16 { self.factory_bad_blocks }
     pub fn logical_capacity(&self) -> usize { LOGICAL_BLOCKS * ERASE_BLOCK_SIZE }
+
+    /// Physical blocks available for isolated Dhara testing. This list never
+    /// includes LittleFS-mapped blocks or either mapping-metadata block.
+    #[cfg(feature = "dhara-eval")]
+    pub fn dhara_test_blocks(&self) -> &[u16] {
+        &self.dhara_test_blocks[..self.dhara_test_block_count]
+    }
+
+    #[cfg(feature = "dhara-eval")]
+    pub fn dhara_test_capacity_bytes(&self) -> usize {
+        self.dhara_test_block_count * ERASE_BLOCK_SIZE
+    }
 
     fn physical_block(&self, logical: usize) -> Option<u16> {
         self.physical_blocks.get(logical).copied()
