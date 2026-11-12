@@ -91,15 +91,10 @@ static mut DHARA_NAND_CONTEXT: DharaNandContext = DharaNandContext {
     physical_blocks: [u16::MAX; DHARA_TEST_MAX_BLOCKS],
 };
 
+// Shared only by the synchronous read-only callbacks; never accessed from an ISR.
 #[cfg(feature = "dhara-eval")]
-static mut DHARA_READ_SCRATCH: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
-
-#[cfg(feature = "dhara-eval")]
-static mut DHARA_FREE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
+static mut DHARA_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
     [0; PAGE_SIZE + SPARE_SIZE];
-
-#[cfg(feature = "dhara-eval")]
-static mut DHARA_VERIFY_SCRATCH: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
 #[cfg(feature = "dhara-eval")]
 static DHARA_READ_OK: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -439,8 +434,8 @@ pub extern "C" fn dhara_nand_read(
         }
     };
 
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_READ_SCRATCH) };
-    if !read_data_page(physical_page, scratch) {
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_PAGE_SCRATCH) };
+    if !read_data_page(physical_page, &mut scratch[..PAGE_SIZE]) {
         unsafe { set_dhara_error(error, 2); }
         return -1;
     }
@@ -462,7 +457,7 @@ pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> i32 {
         Some(page) => page,
         None => return 0,
     };
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_FREE_SCRATCH) };
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_PAGE_SCRATCH) };
     if !read_page(physical_page, 0, scratch) {
         return 0;
     }
@@ -483,20 +478,19 @@ pub fn verify_dhara_read_only_callbacks() -> Option<(usize, usize)> {
 
     let mut read_ok = 0usize;
     let mut first_page_free = 0usize;
-    let output = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_VERIFY_SCRATCH) };
-
     for block in 0..count {
         if dhara_nand_is_bad(nand, block as u32) != 0 {
             continue;
         }
         let mut error = 0i32;
         let page = (block as u32) << 6;
+        let mut first_byte = 0u8;
         if dhara_nand_read(
             nand,
             page,
             0,
-            PAGE_SIZE,
-            output.as_mut_ptr(),
+            1,
+            &mut first_byte,
             &mut error,
         ) == 0 {
             read_ok += 1;
