@@ -74,13 +74,19 @@ On a new or unprovisioned NAND, opening the file browser detects the
 missing Dhara journal and offers a separate two-step **NAND initialization**
 confirmation. Confirming it erases every usable physical NAND block (factory
 bad blocks are preserved), creates a fresh Dhara journal and private volume
-marker, then formats and verifies an empty LittleFS volume. This destroys all
-pre-existing data on the NAND and must only be used when that data can be lost.
+marker, then formats and verifies an empty LittleFS volume.
 
-The initialization prompt is not automatic: declining it leaves NAND
-unchanged. A valid existing Dhara journal and marker are resumed normally;
-they are never reinitialized just because LittleFS is corrupt. In that case,
-use the separate LittleFS-only format confirmation above.
+The same two-step operation can be invoked manually at any time with
+**Ctrl+Alt+F12**, including when a valid Dhara volume already exists. This is
+useful for testing or deliberately starting over. It erases all existing
+files and all other data on the NAND. Do not use it unless all NAND contents
+can be lost. The firmware runs the erase/provision/format sequence in the
+main loop, not in the keyboard interrupt handler.
+
+Declining either confirmation leaves NAND unchanged. Normal startup resumes a
+valid existing Dhara journal and marker; it never reinitializes them merely
+because LittleFS is corrupt. In that case, use the separate LittleFS-only
+format confirmation above.
 
 ## Commands to Build and Flash
 
