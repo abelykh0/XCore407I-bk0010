@@ -189,7 +189,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
         || INIT_STATE.load(Ordering::Acquire) != 0
         || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
 ;
-    if !keyboard_captured && control_pressed {
+    if !keyboard_captured && control_pressed && modifiers & 0x44 == 0 {
         append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
     }
     // АР2 is a modifier (Alt/AltGr), not a standalone BK key code.
