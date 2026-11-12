@@ -107,6 +107,7 @@ fn main() {
     tinyusb
         .target(&target)
         .flag("-std=gnu11")
+        .flag("-w") // Suppress all compiler warnings from TinyUSB only.
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
         .include("usb")
