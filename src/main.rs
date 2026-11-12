@@ -385,7 +385,10 @@ fn main() -> ! {
                     8 => b"NAND ECC: CLEANUP FAILED",
                     _ => b"NAND ECC: NOT RUN",
                 };
-                if nand_ecc_test_status == 4 || nand_ecc_test_status == 5 {
+                if nand_ecc_test_status == 4
+                    || nand_ecc_test_status == 5
+                    || nand_ecc_test_status == 6
+                {
                     let (stage, chunk, syndrome) =
                         xcore407i_blinker::nand_fs::ecc_diagnostic();
                     let mut detail = [b' '; 32];
