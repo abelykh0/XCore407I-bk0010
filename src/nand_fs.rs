@@ -12,7 +12,6 @@
 //! yet, and grown-bad blocks are not remapped.
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -35,23 +34,6 @@ const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
-
-// Last ECC read failure, exposed for the startup fault-injection diagnostic.
-static ECC_DIAG_STAGE: AtomicU32 = AtomicU32::new(0);
-static ECC_DIAG_CHUNK: AtomicU32 = AtomicU32::new(0);
-static ECC_DIAG_SYNDROME: AtomicU32 = AtomicU32::new(0);
-static ECC_DIAG_STORED: AtomicU32 = AtomicU32::new(0);
-static ECC_DIAG_CALCULATED: AtomicU32 = AtomicU32::new(0);
-
-pub fn ecc_diagnostic() -> (u32, u32, u32, u32, u32) {
-    (
-        ECC_DIAG_STAGE.load(Ordering::Relaxed),
-        ECC_DIAG_CHUNK.load(Ordering::Relaxed),
-        ECC_DIAG_SYNDROME.load(Ordering::Relaxed),
-        ECC_DIAG_STORED.load(Ordering::Relaxed),
-        ECC_DIAG_CALCULATED.load(Ordering::Relaxed),
-    )
-}
 
 const RB_MASK: u32 = 1 << 6;
 const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
@@ -263,14 +245,7 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
 }
 
 fn read_data_page(page: u32, out: &mut [u8]) -> bool {
-    ECC_DIAG_STAGE.store(0, Ordering::Relaxed);
-    // Chunk 9 means no nonzero syndrome has been observed yet.
-    ECC_DIAG_CHUNK.store(9, Ordering::Relaxed);
-    ECC_DIAG_SYNDROME.store(0, Ordering::Relaxed);
-    ECC_DIAG_STORED.store(0, Ordering::Relaxed);
-    ECC_DIAG_CALCULATED.store(0, Ordering::Relaxed);
     if out.len() != PAGE_SIZE {
-        ECC_DIAG_STAGE.store(5, Ordering::Relaxed); // Invalid output buffer size
         return false;
     }
 
@@ -281,7 +256,6 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     address((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
-        ECC_DIAG_STAGE.store(4, Ordering::Relaxed); // Main page read did not become ready
         return false;
     }
 
@@ -296,7 +270,6 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
     if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut stored) {
-        ECC_DIAG_STAGE.store(1, Ordering::Relaxed); // OOB read failed
         return false;
     }
 
@@ -305,11 +278,6 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return true;
     }
     if tag != ECC_TAG {
-        ECC_DIAG_SYNDROME.store(
-            u32::from(tag[0]) | (u32::from(tag[1]) << 8),
-            Ordering::Relaxed,
-        );
-        ECC_DIAG_STAGE.store(2, Ordering::Relaxed); // Invalid ECC tag; diagnostic holds raw tag bytes
         return false;
     }
 
@@ -327,21 +295,7 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             calculated[offset + 2],
             0,
         ]);
-        // The injected error is in chunk 0. Preserve both ECC values
-        // even when they compare equal, so a zero syndrome is diagnosable.
-        if chunk_index == 0 {
-            ECC_DIAG_STORED.store(stored_ecc, Ordering::Relaxed);
-            ECC_DIAG_CALCULATED.store(calculated_ecc, Ordering::Relaxed);
-        }
-        // Keep the first nonzero syndrome; later clean chunks must not
-        // overwrite the diagnostic for the corrupted chunk.
-        let syndrome = stored_ecc ^ calculated_ecc;
-        if syndrome != 0 && ECC_DIAG_CHUNK.load(Ordering::Relaxed) == 9 {
-            ECC_DIAG_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
-            ECC_DIAG_SYNDROME.store(syndrome, Ordering::Relaxed);
-        }
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
-            ECC_DIAG_STAGE.store(10, Ordering::Relaxed);
             return false;
         }
     }
@@ -438,6 +392,7 @@ impl NandStorage {
 /// The test only erases one factory-good block that is beyond LittleFS's
 /// logical capacity. It never selects a block used by the filesystem.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "nand-ecc-test")]
 pub enum EccSelfTestError {
     NoReservedGoodBlock,
     EraseFailed,
@@ -450,6 +405,7 @@ pub enum EccSelfTestError {
 
 /// Program test pages with ECC for an all-0xFF page, then alter selected
 /// data-register bytes with ECC disabled before the same page-program confirm.
+#[cfg(feature = "nand-ecc-test")]
 fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
     command(0x80);
     address(0);
@@ -513,15 +469,9 @@ fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
     let tag_column = PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16;
     let mut tag_readback = [0u8; ECC_TAG.len()];
     if !read_page(page, tag_column, &mut tag_readback) {
-        ECC_DIAG_STAGE.store(6, Ordering::Relaxed); // Immediate raw tag read failed
         return false;
     }
-    ECC_DIAG_SYNDROME.store(
-        u32::from(tag_readback[0]) | (u32::from(tag_readback[1]) << 8),
-        Ordering::Relaxed,
-    );
     if tag_readback != ECC_TAG {
-        ECC_DIAG_STAGE.store(7, Ordering::Relaxed); // Tag absent immediately after program
         return false;
     }
     true
@@ -531,6 +481,7 @@ fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
 ///
 /// The test erases and reuses only the first factory-good block excluded from
 /// LittleFS. It attempts to erase that block again before returning.
+#[cfg(feature = "nand-ecc-test")]
 pub fn run_ecc_fault_injection_test() -> Result<(), EccSelfTestError> {
     let storage = NandStorage::new().map_err(|_| EccSelfTestError::EraseFailed)?;
     let block = storage.ecc_test_block.ok_or(EccSelfTestError::NoReservedGoodBlock)?;
@@ -558,10 +509,7 @@ pub fn run_ecc_fault_injection_test() -> Result<(), EccSelfTestError> {
             .enumerate()
             .find(|(_, byte)| **byte != 0xFF)
         {
-            // Stage 9 retains the raw ECC syndrome captured before correction.
-            // The failing byte is known from the self-test (offset 0x0125). 
             let _ = (index, value);
-            ECC_DIAG_STAGE.store(9, Ordering::Relaxed);
             return Err(EccSelfTestError::SingleBitDataMismatch);
         }
 
