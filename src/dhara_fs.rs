@@ -106,6 +106,10 @@ fn mark_block_bad(block: u32) -> bool {
     first_ok || second_ok
 }
 
+fn mark_bad_and_verify(block: u32) -> bool {
+    mark_block_bad(block) && matches!(block_is_bad(block), Ok(true))
+}
+
 fn erase_all_good_blocks() -> Result<u16, crate::nand_fs::InitError> {
     let mut bad_blocks = 0u16;
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
@@ -121,7 +125,7 @@ fn erase_all_good_blocks() -> Result<u16, crate::nand_fs::InitError> {
         }
 
         if !nand_fs::erase_physical_block(block as u16) {
-            if !mark_block_bad(block) {
+            if !mark_bad_and_verify(block) {
                 return Err(crate::nand_fs::InitError::DharaErase);
             }
             bad_blocks = bad_blocks.saturating_add(1);
