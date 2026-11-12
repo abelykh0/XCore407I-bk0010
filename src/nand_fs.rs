@@ -275,7 +275,10 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     address(page as u8);
     address((page >> 8) as u8);
     command(0x30);
-    if !wait_ready_rb() { return false; }
+    if !wait_ready_rb() {
+        ECC_DIAG_STAGE.store(4, Ordering::Relaxed); // Main page read did not become ready
+        return false;
+    }
 
     let mut calculated = [0u8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
