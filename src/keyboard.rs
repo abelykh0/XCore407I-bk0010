@@ -171,6 +171,8 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     let control = modifiers & 0x11 != 0;
     let gui = modifiers & 0x88 != 0;
     let control_or_alt = modifiers & 0xdd != 0;
+    #[cfg(feature = "destructive-lfs-test")]
+    let destructive_test_modifiers = control && modifiers & 0x44 != 0;
     let previous_modifiers = unsafe { PREVIOUS_MODIFIERS };
     let control_pressed = control && previous_modifiers & 0x11 == 0;
     let gui_pressed = gui && previous_modifiers & 0x88 == 0;
@@ -187,7 +189,13 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     // AZBK modifier keys are only forwarded while the emulator owns input.
     let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
         || FORMAT_STATE.load(Ordering::Acquire) != 0
-        || FILE_BROWSER_ACTIVE.load(Ordering::Acquire);
+        || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
+        || {
+            #[cfg(feature = "destructive-lfs-test")]
+            { destructive_test_modifiers || LFS_TEST_ACTIVE.load(Ordering::Acquire) }
+            #[cfg(not(feature = "destructive-lfs-test"))]
+            { false }
+        };
     if !keyboard_captured && control_pressed {
         append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
     }
