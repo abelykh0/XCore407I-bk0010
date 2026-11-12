@@ -12,6 +12,7 @@
 //! yet, and grown-bad blocks are not remapped.
 
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -32,6 +33,19 @@ const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
+
+// Last ECC read failure, exposed for the startup fault-injection diagnostic.
+static ECC_DIAG_STAGE: AtomicU32 = AtomicU32::new(0);
+static ECC_DIAG_CHUNK: AtomicU32 = AtomicU32::new(0);
+static ECC_DIAG_SYNDROME: AtomicU32 = AtomicU32::new(0);
+
+pub fn ecc_diagnostic() -> (u32, u32, u32) {
+    (
+        ECC_DIAG_STAGE.load(Ordering::Relaxed),
+        ECC_DIAG_CHUNK.load(Ordering::Relaxed),
+        ECC_DIAG_SYNDROME.load(Ordering::Relaxed),
+    )
+}
 
 const RB_MASK: u32 = 1 << 6;
 const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
