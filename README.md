@@ -60,21 +60,21 @@ probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcor
 
 ## Dhara-backed LittleFS
 
-The `dhara-littlefs` feature places Dhara between the raw K9F1G08U0E NAND
-and LittleFS. Dhara manages all physical blocks, including bad-block handling
-and wear levelling, while the existing STM32 FSMC Hamming ECC protects page
-data. LittleFS sees 700 logical erase blocks (87.5 MiB). A private Dhara sector
-outside the LittleFS range identifies the formatted volume.
+Dhara is the only NAND storage backend. It manages all physical blocks,
+including bad-block handling and wear levelling, while the existing STM32 FSMC
+Hamming ECC protects page data. LittleFS sees 700 logical erase blocks
+(87.5 MiB). A private Dhara sector outside the LittleFS range identifies the
+formatted volume.
 
-The NAND has already been provisioned for this layout. Normal builds must use
-`dhara-littlefs`; there is no firmware feature for erasing or reformatting
+The NAND has already been provisioned for this layout. There is no alternate
+raw-NAND filesystem backend and no firmware feature for erasing or reformatting
 the entire NAND. If the Dhara journal or volume marker is missing or invalid,
 initialization fails safely and leaves NAND unchanged.
 
 Build and flash:
 
 ```powershell
-cargo build --release --target thumbv7em-none-eabihf --features "dhara-littlefs,cpu-cycle-diag"
+cargo build --release --target thumbv7em-none-eabihf --features cpu-cycle-diag
 probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
 ```
 
