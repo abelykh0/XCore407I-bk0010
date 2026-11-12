@@ -2,7 +2,8 @@
 //!
 //! Geometry: 2 KiB data pages, 64 pages per 128 KiB erase block, 1,024
 //! physical blocks. Sixteen good blocks are held in reserve for bad-block
-//! tolerance; LittleFS sees 1,008 logical blocks.
+//! tolerance; LittleFS sees 1,008 logical blocks. Two additional good blocks
+//! hold redundant, CRC-protected physical mapping snapshots.
 //!
 //! New page writes store the STM32 FSMC's 512-byte Hamming ECC values in the
 //! spare area. Reads verify ECC-tagged pages and retain compatibility with
@@ -72,7 +73,7 @@ pub struct NandStorage {
     metadata_blocks: [u16; 2],
     active_metadata_slot: u8,
     mapping_generation: u32,
-    /// First good block beyond LittleFS capacity, reserved for ECC self-test.
+    /// A spare good block beyond LittleFS and mapping metadata, reserved for ECC self-test.
     #[cfg(feature = "nand-ecc-test")]
     ecc_test_block: Option<u16>,
 }
@@ -465,8 +466,8 @@ fn configure_fsmc() {
 }
 
 impl NandStorage {
-    /// Reset the NAND and build a logical-to-physical map from factory markers.
-    /// Fails closed unless at least 1,008 factory-good blocks are available.
+    /// Reset the NAND, preserve the legacy logical map, and load or initialize
+    /// redundant persistent mapping metadata. Requires 1,010 factory-good blocks.
     pub fn new() -> Result<Self, InitError> {
         configure_fsmc();
         command(0xFF);
@@ -511,15 +512,16 @@ impl NandStorage {
             }
             if first_good && marker[0] == 0xFF {
                 if storage.good_blocks < LOGICAL_BLOCKS {
+                    // Preserve the original physical layout used by the
+                    // existing LittleFS volume.
                     storage.physical_blocks[storage.good_blocks] = block as u16;
                     storage.good_blocks += 1;
-                }
-                if storage.good_blocks == LOGICAL_BLOCKS && metadata_count < 2 {
-                    // Reserve the first two good blocks after the existing
-                    // LittleFS physical range for redundant mapping snapshots.
+                } else if metadata_count < 2 {
+                    // The first two additional good blocks hold redundant
+                    // mapping snapshots and are never exposed to LittleFS.
                     storage.metadata_blocks[metadata_count] = block as u16;
                     metadata_count += 1;
-                } else if storage.good_blocks == LOGICAL_BLOCKS + 2 {
+                } else {
                     #[cfg(feature = "nand-ecc-test")]
                     if storage.ecc_test_block.is_none() {
                         // The opt-in destructive test uses a spare, not metadata.
