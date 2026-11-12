@@ -246,7 +246,7 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     let data_bit_error =
         ((b0 ^ (b0 >> 1)) & 0x55) == 0x55
         && ((b1 ^ (b1 >> 1)) & 0x55) == 0x55
-        && ((b2 ^ (b2 >> 1)) & 0x54) == 0x54;
+        && ((b2 ^ (b2 >> 1)) & 0x55) == 0x55;
 
     if data_bit_error {
         let byte_index = (usize::from((b2 & 0x03) >> 1) << 8)
