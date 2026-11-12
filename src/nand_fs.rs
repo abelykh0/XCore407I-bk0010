@@ -490,7 +490,27 @@ fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
         return false;
     }
     command(0x70);
-    read_data() & 0x01 == 0
+    if read_data() & 0x01 != 0 {
+        return false;
+    }
+
+    // Verify the tag with a fresh raw OOB read immediately after programming.
+    // This separates a failed OOB program from a later read-path problem.
+    let tag_column = PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16;
+    let mut tag_readback = [0u8; ECC_TAG.len()];
+    if !read_page(page, tag_column, &mut tag_readback) {
+        ECC_DIAG_STAGE.store(6, Ordering::Relaxed); // Immediate raw tag read failed
+        return false;
+    }
+    ECC_DIAG_SYNDROME.store(
+        u32::from(tag_readback[0]) | (u32::from(tag_readback[1]) << 8),
+        Ordering::Relaxed,
+    );
+    if tag_readback != ECC_TAG {
+        ECC_DIAG_STAGE.store(7, Ordering::Relaxed); // Tag absent immediately after program
+        return false;
+    }
+    true
 }
 
 /// Exercise one-bit correction and two-bit detection on a reserved NAND block.
