@@ -84,6 +84,7 @@ pub enum InitError {
     WrongDevice,
     MarkerRead,
     TooManyBadBlocks,
+    MetadataFailure,
     MountFailed,
 }
 
@@ -551,7 +552,7 @@ impl NandStorage {
                 // First boot after adding metadata support: the old mapping
                 // remains exactly the first 1,008 factory-good blocks.
                 if !write_initial_mapping(storage.metadata_blocks[0], 1, storage.physical_blocks) {
-                    return Err(InitError::MarkerRead);
+                    return Err(InitError::MetadataFailure);
                 }
                 storage.active_metadata_slot = 0;
                 storage.mapping_generation = 1;
@@ -563,7 +564,7 @@ impl NandStorage {
             storage.metadata_blocks[selected],
             &storage.metadata_blocks,
             storage.physical_blocks,
-        ).ok_or(InitError::MarkerRead)?;
+        ).ok_or(InitError::MetadataFailure)?;
         storage.active_metadata_slot = selected as u8;
         storage.mapping_generation = generation;
         Ok(storage)
@@ -946,6 +947,7 @@ fn append_init_error(out: &mut [u8; 192], len: &mut usize, error: InitError) {
         InitError::WrongDevice => b"wrong device",
         InitError::MarkerRead => b"bad-block marker read",
         InitError::TooManyBadBlocks => b"not enough good blocks",
+        InitError::MetadataFailure => b"mapping metadata read/write failed",
         InitError::MountFailed => b"LittleFS mount failed",
     };
     append(out, len, message);
