@@ -543,21 +543,26 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
 /// The value is cached from NandStorage initialization; this routine performs
 /// no NAND access and is safe to call periodically from the main loop.
 #[cfg(feature = "dhara-eval")]
-pub fn show_dhara_spare_inventory(block_count: Option<usize>) {
+pub fn show_dhara_spare_inventory(
+    block_count: Option<usize>,
+    read_test: Option<(usize, usize)>,
+) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"DHARA SPARE ");
+    append_bytes(&mut line, &mut pos, b"DHARA ");
     match block_count {
         Some(count) => {
             append_hex(&mut line, &mut pos, count as u32, 2);
-            append_bytes(&mut line, &mut pos, b" BLK ");
-            append_hex(
-                &mut line,
-                &mut pos,
-                (count * crate::nand_fs::ERASE_BLOCK_SIZE) as u32,
-                8,
-            );
-            append_bytes(&mut line, &mut pos, b" B");
+            if let Some((read_ok, first_page_free)) = read_test {
+                append_bytes(&mut line, &mut pos, b" RD ");
+                append_hex(&mut line, &mut pos, read_ok as u32, 2);
+                append_bytes(&mut line, &mut pos, b"/");
+                append_hex(&mut line, &mut pos, count as u32, 2);
+                append_bytes(&mut line, &mut pos, b" F");
+                append_hex(&mut line, &mut pos, first_page_free as u32, 2);
+            } else {
+                append_bytes(&mut line, &mut pos, b" READ TEST PENDING");
+            }
         }
         None => append_bytes(&mut line, &mut pos, b"WAITING FOR NAND"),
     }
