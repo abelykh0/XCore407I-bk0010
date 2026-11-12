@@ -313,7 +313,6 @@ pub(crate) fn configure_fsmc() {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FsAccessError {
     Init(InitError),
-    NotMountable,
     Mount(i32),
     Operation,
 }
