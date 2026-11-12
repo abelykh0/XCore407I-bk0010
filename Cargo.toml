@@ -12,7 +12,7 @@ glob = "0.3"
 default = []
 cpu-cycle-diag = []
 nand-ecc-test = []
-# Compile the vendored Dhara FTL for evaluation; no NAND access is enabled.
+# Compile Dhara's read-only evaluation callbacks; erase is separately opt-in.
 dhara-eval = []
 dhara-eval-erase-spares = ["dhara-eval"]
 
