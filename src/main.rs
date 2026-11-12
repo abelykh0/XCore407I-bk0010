@@ -164,10 +164,15 @@ fn main() -> ! {
     // Retain the result for the persistent diagnostic row. The ordinary
     // status-message queue is transient and can be overwritten by BK drawing.
     let nand_ecc_test_status = if RUN_NAND_ECC_FAULT_TEST {
+        use xcore407i_blinker::nand_fs::EccSelfTestError as E;
         match xcore407i_blinker::nand_fs::run_ecc_fault_injection_test() {
             Ok(()) => 1,
-            Err(xcore407i_blinker::nand_fs::EccSelfTestError::NoReservedGoodBlock) => 2,
-            Err(_) => 3,
+            Err(E::NoReservedGoodBlock) => 2,
+            Err(E::EraseFailed) => 3,
+            Err(E::ProgramFailed) => 4,
+            Err(E::SingleBitCorrectionFailed) => 5,
+            Err(E::DoubleBitDetectionFailed) => 6,
+            Err(E::CleanupFailed) => 7,
         }
     } else {
         0
@@ -371,7 +376,11 @@ fn main() -> ! {
                 let ecc_line: &[u8] = match nand_ecc_test_status {
                     1 => b"NAND ECC: PASS",
                     2 => b"NAND ECC: NO SPARE BLOCK",
-                    3 => b"NAND ECC: FAILED",
+                    3 => b"NAND ECC: ERASE FAILED",
+                    4 => b"NAND ECC: PROGRAM FAILED",
+                    5 => b"NAND ECC: 1-BIT FIX FAILED",
+                    6 => b"NAND ECC: 2-BIT CHECK FAILED",
+                    7 => b"NAND ECC: CLEANUP FAILED",
                     _ => b"NAND ECC: NOT RUN",
                 };
                 xcore407i_blinker::camera::show_file_browser_line(29, ecc_line, false);
