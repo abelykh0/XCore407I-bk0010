@@ -1,9 +1,6 @@
 #![no_std]
 #![allow(suspicious_runtime_symbol_definitions)]
 
-#[cfg(all(feature = "dhara-eval", feature = "dhara-littlefs"))]
-compile_error!("dhara-eval and dhara-littlefs are mutually exclusive");
-
 pub mod bk_screen;
 pub mod camera;
 pub mod nand_fs;
