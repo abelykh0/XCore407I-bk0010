@@ -449,3 +449,15 @@ fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
     };
     append(out, len, message);
 }
+
+
+/// Format only the LittleFS logical volume on an already-valid Dhara journal.
+/// DharaStorage::new() verifies NAND identity, resumes Dhara, checks the
+/// volume marker, and validates capacity before any LittleFS erase is issued.
+pub fn format_existing_littlefs() -> Result<(), InitError> {
+    let mut storage = ActiveStorage::new()?;
+    Filesystem::<ActiveStorage>::format(&mut storage)
+        .map_err(|_| InitError::MountFailed)?;
+    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
+        .map_err(|_| InitError::MountFailed)
+}
