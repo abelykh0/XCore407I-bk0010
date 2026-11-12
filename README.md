@@ -50,14 +50,6 @@ elapsed milliseconds correctly across a wrap for intervals shorter than that.
 The RTC is configured for 256 subsecond ticks per second, so the timestamp
 resolution is approximately 3.9 ms (not 1 ms).
 
-## Commands to Build and Flash
-
-```powershell
-cargo build --release --target thumbv7em-none-eabihf
-cargo build --release --target thumbv7em-none-eabihf --features cpu-cycle-diag
-probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
-```
-
 ## Dhara-backed LittleFS
 
 Dhara is the only NAND storage backend. It manages all physical blocks,
@@ -71,9 +63,10 @@ raw-NAND filesystem backend and no firmware feature for erasing or reformatting
 the entire NAND. If the Dhara journal or volume marker is missing or invalid,
 initialization fails safely and leaves NAND unchanged.
 
-Build and flash:
+## Commands to Build and Flash
 
 ```powershell
+cargo build --release --target thumbv7em-none-eabihf
 cargo build --release --target thumbv7em-none-eabihf --features cpu-cycle-diag
 probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
 ```
