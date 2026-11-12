@@ -45,7 +45,7 @@ pub(crate) fn list_root_files(
     paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
     path_lengths: &mut [u16; MAX_BROWSER_FILES],
 ) -> Result<usize, ()> {
-    xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
             let mut count = 0usize;
             for item in directory {
@@ -84,7 +84,6 @@ pub(crate) fn list_root_files(
             Ok(count)
         })
     })
-    .map_err(|_| ())
 }
 
 pub(crate) fn draw_file_browser(
