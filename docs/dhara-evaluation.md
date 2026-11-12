@@ -9,10 +9,17 @@ The `dhara-eval` Cargo feature compiles the vendored Dhara library and
 provides a deliberately read-only NAND callback subset: `is_bad`, `read`,
 and `is_free`. At startup, firmware inventories the isolated physical block
 list and exercises those callbacks by reading page zero from each spare block.
-The display reports the number of successful ECC-checked reads and how many
-of those first pages are erased. No Dhara map is initialized or resumed, and
-no program, erase, or bad-block-mark operation is enabled. The existing
-LittleFS path remains active.
+The display reports successful ECC-checked reads and erased first pages. No
+Dhara map is initialized or resumed, and no program, erase, or bad-block-mark
+operation is enabled unless the separate destructive provisioning feature is
+selected. The existing LittleFS path remains active.
+
+The opt-in `dhara-eval-erase-spares` feature erases all 14 factory-good blocks
+in the isolated Dhara list and verifies every data and OOB byte across all 896
+pages. It does not accept arbitrary physical block numbers. This feature runs
+at every boot while enabled: flash once with it, confirm `ERASE OK` on
+diagnostic row 29, then rebuild and flash without it before continuing. Do
+not leave the erase feature enabled during normal Dhara evaluation.
 
 Do not call `dhara_map_resume()`, `dhara_map_clear()`, or any write/erase
 operation against the board's current NAND volume during this evaluation.
@@ -23,12 +30,10 @@ restore procedure.
 The firmware now records the factory-good physical blocks remaining after
 LittleFS's 1,008-block mapping and the two mapping-metadata blocks. Under
 `dhara-eval`, `NandStorage::dhara_test_blocks()` exposes only this isolated
-tail region. The list is read-only inventory at this stage: Dhara is not yet
-connected, and no blocks in this region are erased or programmed by the new
-code. The region contains at most 14 blocks (1.75 MiB); factory-bad blocks
-reduce that count. The callback self-test checks one page per spare block; it
-does not scan every page for stale contents. A reported erased first page is
-not proof that the entire block is erased.
+tail region. The Dhara list is disjoint from LittleFS and both mapping-metadata blocks.
+It contains at most 14 blocks (1.75 MiB); factory-bad blocks reduce that
+count. The optional provisioning feature above is the only new code allowed
+to erase this list, and it verifies all 64 pages in each block after erasure.
 
 ## Hardware fit
 
