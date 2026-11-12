@@ -209,61 +209,51 @@ fn program_physical_page(page: u32, data: &[u8]) -> bool {
 ///
 /// Apply the STM32 FSMC 512-byte Hamming syndrome to a data chunk.
 ///
-/// The low three parity pairs encode the bit position (P4, P2, P1); the
-/// following nine pairs encode the byte address (P8 through P1024). For a
-/// correctable data error every pair is 01 or 10. A one-bit syndrome is an
+/// The 24-bit syndrome is twelve 2-bit parity pairs. The first three pairs
+/// encode the data-bit position; the remaining nine encode the byte address.
+/// A data-bit error has 01 or 10 in every pair. A one-bit syndrome is an
 /// ECC-bit error and does not require changing the data.
-fn hamming_address_bits(value: u8) -> usize {
-    ((value >> 1) & 1) as usize
-        | (((value >> 3) & 1) as usize) << 1
-        | (((value >> 5) & 1) as usize) << 2
-        | (((value >> 7) & 1) as usize) << 3
-}
-
-/// Apply the STM32 FSMC 512-byte Hamming syndrome.
-///
-/// This follows the SmartMedia-order correction used by the Linux STM32 FSMC
-/// NAND driver. The first two ECC bytes carry the low eight byte-address bits;
-/// ECC byte 2 carries the ninth byte-address bit and the three data-bit bits.
 fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     if data.len() != FSMC_ECC_CHUNK_SIZE {
         return false;
     }
 
-    // Linux's ecc_sw_hamming_correct() with NAND_ECC_SOFT_HAMMING_SM_ORDER.
-    // The STM32 FSMC emits the same 3-byte Hamming code, in SmartMedia order.
     let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
     if syndrome == 0 {
         return true;
     }
 
-    let b0 = syndrome as u8;
-    let b1 = (syndrome >> 8) as u8;
-    let b2 = (syndrome >> 16) as u8;
-
-    // For a 512-byte step, bit 0/1 of b2 are not part of the address
-    // parity test. This is the exact 512-byte condition from Linux MTD.
-    let data_bit_error =
-        ((b0 ^ (b0 >> 1)) & 0x55) == 0x55
-        && ((b1 ^ (b1 >> 1)) & 0x55) == 0x55
-        && ((b2 ^ (b2 >> 1)) & 0x55) == 0x55;
-
-    if data_bit_error {
-        let byte_index = (usize::from((b2 & 0x03) >> 1) << 8)
-            | (hamming_address_bits(b1) << 4)
-            | hamming_address_bits(b0);
-        let bit_index = hamming_address_bits(b2 >> 2);
-
-        if byte_index >= data.len() || bit_index >= 8 {
-            return false;
-        }
-
-        data[byte_index] ^= 1 << bit_index;
+    // A single changed ECC bit is a parity-bit error, not a data-bit error.
+    if syndrome.count_ones() == 1 {
         return true;
     }
 
-    // Exactly one changed ECC bit means the data itself is intact.
-    syndrome.count_ones() == 1
+    // Decode the three low parity pairs as the bit index (P4, P2, P1).
+    let mut bit_index = 0usize;
+    for bit in 0..3 {
+        match (syndrome >> (bit * 2)) & 0x03 {
+            0b01 => {}
+            0b10 => bit_index |= 1 << bit,
+            _ => return false,
+        }
+    }
+
+    // The remaining nine pairs encode the byte address (P8 through P1024).
+    let mut byte_index = 0usize;
+    for bit in 0..9 {
+        match (syndrome >> (6 + bit * 2)) & 0x03 {
+            0b01 => {}
+            0b10 => byte_index |= 1 << bit,
+            _ => return false,
+        }
+    }
+
+    if byte_index >= data.len() {
+        return false;
+    }
+
+    data[byte_index] ^= 1 << bit_index;
+    true
 }
 
 fn read_data_page(page: u32, out: &mut [u8]) -> bool {
