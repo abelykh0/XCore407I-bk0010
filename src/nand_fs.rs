@@ -1349,6 +1349,10 @@ fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
         InitError::TooManyBadBlocks => b"not enough good blocks",
         InitError::MetadataFailure => b"mapping metadata read/write failed",
         InitError::MountFailed => b"LittleFS mount failed",
+        InitError::DharaNoJournal => b"Dhara journal missing",
+        InitError::DharaCapacity => b"Dhara capacity too small",
+        InitError::DharaErase => b"Dhara NAND erase failed",
+        InitError::DharaFormat => b"Dhara LittleFS format failed",
     };
     append(out, len, message);
 }
