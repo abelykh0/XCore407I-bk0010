@@ -267,7 +267,13 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
 }
 
 fn read_data_page(page: u32, out: &mut [u8]) -> bool {
-    if out.len() != PAGE_SIZE { return false; }
+    ECC_DIAG_STAGE.store(0, Ordering::Relaxed);
+    ECC_DIAG_CHUNK.store(0, Ordering::Relaxed);
+    ECC_DIAG_SYNDROME.store(0, Ordering::Relaxed);
+    if out.len() != PAGE_SIZE {
+        ECC_DIAG_STAGE.store(5, Ordering::Relaxed); // Invalid output buffer size
+        return false;
+    }
 
     command(0x00);
     address(0);
@@ -291,6 +297,7 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
     if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut stored) {
+        ECC_DIAG_STAGE.store(1, Ordering::Relaxed); // OOB read failed
         return false;
     }
 
@@ -299,6 +306,7 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return true;
     }
     if tag != ECC_TAG {
+        ECC_DIAG_STAGE.store(2, Ordering::Relaxed); // Invalid ECC tag
         return false;
     }
 
