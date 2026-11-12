@@ -39,16 +39,23 @@ If Dhara is valid but LittleFS cannot mount, the file browser offers a
 two-step confirmation to format LittleFS. This deletes its files but preserves
 the Dhara journal.
 
-**Ctrl+Alt+F12** opens a two-step NAND reinitialization confirmation at any
-time. Confirming erases all usable NAND blocks, creates a new Dhara volume,
-and formats an empty LittleFS filesystem. Factory bad blocks are preserved.
-All existing NAND data is lost. Cancel at either step to leave NAND unchanged.
+The manual **Ctrl+Alt+F12** NAND reinitialization shortcut is compiled only
+with the `destructive-nand-init` feature. It opens a two-step confirmation;
+confirming erases usable NAND blocks, creates a Dhara volume, and formats an
+empty LittleFS filesystem. Factory bad blocks are preserved. All NAND data
+is lost. Without this feature, the shortcut is unavailable.
 
 ## Build and flash
 
 ```powershell
 cargo build --release --target thumbv7em-none-eabihf
 probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
+```
+
+Enable the destructive NAND initialization shortcut only when needed:
+
+```powershell
+cargo build --release --target thumbv7em-none-eabihf --features destructive-nand-init
 ```
 
 Optional CPU timing diagnostics:
