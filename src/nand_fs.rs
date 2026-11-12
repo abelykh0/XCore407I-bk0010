@@ -53,10 +53,25 @@ pub const LOGICAL_BLOCKS: usize = PHYSICAL_BLOCKS as usize - RESERVED_BLOCKS;
 /// small startup stack while LittleFS is being mounted/formatted.
 static mut PHYSICAL_BLOCK_MAP: [u16; LOGICAL_BLOCKS] = [0; LOGICAL_BLOCKS];
 
+// A complete mapping record fits in one NAND data page. Keep one scratch page
+// in static RAM so NAND initialization does not consume 2 KiB of stack.
+static mut MAP_METADATA_PAGE: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
+
+const MAP_METADATA_MAGIC: [u8; 8] = *b"XCMAP001";
+const MAP_METADATA_VERSION: u16 = 1;
+const MAP_METADATA_HEADER_SIZE: usize = 20;
+const MAP_METADATA_MAP_OFFSET: usize = MAP_METADATA_HEADER_SIZE;
+const MAP_METADATA_CRC_OFFSET: usize =
+    MAP_METADATA_MAP_OFFSET + LOGICAL_BLOCKS * core::mem::size_of::<u16>();
+const _: () = assert!(MAP_METADATA_CRC_OFFSET + 4 <= PAGE_SIZE);
+
 pub struct NandStorage {
     physical_blocks: &'static mut [u16; LOGICAL_BLOCKS],
     good_blocks: usize,
     factory_bad_blocks: u16,
+    metadata_blocks: [u16; 2],
+    active_metadata_slot: u8,
+    mapping_generation: u32,
     /// First good block beyond LittleFS capacity, reserved for ECC self-test.
     #[cfg(feature = "nand-ecc-test")]
     ecc_test_block: Option<u16>,
@@ -303,6 +318,134 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     true
 }
 
+
+/// CRC-32/IEEE used to reject incomplete or corrupted mapping records.
+fn mapping_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
+fn metadata_page() -> &'static mut [u8; PAGE_SIZE] {
+    unsafe { &mut *core::ptr::addr_of_mut!(MAP_METADATA_PAGE) }
+}
+
+fn build_mapping_record(
+    generation: u32,
+    physical_blocks: &[u16; LOGICAL_BLOCKS],
+) {
+    let page = metadata_page();
+    page.fill(0xFF);
+    page[..8].copy_from_slice(&MAP_METADATA_MAGIC);
+    page[8..12].copy_from_slice(&generation.to_le_bytes());
+    page[12..14].copy_from_slice(&MAP_METADATA_VERSION.to_le_bytes());
+    page[14..16].copy_from_slice(&(LOGICAL_BLOCKS as u16).to_le_bytes());
+    page[16..20].copy_from_slice(&0u32.to_le_bytes());
+
+    for (index, &block) in physical_blocks.iter().enumerate() {
+        let offset = MAP_METADATA_MAP_OFFSET + index * 2;
+        page[offset..offset + 2].copy_from_slice(&block.to_le_bytes());
+    }
+
+    let crc = mapping_crc32(&page[..MAP_METADATA_CRC_OFFSET]);
+    page[MAP_METADATA_CRC_OFFSET..MAP_METADATA_CRC_OFFSET + 4]
+        .copy_from_slice(&crc.to_le_bytes());
+}
+
+/// Validate a mapping record and return its generation. The map is checked
+/// for range, reserved-block collisions, and duplicate physical blocks.
+fn validate_mapping_record(page: &[u8; PAGE_SIZE], metadata_blocks: &[u16; 2]) -> Option<u32> {
+    if page[..8] != MAP_METADATA_MAGIC
+        || u16::from_le_bytes([page[12], page[13]]) != MAP_METADATA_VERSION
+        || u16::from_le_bytes([page[14], page[15]]) as usize != LOGICAL_BLOCKS
+    {
+        return None;
+    }
+
+    let stored_crc = u32::from_le_bytes([
+        page[MAP_METADATA_CRC_OFFSET],
+        page[MAP_METADATA_CRC_OFFSET + 1],
+        page[MAP_METADATA_CRC_OFFSET + 2],
+        page[MAP_METADATA_CRC_OFFSET + 3],
+    ]);
+    if mapping_crc32(&page[..MAP_METADATA_CRC_OFFSET]) != stored_crc {
+        return None;
+    }
+
+    for index in 0..LOGICAL_BLOCKS {
+        let offset = MAP_METADATA_MAP_OFFSET + index * 2;
+        let block = u16::from_le_bytes([page[offset], page[offset + 1]]);
+        if block as u32 >= PHYSICAL_BLOCKS
+            || block == metadata_blocks[0]
+            || block == metadata_blocks[1]
+        {
+            return None;
+        }
+        for previous in 0..index {
+            let previous_offset = MAP_METADATA_MAP_OFFSET + previous * 2;
+            let previous_block = u16::from_le_bytes([
+                page[previous_offset],
+                page[previous_offset + 1],
+            ]);
+            if block == previous_block {
+                return None;
+            }
+        }
+    }
+
+    Some(u32::from_le_bytes([page[8], page[9], page[10], page[11]]))
+}
+
+fn read_mapping_record(block: u16, metadata_blocks: &[u16; 2]) -> Option<u32> {
+    let page = metadata_page();
+    if !read_data_page(block as u32 * PAGES_PER_BLOCK, page) {
+        return None;
+    }
+    validate_mapping_record(page, metadata_blocks)
+}
+
+fn load_mapping_record(
+    block: u16,
+    metadata_blocks: &[u16; 2],
+    physical_blocks: &mut [u16; LOGICAL_BLOCKS],
+) -> Option<u32> {
+    let page = metadata_page();
+    if !read_data_page(block as u32 * PAGES_PER_BLOCK, page) {
+        return None;
+    }
+    let generation = validate_mapping_record(page, metadata_blocks)?;
+    for (index, entry) in physical_blocks.iter_mut().enumerate() {
+        let offset = MAP_METADATA_MAP_OFFSET + index * 2;
+        *entry = u16::from_le_bytes([page[offset], page[offset + 1]]);
+    }
+    Some(generation)
+}
+
+/// Write the next complete mapping snapshot to the inactive metadata block.
+/// The active copy is never erased by this operation.
+fn write_initial_mapping(
+    block: u16,
+    generation: u32,
+    physical_blocks: &[u16; LOGICAL_BLOCKS],
+) -> bool {
+    build_mapping_record(generation, physical_blocks);
+    let page = metadata_page();
+    if !erase_physical_block(block)
+        || !program_physical_page(block as u32 * PAGES_PER_BLOCK, page)
+    {
+        return false;
+    }
+    if !read_data_page(block as u32 * PAGES_PER_BLOCK, page) {
+        return false;
+    }
+    validate_mapping_record(page, &[u16::MAX; 2]) == Some(generation)
+}
+
 fn configure_fsmc() {
     unsafe {
         let rcc = &*pac::RCC::ptr();
@@ -347,9 +490,13 @@ impl NandStorage {
             physical_blocks,
             good_blocks: 0,
             factory_bad_blocks: 0,
+            metadata_blocks: [u16::MAX; 2],
+            active_metadata_slot: 0,
+            mapping_generation: 0,
             #[cfg(feature = "nand-ecc-test")]
             ecc_test_block: None,
         };
+        let mut metadata_count = 0usize;
         let mut marker = [0u8; 1];
 
         for block in 0..PHYSICAL_BLOCKS {
@@ -367,10 +514,15 @@ impl NandStorage {
                     storage.physical_blocks[storage.good_blocks] = block as u16;
                     storage.good_blocks += 1;
                 }
-                #[cfg(feature = "nand-ecc-test")]
-                {
-                    if storage.good_blocks == LOGICAL_BLOCKS && storage.ecc_test_block.is_none() {
-                        // This block is outside LittleFS's logical address space.
+                if storage.good_blocks == LOGICAL_BLOCKS && metadata_count < 2 {
+                    // Reserve the first two good blocks after the existing
+                    // LittleFS physical range for redundant mapping snapshots.
+                    storage.metadata_blocks[metadata_count] = block as u16;
+                    metadata_count += 1;
+                } else if storage.good_blocks == LOGICAL_BLOCKS + 2 {
+                    #[cfg(feature = "nand-ecc-test")]
+                    if storage.ecc_test_block.is_none() {
+                        // The opt-in destructive test uses a spare, not metadata.
                         storage.ecc_test_block = Some(block as u16);
                     }
                 }
@@ -379,9 +531,39 @@ impl NandStorage {
             }
         }
 
-        if storage.good_blocks != LOGICAL_BLOCKS {
+        if storage.good_blocks != LOGICAL_BLOCKS || metadata_count != 2 {
             return Err(InitError::TooManyBadBlocks);
         }
+
+        // Prefer the newest valid snapshot. Generation comparison uses
+        // wrapping arithmetic so rollover does not make an older copy win.
+        let generation0 = read_mapping_record(storage.metadata_blocks[0], &storage.metadata_blocks);
+        let generation1 = read_mapping_record(storage.metadata_blocks[1], &storage.metadata_blocks);
+        let selected = match (generation0, generation1) {
+            (Some(a), Some(b)) => {
+                if b.wrapping_sub(a) < 0x8000_0000 { 1 } else { 0 }
+            }
+            (Some(_), None) => 0,
+            (None, Some(_)) => 1,
+            (None, None) => {
+                // First boot after adding metadata support: the old mapping
+                // remains exactly the first 1,008 factory-good blocks.
+                if !write_initial_mapping(storage.metadata_blocks[0], 1, storage.physical_blocks) {
+                    return Err(InitError::MarkerRead);
+                }
+                storage.active_metadata_slot = 0;
+                storage.mapping_generation = 1;
+                return Ok(storage);
+            }
+        };
+
+        let generation = load_mapping_record(
+            storage.metadata_blocks[selected],
+            &storage.metadata_blocks,
+            storage.physical_blocks,
+        ).ok_or(InitError::MarkerRead)?;
+        storage.active_metadata_slot = selected as u8;
+        storage.mapping_generation = generation;
         Ok(storage)
     }
 
@@ -390,6 +572,31 @@ impl NandStorage {
 
     fn physical_block(&self, logical: usize) -> Option<u16> {
         self.physical_blocks.get(logical).copied()
+    }
+
+    /// Persist a changed map to the inactive metadata block before callers
+    /// switch or retire any physical data block.
+    fn persist_mapping(&mut self) -> bool {
+        let next_slot = 1usize - self.active_metadata_slot as usize;
+        let next_generation = self.mapping_generation.wrapping_add(1);
+        let block = self.metadata_blocks[next_slot];
+
+        build_mapping_record(next_generation, self.physical_blocks);
+        let page = metadata_page();
+        if !erase_physical_block(block)
+            || !program_physical_page(block as u32 * PAGES_PER_BLOCK, page)
+        {
+            return false;
+        }
+        if !read_data_page(block as u32 * PAGES_PER_BLOCK, page)
+            || validate_mapping_record(page, &self.metadata_blocks) != Some(next_generation)
+        {
+            return false;
+        }
+
+        self.active_metadata_slot = next_slot as u8;
+        self.mapping_generation = next_generation;
+        true
     }
 }
 
