@@ -36,6 +36,9 @@ use file_browser::{
     SAVE_DIALOG_IDLE, SAVE_DIALOG_INPUT, SAVE_DIALOG_STATE, SAVE_DIALOG_CHECK, SAVE_DIALOG_CONFIRM, SAVE_DIALOG_WRITE,
     SAVE_DIALOG_DIRTY, SAVE_DIALOG_RESULT, SAVE_OVERWRITE,
     SAVE_RESULT_CANCELLED, SAVE_RESULT_OK, SAVE_RESULT_ERROR,
+    FORMAT_STATE, FORMAT_ERROR, FORMAT_IDLE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL,
+    FORMAT_REQUEST, FORMAT_CANCELLED, FORMAT_DONE, FORMAT_FAILED,
+    draw_format_confirmation,
 };
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
@@ -206,6 +209,35 @@ fn main() -> ! {
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
+        match FORMAT_STATE.load(Ordering::Acquire) {
+            FORMAT_CONFIRM => draw_format_confirmation(false, FORMAT_ERROR.load(Ordering::Acquire)),
+            FORMAT_CONFIRM_FINAL => draw_format_confirmation(true, FORMAT_ERROR.load(Ordering::Acquire)),
+            FORMAT_CANCELLED => {
+                FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"FORMAT CANCELLED");
+            }
+            FORMAT_REQUEST => {
+                let result = xcore407i_blinker::nand_fs::format_existing_littlefs();
+                if result.is_ok() {
+                    FORMAT_STATE.store(FORMAT_DONE, Ordering::Release);
+                } else {
+                    FORMAT_STATE.store(FORMAT_FAILED, Ordering::Release);
+                }
+            }
+            FORMAT_DONE => {
+                FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"LITTLEFS FORMATTED - REOPEN F2");
+            }
+            FORMAT_FAILED => {
+                FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"LITTLEFS FORMAT FAILED");
+            }
+            _ => {}
+        }
+
         let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
         if save_state == SAVE_DIALOG_CHECK {
             let mut path = [0u8; MAX_BROWSER_PATH];
@@ -285,6 +317,20 @@ fn main() -> ! {
                 Err(error) => {
                     browser_open = false;
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
+                    if matches!(
+                        error,
+                        xcore407i_blinker::nand_fs::FsAccessError::NotMountable
+                            | xcore407i_blinker::nand_fs::FsAccessError::Mount
+                    ) {
+                        let detail = match error {
+                            xcore407i_blinker::nand_fs::FsAccessError::NotMountable => 1,
+                            xcore407i_blinker::nand_fs::FsAccessError::Mount => 2,
+                            _ => 0,
+                        };
+                        FORMAT_ERROR.store(detail, Ordering::Release);
+                        FORMAT_STATE.store(FORMAT_CONFIRM, Ordering::Release);
+                        draw_format_confirmation(false, detail);
+                    } else {
                     let message: &[u8] = match error {
                         xcore407i_blinker::nand_fs::FsAccessError::Init(error) => {
                             match error {
@@ -310,6 +356,7 @@ fn main() -> ! {
                             b"LFS ROOT READ FAILED",
                     };
                     show_usb_status(message);
+                    }
                 }
             }
         }
