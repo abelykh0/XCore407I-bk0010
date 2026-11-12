@@ -27,7 +27,9 @@ const NAND_BASE: usize = 0x7000_0000;
 
 // STM32F407 FSMC NAND Bank 2 registers.
 const FSMC_PCR2: *mut u32 = (FSMC_BASE + 0x60) as *mut u32;
-const FSMC_ECCR2: *const u32 = (FSMC_BASE + 0x54) as *const u32;
+// Bank 2 ECCR2 is at offset 0x74 (PCR2 +0x60, SR2 +0x64,
+// PMEM2 +0x68, PATT2 +0x6C, reserved +0x70, ECCR2 +0x74).
+const FSMC_ECCR2: *const u32 = (FSMC_BASE + 0x74) as *const u32;
 const FSMC_PCR_ECCEN: u32 = 1 << 6;
 const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
