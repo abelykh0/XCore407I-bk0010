@@ -565,7 +565,8 @@ pub fn show_dhara_spare_inventory(
                 append_bytes(&mut line, &mut pos, b" READ TEST PENDING");
             }
             if let Some(success) = erase_status {
-                append_bytes(&mut line, &mut pos, if success { b" ERASE OK" } else { b" ERASE FAIL" });
+                let status: &[u8] = if success { b" ERASE OK" } else { b" ERASE FAIL" };
+                append_bytes(&mut line, &mut pos, status);
             }
         }
         None => append_bytes(&mut line, &mut pos, b"WAITING FOR NAND"),
