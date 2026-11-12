@@ -322,12 +322,10 @@ fn main() -> ! {
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
                     if matches!(
                         error,
-                        xcore407i_blinker::nand_fs::FsAccessError::NotMountable
-                            | xcore407i_blinker::nand_fs::FsAccessError::Mount(_)
+                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_)
                     ) {
                         let detail = match error {
                             xcore407i_blinker::nand_fs::FsAccessError::Mount(code) => code,
-                            xcore407i_blinker::nand_fs::FsAccessError::NotMountable => -84,
                             _ => 0,
                         };
                         FORMAT_ERROR.store(detail, Ordering::Release);
@@ -350,8 +348,6 @@ fn main() -> ! {
                                     b"DHARA CAPACITY LOW",
                             }
                         },
-                        xcore407i_blinker::nand_fs::FsAccessError::NotMountable =>
-                            b"LFS NOT MOUNTABLE",
                         xcore407i_blinker::nand_fs::FsAccessError::Mount(_) =>
                             b"LFS MOUNT FAILED",
                         xcore407i_blinker::nand_fs::FsAccessError::Operation =>
