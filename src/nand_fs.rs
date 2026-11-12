@@ -249,7 +249,7 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
         && ((b2 ^ (b2 >> 1)) & 0x54) == 0x54;
 
     if data_bit_error {
-        let byte_index = (hamming_address_bits(b2 & 0x03) << 8)
+        let byte_index = (usize::from((b2 & 0x03) >> 1) << 8)
             | (hamming_address_bits(b1) << 4)
             | hamming_address_bits(b0);
         let bit_index = hamming_address_bits(b2 >> 2);
