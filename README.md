@@ -58,11 +58,6 @@ Hamming ECC protects page data. LittleFS sees 700 logical erase blocks
 (87.5 MiB). A private Dhara sector outside the LittleFS range identifies the
 formatted volume.
 
-The NAND has already been provisioned for this layout. There is no alternate
-raw-NAND filesystem backend and no firmware feature for erasing or reformatting
-the entire NAND. If the Dhara journal or volume marker is missing or invalid,
-initialization fails safely and leaves NAND unchanged.
-
 ## LittleFS Formatting and NAND Provisioning
 
 If LittleFS cannot be mounted but Dhara initializes successfully, the file
