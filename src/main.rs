@@ -45,6 +45,11 @@ use usb_host::{
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
+// Set true temporarily to run the destructive ECC fault-injection test.
+// It uses only a factory-good block outside LittleFS capacity; set false
+// again after recording the result.
+const RUN_NAND_ECC_FAULT_TEST: bool = false;
+
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
@@ -155,6 +160,16 @@ fn main() -> ! {
         &device.TIM3,
         &mut core.NVIC,
     );
+
+    if RUN_NAND_ECC_FAULT_TEST {
+        match xcore407i_blinker::nand_fs::run_ecc_fault_injection_test() {
+            Ok(()) => show_usb_status(b"NAND ECC TEST PASS"),
+            Err(xcore407i_blinker::nand_fs::EccSelfTestError::NoReservedGoodBlock) => {
+                show_usb_status(b"NAND ECC TEST: NO SPARE");
+            }
+            Err(_) => show_usb_status(b"NAND ECC TEST FAILED"),
+        }
+    }
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
