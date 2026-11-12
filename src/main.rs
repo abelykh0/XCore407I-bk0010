@@ -89,6 +89,11 @@ fn main() -> ! {
         device.GPIOI,
     );
 
+    // Read only the factory markers to inventory blocks reserved for Dhara.
+    // This does not mount LittleFS or program/erase any NAND block.
+    #[cfg(feature = "dhara-eval")]
+    let _ = xcore407i_blinker::nand_fs::NandStorage::scan_dhara_spare_inventory();
+
     // Non-destructive NAND identification and factory bad-block scan.
     // No blocks are erased or programmed.
     //nand_device::run_read_only_diagnostic();
