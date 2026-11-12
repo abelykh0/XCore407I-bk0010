@@ -317,6 +317,14 @@ fn main() -> ! {
                                     b"NAND MAP META FAIL",
                                 xcore407i_blinker::nand_fs::InitError::MountFailed =>
                                     b"NAND INIT MOUNT FAIL",
+                                xcore407i_blinker::nand_fs::InitError::DharaNoJournal =>
+                                    b"DHARA JOURNAL MISSING",
+                                xcore407i_blinker::nand_fs::InitError::DharaCapacity =>
+                                    b"DHARA CAPACITY LOW",
+                                xcore407i_blinker::nand_fs::InitError::DharaErase =>
+                                    b"DHARA NAND ERASE FAIL",
+                                xcore407i_blinker::nand_fs::InitError::DharaFormat =>
+                                    b"DHARA LFS FORMAT FAIL",
                             }
                         },
                         xcore407i_blinker::nand_fs::FsAccessError::NotMountable =>
