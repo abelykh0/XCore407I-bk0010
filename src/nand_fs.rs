@@ -55,6 +55,8 @@ pub struct NandStorage {
     physical_blocks: &'static mut [u16; LOGICAL_BLOCKS],
     good_blocks: usize,
     factory_bad_blocks: u16,
+    /// First good block beyond LittleFS capacity, reserved for ECC self-test.
+    ecc_test_block: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,17 +194,16 @@ fn program_physical_page(page: u32, data: &[u8]) -> bool {
 /// Pages without the tag are treated as legacy raw-NAND pages.
 /// Apply the STM32 FSMC 512-byte Hamming syndrome to a data chunk.
 ///
-/// The 24-bit syndrome consists of 12 two-bit parity pairs. For a data-bit
-/// error every pair is 01 or 10; 10 contributes the corresponding address
-/// bit. Pair order is P8, P16, P32, P64, P128, P256, P512, P1024,
-/// P4, P2, P1, P2048. A syndrome with one set bit is an ECC-bit error and
-/// does not require changing the data.
+/// The low three parity pairs encode the bit position (P4, P2, P1); the
+/// following nine pairs encode the byte address (P8 through P1024). For a
+/// correctable data error every pair is 01 or 10. A one-bit syndrome is an
+/// ECC-bit error and does not require changing the data.
 fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     if data.len() != FSMC_ECC_CHUNK_SIZE {
         return false;
     }
 
-    let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
+    let mut syndrome = (stored ^ calculated) & 0x00FF_FFFF;
     if syndrome == 0 {
         return true;
     }
@@ -212,20 +213,27 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
         return true;
     }
 
-    let mut location = 0usize;
-    for pair_index in 0..12 {
-        match (syndrome >> (pair_index * 2)) & 0x03 {
+    let mut bit_index = 0usize;
+    for pair_index in 0..3 {
+        match syndrome & 0x03 {
             0x01 => {}
-            0x02 => location |= 1 << pair_index,
+            0x02 => bit_index |= 1 << pair_index,
             _ => return false,
         }
+        syndrome >>= 2;
     }
 
-    // The first eight address bits select the byte; P2048 (pair 11)
-    // supplies byte-address bit 8. P4/P2/P1 (pairs 8..10) select its bit.
-    let byte_index = (location & 0xFF) | (((location >> 11) & 1) << 8);
-    let bit_index = (location >> 8) & 0x07;
-    if byte_index >= data.len() {
+    let mut byte_index = 0usize;
+    for pair_index in 0..9 {
+        match syndrome & 0x03 {
+            0x01 => {}
+            0x02 => byte_index |= 1 << pair_index,
+            _ => return false,
+        }
+        syndrome >>= 2;
+    }
+
+    if byte_index >= data.len() || bit_index >= 8 {
         return false;
     }
 
@@ -331,6 +339,7 @@ impl NandStorage {
             physical_blocks,
             good_blocks: 0,
             factory_bad_blocks: 0,
+            ecc_test_block: None,
         };
         let mut marker = [0u8; 1];
 
@@ -348,6 +357,9 @@ impl NandStorage {
                 if storage.good_blocks < LOGICAL_BLOCKS {
                     storage.physical_blocks[storage.good_blocks] = block as u16;
                     storage.good_blocks += 1;
+                } else if storage.ecc_test_block.is_none() {
+                    // This block is outside LittleFS's logical address space.
+                    storage.ecc_test_block = Some(block as u16);
                 }
             } else {
                 storage.factory_bad_blocks += 1;
@@ -366,6 +378,116 @@ impl NandStorage {
     fn physical_block(&self, logical: usize) -> Option<u16> {
         self.physical_blocks.get(logical).copied()
     }
+}
+
+/// Result of the destructive ECC fault-injection test.
+///
+/// The test only erases one factory-good block that is beyond LittleFS's
+/// logical capacity. It never selects a block used by the filesystem.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EccSelfTestError {
+    NoReservedGoodBlock,
+    EraseFailed,
+    ProgramFailed,
+    SingleBitCorrectionFailed,
+    DoubleBitDetectionFailed,
+    CleanupFailed,
+}
+
+/// Program test pages with ECC for an all-0xFF page, then alter selected
+/// data-register bytes with ECC disabled before the same page-program confirm.
+fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
+    command(0x80);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    cortex_m::asm::delay(1_000);
+
+    let mut ecc = [0u8; ECC_OOB_BYTES];
+    let blank = [0xFFu8; FSMC_ECC_CHUNK_SIZE];
+    for chunk_index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+        ecc_begin_chunk();
+        for &byte in &blank {
+            write_data(byte);
+        }
+        encode_ecc(
+            ecc_end_chunk(),
+            &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK],
+        );
+    }
+
+    // Random Data Input changes the NAND page buffer after ECC calculation,
+    // but before the single final program-confirm operation.
+    for &(column, value) in corruptions {
+        if column as usize >= PAGE_SIZE {
+            return false;
+        }
+        command(0x85);
+        address(column as u8);
+        address((column >> 8) as u8);
+        write_data(value);
+    }
+
+    // Place the ECC and tag in OOB using another random-data-input address.
+    command(0x85);
+    address((PAGE_SIZE as u16 + ECC_OOB_OFFSET) as u8);
+    address(((PAGE_SIZE as u16 + ECC_OOB_OFFSET) >> 8) as u8);
+    write_data(0xFF);
+    write_data(0xFF);
+    for &byte in &ecc {
+        write_data(byte);
+    }
+    for &byte in &ECC_TAG {
+        write_data(byte);
+    }
+
+    command(0x10);
+    if !wait_ready_rb() {
+        return false;
+    }
+    command(0x70);
+    read_data() & 0x01 == 0
+}
+
+/// Exercise one-bit correction and two-bit detection on a reserved NAND block.
+///
+/// The test erases and reuses only the first factory-good block excluded from
+/// LittleFS. It attempts to erase that block again before returning.
+pub fn run_ecc_fault_injection_test() -> Result<(), EccSelfTestError> {
+    let storage = NandStorage::new().map_err(|_| EccSelfTestError::EraseFailed)?;
+    let block = storage.ecc_test_block.ok_or(EccSelfTestError::NoReservedGoodBlock)?;
+    if !erase_physical_block(block) {
+        return Err(EccSelfTestError::EraseFailed);
+    }
+
+    let first_page = block as u32 * PAGES_PER_BLOCK;
+    let one_bit = [(0x0125u16, 0xF7u8)]; // Clear bit 3.
+    let two_bits = [(0x0125u16, 0xEDu8)]; // Clear bits 1 and 4.
+
+    let test_result = (|| {
+        if !program_ecc_test_page(first_page, &one_bit)
+            || !program_ecc_test_page(first_page + 1, &two_bits)
+        {
+            return Err(EccSelfTestError::ProgramFailed);
+        }
+
+        let mut readback = [0u8; PAGE_SIZE];
+        if !read_data_page(first_page, &mut readback) || readback.iter().any(|&byte| byte != 0xFF) {
+            return Err(EccSelfTestError::SingleBitCorrectionFailed);
+        }
+
+        if read_data_page(first_page + 1, &mut readback) {
+            return Err(EccSelfTestError::DoubleBitDetectionFailed);
+        }
+
+        Ok(())
+    })();
+
+    if !erase_physical_block(block) {
+        return Err(EccSelfTestError::CleanupFailed);
+    }
+    test_result
 }
 
 impl Storage for NandStorage {
