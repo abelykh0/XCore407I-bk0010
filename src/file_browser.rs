@@ -296,9 +296,34 @@ pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
         -12 => b"LFS_ERR_NO_MEMORY (-12)",
         -61 => b"LFS_ERR_NO_ATTRIBUTE (-61)",
         -36 => b"LFS_ERR_FILENAME_TOO_LONG (-36)",
-        _ => b"Unknown LittleFS error code",
+        _ => b"",
     };
-    show_file_browser_line(4, detail, false);
+    if !detail.is_empty() {
+        show_file_browser_line(4, detail, false);
+    } else {
+        let mut line = [b' '; 64];
+        let prefix = b"LFS ERROR CODE: ";
+        line[..prefix.len()].copy_from_slice(prefix);
+        let mut value = if error < 0 { error.wrapping_neg() as u32 } else { error as u32 };
+        let mut digits = [b'0'; 10];
+        let mut count = 0usize;
+        loop {
+            digits[count] = b'0' + (value % 10) as u8;
+            count += 1;
+            value /= 10;
+            if value == 0 { break; }
+        }
+        let mut len = prefix.len();
+        if error < 0 {
+            line[len] = b'-';
+            len += 1;
+        }
+        for index in (0..count).rev() {
+            line[len] = digits[index];
+            len += 1;
+        }
+        show_file_browser_line(4, &line[..len], false);
+    }
     if final_confirmation {
         show_file_browser_line(7, b"ARE YOU REALLY SURE?", true);
         show_file_browser_line(9, b"ALL LITTLEFS FILES WILL BE LOST", false);
