@@ -294,10 +294,6 @@ fn main() -> ! {
                                     b"NAND WRONG DEVICE",
                                 xcore407i_blinker::nand_fs::InitError::MarkerRead =>
                                     b"NAND MARKER READ",
-                                xcore407i_blinker::nand_fs::InitError::TooManyBadBlocks =>
-                                    b"NAND TOO MANY BAD",
-                                xcore407i_blinker::nand_fs::InitError::MetadataFailure =>
-                                    b"NAND MAP META FAIL",
                                 xcore407i_blinker::nand_fs::InitError::MountFailed =>
                                     b"NAND INIT MOUNT FAIL",
                                 xcore407i_blinker::nand_fs::InitError::DharaNoJournal =>
