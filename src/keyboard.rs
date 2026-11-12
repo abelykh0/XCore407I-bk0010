@@ -321,9 +321,8 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             continue;
         }
 
-        // Ctrl+Alt+F12 opens the explicit NAND reinitialization flow.
-        // This is intentionally available even when a valid Dhara volume
-        // already exists; the two confirmation screens guard the erase.
+        // Ctrl+Alt+F12 is an opt-in destructive maintenance command.
+        #[cfg(feature = "destructive-nand-init")]
         if key == 0x45 && modifiers & 0x11 != 0 && modifiers & 0x44 != 0 {
             if INIT_STATE.load(Ordering::Acquire) == 0 {
                 keyboard_queue_discard();
@@ -333,8 +332,13 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
         }
 
         // STOP is a hardware IRQ1, not a character sent through 177662.
-        // Pause remains available as the host key for the BK STOP signal.
-        if key == 0x48 {
+        // F12 is reserved for NAND initialization only in the feature build.
+        if key == 0x48 || (key == 0x45 && {
+            #[cfg(feature = "destructive-nand-init")]
+            { modifiers & 0x11 == 0 || modifiers & 0x44 == 0 }
+            #[cfg(not(feature = "destructive-nand-init"))]
+            { true }
+        }) {
             unsafe { bk_request_stop_irq(); }
             continue;
         }
