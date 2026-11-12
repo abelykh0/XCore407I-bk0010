@@ -385,7 +385,27 @@ fn main() -> ! {
                     8 => b"NAND ECC: CLEANUP FAILED",
                     _ => b"NAND ECC: NOT RUN",
                 };
-                xcore407i_blinker::camera::show_file_browser_line(29, ecc_line, false);
+                if nand_ecc_test_status == 5 {
+                    let (stage, chunk, syndrome) =
+                        xcore407i_blinker::nand_fs::ecc_diagnostic();
+                    let mut detail = [b' '; 32];
+                    detail[..4].copy_from_slice(b"ECC ");
+                    detail[4] = b'S';
+                    detail[5] = b'0' + (stage.min(9) as u8);
+                    detail[7] = b'C';
+                    detail[8] = b'0' + (chunk.min(9) as u8);
+                    for i in 0..6 {
+                        let nibble = ((syndrome >> ((5 - i) * 4)) & 0xF) as u8;
+                        detail[10 + i] = if nibble < 10 {
+                            b'0' + nibble
+                        } else {
+                            b'A' + nibble - 10
+                        };
+                    }
+                    xcore407i_blinker::camera::show_file_browser_line(29, &detail, false);
+                } else {
+                    xcore407i_blinker::camera::show_file_browser_line(29, ecc_line, false);
+                }
                 diagnostic_last_dwt = now_dwt;
                 diagnostic_last_pdp = now_pdp;
             }
