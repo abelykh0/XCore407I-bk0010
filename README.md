@@ -9,25 +9,13 @@
 
 [Video demo](https://www.youtube.com/watch?v=IPjBy6mAeOw)
 
-## Hardware
+## Summary
 
 The board uses an STM32F407IGT6 with 192 KB SRAM, a USB3300 high-speed PHY,
 and onboard Samsung K9F1G08U0E 1-Gbit raw NAND.
 
 Video is generated and streamed without storing a complete frame in RAM.
 The firmware coordinates USB video, audio, keyboard input, and emulator timing.
-
-## RTC registers
-
-The STM32 calendar is exposed as read-only Unix milliseconds (low 32 bits):
-
-| Octal address | Register |
-| --- | --- |
-| `177720` | `RTC_MILLIS_L` — bits 0–15 |
-| `177722` | `RTC_MILLIS_H` — bits 16–31 |
-
-Read the low word first; it captures a snapshot used by the following high-word
-read. The value wraps every 49.7 days. RTC resolution is approximately 3.9 ms.
 
 ## Implementation
 
@@ -62,6 +50,18 @@ confirming erases usable NAND blocks, creates a Dhara volume, and formats an
 empty LittleFS filesystem. Factory bad blocks are preserved. All NAND data
 is lost. Without this feature, the shortcut is unavailable.
 
+## RTC registers
+
+The STM32 calendar is exposed as read-only Unix milliseconds (low 32 bits):
+
+| Octal address | Register |
+| --- | --- |
+| `177720` | `RTC_MILLIS_L` — bits 0–15 |
+| `177722` | `RTC_MILLIS_H` — bits 16–31 |
+
+Read the low word first; it captures a snapshot used by the following high-word
+read. The value wraps every 49.7 days. RTC resolution is approximately 3.9 ms.
+
 ## Third-party libraries
 
 - **TinyUSB 0.21.0** — USB device and host stack, including UVC transport and
@@ -72,7 +72,6 @@ is lost. Without this feature, the shortcut is unavailable.
   access and hardware abstraction.
 - **Cortex-M support** (`cortex-m`, `cortex-m-rt`) — Cortex-M runtime and
   interrupt support.
-- **`panic-halt`** — panic handler; **`libm`** — math routines.
 - **CMSIS Core and STM32F4 device headers** — processor and device definitions
   used when compiling TinyUSB.
 - **Build dependencies:** `cc`, `bindgen`, and `glob` — compile C sources,
@@ -83,12 +82,6 @@ is lost. Without this feature, the shortcut is unavailable.
 ```powershell
 cargo build --release --target thumbv7em-none-eabihf
 probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
-```
-
-Enable the destructive NAND initialization shortcut only when needed:
-
-```powershell
-cargo build --release --target thumbv7em-none-eabihf --features destructive-nand-init
 ```
 
 Optional CPU timing diagnostics:
