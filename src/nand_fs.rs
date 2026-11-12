@@ -876,7 +876,7 @@ pub fn with_mounted_report<R>(
         return Err(InitError::MountFailed);
     }
 
-    let mut report = [0u8; 192];
+    let mut report = [0u8; 256];
     let mut len = 0;
     append(&mut report, &mut len, b"XCore407I NAND / LittleFS\r\n");
     append(&mut report, &mut len, b"Factory bad blocks: ");
@@ -909,7 +909,7 @@ const FORMAT_NAND_ONCE: bool = false;
 /// Initialize NAND, perform the explicitly enabled initial format if needed,
 /// then mount. Normal boots with FORMAT_NAND_ONCE=false are mount-only.
 pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
-    let mut report = [0u8; 192];
+    let mut report = [0u8; 256];
     let mut len = 0;
     append(&mut report, &mut len, b"XCore407I NAND / LittleFS\r\n");
 
@@ -926,6 +926,15 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
     append(&mut report, &mut len, b"Factory bad blocks: ");
     append_hex(&mut report, &mut len, storage.factory_bad_blocks() as u32, 4);
     append(&mut report, &mut len, b"\r\n");
+
+    #[cfg(feature = "dhara-eval")]
+    {
+        append(&mut report, &mut len, b"Dhara spare blocks: ");
+        append_hex(&mut report, &mut len, storage.dhara_test_blocks().len() as u32, 2);
+        append(&mut report, &mut len, b" (");
+        append_hex(&mut report, &mut len, storage.dhara_test_capacity_bytes() as u32, 8);
+        append(&mut report, &mut len, b" bytes)\\r\\n");
+    }
 
     let mountable = Filesystem::<NandStorage>::is_mountable(&mut storage);
     let mut formatted_now = false;
