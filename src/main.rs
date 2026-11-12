@@ -49,6 +49,17 @@ const FILE_BROWSER_UP: u8 = 2;
 const FILE_BROWSER_DOWN: u8 = 3;
 const FILE_BROWSER_ENTER: u8 = 4;
 const FILE_BROWSER_ESCAPE: u8 = 5;
+const SAVE_DIALOG_IDLE: u8 = 0;
+const SAVE_DIALOG_INPUT: u8 = 1;
+const SAVE_DIALOG_CHECK: u8 = 2;
+const SAVE_DIALOG_CONFIRM: u8 = 3;
+const SAVE_DIALOG_WRITE: u8 = 4;
+const SAVE_RESULT_CANCELLED: u8 = 1;
+const SAVE_RESULT_OK: u8 = 2;
+const SAVE_RESULT_ERROR: u8 = 3;
+const SAVE_RAM_START: usize = 0x0200;
+const SAVE_RAM_LENGTH: usize = 15_872;
+const SAVE_NAME_CAPACITY: usize = 24;
 const MAX_BROWSER_FILES: usize = 25;
 const MAX_BROWSER_PATH: usize = 256;
 
@@ -58,6 +69,12 @@ static mut BROWSER_PATHS: [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES] =
 static mut BROWSER_PATH_LENGTHS: [u16; MAX_BROWSER_FILES] = [0; MAX_BROWSER_FILES];
 static FILE_BROWSER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static FILE_BROWSER_ACTION: AtomicU8 = AtomicU8::new(0);
+static SAVE_DIALOG_STATE: AtomicU8 = AtomicU8::new(SAVE_DIALOG_IDLE);
+static SAVE_DIALOG_DIRTY: AtomicBool = AtomicBool::new(false);
+static SAVE_DIALOG_RESULT: AtomicU8 = AtomicU8::new(0);
+static SAVE_OVERWRITE: AtomicBool = AtomicBool::new(false);
+static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CAPACITY];
+static mut SAVE_FILENAME_LEN: usize = 0;
 static USB_FS_STATUS: AtomicU32 = AtomicU32::new(0);
 static USB_FS_READY: AtomicBool = AtomicBool::new(false);
 static USB_FS_RETRY_AT: AtomicU32 = AtomicU32::new(0);
@@ -207,6 +224,7 @@ fn main() -> ! {
     // Real-time emulator pacing uses the PDP cycle counter.
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
+    let mut save_dialog_was_active = false;
     #[cfg(feature = "cpu-cycle-diag")]
     let mut performance_last_ms = pacing_start_ms;
     #[cfg(feature = "cpu-cycle-diag")]
@@ -247,6 +265,67 @@ fn main() -> ! {
         }
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
+
+        let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
+        if save_state == SAVE_DIALOG_CHECK {
+            let mut path = [0u8; MAX_BROWSER_PATH];
+            let path_len = unsafe { build_save_path(&mut path) };
+            if path_len == 0 {
+                SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
+                SAVE_DIALOG_RESULT.store(SAVE_RESULT_ERROR, Ordering::Release);
+            } else {
+                let exists = save_file_exists(&path[..path_len]);
+                if exists {
+                    SAVE_DIALOG_STATE.store(SAVE_DIALOG_CONFIRM, Ordering::Release);
+                    SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
+                } else {
+                    SAVE_OVERWRITE.store(false, Ordering::Release);
+                    SAVE_DIALOG_STATE.store(SAVE_DIALOG_WRITE, Ordering::Release);
+                }
+            }
+        }
+
+        if SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_WRITE {
+            let mut path = [0u8; MAX_BROWSER_PATH];
+            let path_len = unsafe { build_save_path(&mut path) };
+            let overwrite = SAVE_OVERWRITE.load(Ordering::Acquire);
+            let saved = path_len != 0 && save_ram_to_path(&path[..path_len], overwrite).is_ok();
+            SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
+            SAVE_DIALOG_RESULT.store(
+                if saved { SAVE_RESULT_OK } else { SAVE_RESULT_ERROR },
+                Ordering::Release,
+            );
+        }
+
+        if SAVE_DIALOG_DIRTY.swap(false, Ordering::AcqRel) {
+            let state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
+            if state == SAVE_DIALOG_INPUT || state == SAVE_DIALOG_CONFIRM {
+                unsafe { draw_save_dialog(state); }
+            }
+        }
+
+        let save_dialog_active = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE;
+        if save_dialog_active != save_dialog_was_active {
+            pacing_start_ms = TICKS.load(Ordering::Relaxed);
+            pacing_start_cycles = unsafe { bk_timing_cycles() };
+            save_dialog_was_active = save_dialog_active;
+        }
+
+        match SAVE_DIALOG_RESULT.swap(0, Ordering::AcqRel) {
+            SAVE_RESULT_CANCELLED => {
+                clear_demo_canvas(0x10);
+                show_usb_status(b"SAVE CANCELLED");
+            }
+            SAVE_RESULT_OK => {
+                clear_demo_canvas(0x10);
+                show_usb_status(b"RAM SAVED");
+            }
+            SAVE_RESULT_ERROR => {
+                clear_demo_canvas(0x10);
+                show_usb_status(b"RAM SAVE FAILED");
+            }
+            _ => {}
+        }
 
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
             keyboard_queue_discard();
@@ -338,7 +417,7 @@ fn main() -> ! {
         // Pace PDP execution against the 1 ms hardware timebase. This keeps
         // the emulated 3 MHz clock aligned with real time in both color and
         // monochrome modes. USB/audio/video servicing continues while ahead.
-        if !browser_open {
+        if !browser_open && SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_IDLE {
             let now_ms = TICKS.load(Ordering::Relaxed);
             let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
             let now_cycles = unsafe { bk_timing_cycles() };
@@ -444,6 +523,114 @@ fn draw_file_browser(
     }
 
     show_file_browser_line(27, b"UP/DOWN MOVE  ENTER LOAD  ESC CANCEL", false);
+}
+
+/// Build a root-level filename from the name entered in the F3 save dialog.
+unsafe fn build_save_path(path: &mut [u8; MAX_BROWSER_PATH]) -> usize {
+    let name_len = unsafe { SAVE_FILENAME_LEN };
+    if name_len == 0 || name_len > SAVE_NAME_CAPACITY {
+        return 0;
+    }
+    let total = 1 + name_len + 4 + 1;
+    if total > path.len() {
+        return 0;
+    }
+    path[0] = b'/';
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
+            path.as_mut_ptr().add(1),
+            name_len,
+        );
+    }
+    path[1 + name_len..1 + name_len + 4].copy_from_slice(b".bin");
+    path[total - 1] = 0;
+    total
+}
+
+fn save_file_exists(path_bytes: &[u8]) -> bool {
+    let Ok(path) = littlefs2::path::Path::from_bytes_with_nul(path_bytes) else {
+        return false;
+    };
+    xcore407i_blinker::nand_fs::with_mounted(|fs| Ok(fs.exists(path)))
+        .unwrap_or(false)
+}
+
+/// Save the complete non-video user RAM range in the loader's 4-byte
+/// little-endian Start/Size format, without allocating a second RAM image.
+fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(), ()> {
+    let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
+    xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        if fs.exists(path) && !overwrite {
+            return Err(littlefs2::io::Error::IO);
+        }
+
+        fs.open_file_with_options_and_then(
+            |options| options.write(true).create(true).truncate(true),
+            path,
+            |file| {
+                let start = (SAVE_RAM_START as u16).to_le_bytes();
+                let size = (SAVE_RAM_LENGTH as u16).to_le_bytes();
+                let header = [start[0], start[1], size[0], size[1]];
+                let mut header_written = 0usize;
+                while header_written < header.len() {
+                    let count = file.write(&header[header_written..])?;
+                    if count == 0 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+                    header_written += count;
+                }
+
+                let ram = unsafe {
+                    core::slice::from_raw_parts(
+                        core::ptr::addr_of!(RamBuffer).cast::<u8>().add(SAVE_RAM_START),
+                        SAVE_RAM_LENGTH,
+                    )
+                };
+                let mut total = 0usize;
+                while total < ram.len() {
+                    let count = file.write(&ram[total..])?;
+                    if count == 0 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+                    total += count;
+                }
+                Ok(())
+            },
+        )
+    })
+    .map_err(|_| ())
+}
+
+/// Draw the F3 filename entry or overwrite confirmation screen.
+unsafe fn draw_save_dialog(state: u8) {
+    clear_demo_canvas(0);
+    show_file_browser_line(0, b"SAVE RAM IMAGE", false);
+    if state == SAVE_DIALOG_CONFIRM {
+        let mut line = [b' '; 64];
+        line[..6].copy_from_slice(b"FILE: ");
+        let len = unsafe { SAVE_FILENAME_LEN }.min(SAVE_NAME_CAPACITY);
+        let filename = unsafe {
+            core::slice::from_raw_parts(
+                core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
+                len,
+            )
+        };
+        line[6..6 + len].copy_from_slice(filename);
+        line[6 + len..10 + len].copy_from_slice(b".bin");
+        show_file_browser_line(2, &line, false);
+        show_file_browser_line(4, b"FILE EXISTS - OVERWRITE? Y/N", true);
+        show_file_browser_line(27, b"Y OVERWRITE  N/ESC CANCEL", false);
+    } else {
+        show_file_browser_line(2, b"ENTER FILE NAME (NO EXTENSION)", false);
+        let mut line = [b' '; 64];
+        line[..6].copy_from_slice(b"FILE: ");
+        let len = SAVE_FILENAME_LEN.min(SAVE_NAME_CAPACITY);
+        line[6..6 + len].copy_from_slice(&SAVE_FILENAME[..len]);
+        line[6 + len..10 + len].copy_from_slice(b".bin");
+        show_file_browser_line(4, &line, true);
+        show_file_browser_line(27, b"ENTER SAVE  BACKSPACE EDIT  ESC CANCEL", false);
+    }
 }
 
 /// Load a selected file containing the 4-byte Start/Size header and payload.
@@ -659,12 +846,14 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     let previous = unsafe { PREVIOUS_KEYS };
     let mut current = [0u8; 6];
 
-    // AZBK standard modifier keys are emitted on the modifier's rising edge.
-    if control_pressed {
+    // AZBK modifier keys are only forwarded while the emulator owns input.
+    let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
+        || FILE_BROWSER_ACTIVE.load(Ordering::Acquire);
+    if !keyboard_captured && control_pressed {
         append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
     }
     // АР2 is a modifier (Alt/AltGr), not a standalone BK key code.
-    if gui_pressed {
+    if !keyboard_captured && gui_pressed {
         // A single Win key toggles the language. Read the live BK flag so
         // changes made by the emulator itself are respected:
         // bit 7 set = РУС, clear = ЛАТ.
@@ -680,6 +869,71 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
 
     for &key in current.iter() {
         if key == 0 || previous.contains(&key) {
+            continue;
+        }
+
+        // While the save dialog is active, capture filename editing and
+        // confirmation keys instead of forwarding them to the BK emulator.
+        let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
+        if save_state == SAVE_DIALOG_INPUT {
+            match key {
+                0x28 => {
+                    if unsafe { SAVE_FILENAME_LEN } != 0 {
+                        SAVE_DIALOG_STATE.store(SAVE_DIALOG_CHECK, Ordering::Release);
+                    }
+                }
+                0x29 => {
+                    SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
+                    SAVE_DIALOG_RESULT.store(SAVE_RESULT_CANCELLED, Ordering::Release);
+                }
+                0x2a => unsafe {
+                    if SAVE_FILENAME_LEN != 0 {
+                        SAVE_FILENAME_LEN -= 1;
+                        core::ptr::addr_of_mut!(SAVE_FILENAME)
+                            .cast::<u8>()
+                            .add(SAVE_FILENAME_LEN)
+                            .write(0);
+                        SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
+                    }
+                },
+                _ => {
+                    if let Some(ch) = key_to_ascii(key, shift, false, false, control_or_alt) {
+                        if ch.is_ascii_alphanumeric() || ch == b'_' || ch == b'-' || ch == b' ' {
+                            unsafe {
+                                if SAVE_FILENAME_LEN < SAVE_NAME_CAPACITY {
+                                    core::ptr::addr_of_mut!(SAVE_FILENAME)
+                                        .cast::<u8>()
+                                        .add(SAVE_FILENAME_LEN)
+                                        .write(ch);
+                                    SAVE_FILENAME_LEN += 1;
+                                    SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        } else if save_state == SAVE_DIALOG_CONFIRM {
+            match key {
+                0x29 => {
+                    SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
+                    SAVE_DIALOG_RESULT.store(SAVE_RESULT_CANCELLED, Ordering::Release);
+                }
+                _ => match key_to_ascii(key, shift, false, false, control_or_alt) {
+                    Some(b'y') | Some(b'Y') => {
+                        SAVE_OVERWRITE.store(true, Ordering::Release);
+                        SAVE_DIALOG_STATE.store(SAVE_DIALOG_WRITE, Ordering::Release);
+                    }
+                    Some(b'n') | Some(b'N') => {
+                        SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
+                        SAVE_DIALOG_RESULT.store(SAVE_RESULT_CANCELLED, Ordering::Release);
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        } else if save_state != SAVE_DIALOG_IDLE {
             continue;
         }
 
@@ -717,6 +971,23 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             if action != 0 {
                 FILE_BROWSER_ACTION.store(action, Ordering::Release);
             }
+            continue;
+        }
+
+        // F3 starts a RAM save; the extension is appended automatically.
+        if key == 0x3c {
+            keyboard_queue_discard();
+            unsafe {
+                core::ptr::write_bytes(
+                    core::ptr::addr_of_mut!(SAVE_FILENAME).cast::<u8>(),
+                    0,
+                    SAVE_NAME_CAPACITY,
+                );
+                SAVE_FILENAME_LEN = 0;
+            }
+            SAVE_DIALOG_RESULT.store(0, Ordering::Release);
+            SAVE_DIALOG_STATE.store(SAVE_DIALOG_INPUT, Ordering::Release);
+            SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
             continue;
         }
 
