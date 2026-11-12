@@ -1178,10 +1178,10 @@ impl Storage for NandStorage {
 
 /// Keep the LittleFS mount alive for the duration of the supplied service closure.
 ///
-/// NAND initialization and all filesystem operations run in the caller's
-/// context (never in the USB polling ISR). This is deliberately mount-only:
-/// it never formats or erases the NAND.
-/// Failure stage for a read/write operation on the existing LittleFS volume.
+/// NAND initialization and filesystem operations run in caller context,
+/// never in a USB ISR. Raw-NAND mode is mount-only. Dhara mode may perform
+/// destructive first-use provisioning only when dhara-format-nand is enabled.
+/// Failure stage for a read/write operation on the active LittleFS volume.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FsAccessError {
     Init(InitError),
@@ -1190,9 +1190,9 @@ pub enum FsAccessError {
     Operation,
 }
 
-/// Mount the existing volume and preserve whether failure occurred during
-/// NAND initialization, mount, or the caller's filesystem operation.
-/// This function never formats or modifies NAND by itself.
+/// Mount the active volume and preserve whether failure occurred during NAND
+/// initialization, mount, or the caller's filesystem operation. With
+/// dhara-format-nand, ActiveStorage::new() may provision the blank volume.
 pub fn with_mounted_detailed<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
 ) -> Result<R, FsAccessError> {
@@ -1220,7 +1220,8 @@ pub fn with_mounted<R>(
 /// the filesystem mounted for the entire service closure.
 ///
 /// Unlike initialize_and_mount_report(), this does not mount and immediately
-/// unmount before the caller starts using the filesystem. It never formats.
+/// unmount before the caller starts using the filesystem. Dhara's explicit
+/// provisioning feature may format during ActiveStorage initialization.
 pub fn with_mounted_report<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>, &[u8], usize) -> LfsResult<R>,
 ) -> Result<R, InitError> {
