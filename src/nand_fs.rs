@@ -540,7 +540,16 @@ pub fn run_ecc_fault_injection_test() -> Result<(), EccSelfTestError> {
         if !read_data_page(first_page, &mut readback) {
             return Err(EccSelfTestError::SingleBitReadRejected);
         }
-        if readback.iter().any(|&byte| byte != 0xFF) {
+        if let Some((index, &value)) = readback
+            .iter()
+            .enumerate()
+            .find(|(_, byte)| **byte != 0xFF)
+        {
+            // Pack the first bad byte's page offset and value for the display:
+            // 3 hex digits of offset followed by 2 hex digits of data.
+            ECC_DIAG_CHUNK.store((index / FSMC_ECC_CHUNK_SIZE) as u32, Ordering::Relaxed);
+            ECC_DIAG_SYNDROME.store(((index as u32) << 8) | u32::from(value), Ordering::Relaxed);
+            ECC_DIAG_STAGE.store(8, Ordering::Relaxed);
             return Err(EccSelfTestError::SingleBitDataMismatch);
         }
 
