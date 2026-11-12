@@ -54,7 +54,7 @@ resolution is approximately 3.9 ms (not 1 ms).
 
 ```powershell
 cargo build --release --target thumbv7em-none-eabihf
-cargo build --release --features cpu-cycle-diag
+cargo build --release --target thumbv7em-none-eabihf --features cpu-cycle-diag
 probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
 ```
 
