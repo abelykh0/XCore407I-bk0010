@@ -199,40 +199,45 @@ fn program_physical_page(page: u32, data: &[u8]) -> bool {
 /// following nine pairs encode the byte address (P8 through P1024). For a
 /// correctable data error every pair is 01 or 10. A one-bit syndrome is an
 /// ECC-bit error and does not require changing the data.
+fn hamming_address_bits(value: u8) -> usize {
+    ((value >> 1) & 1) as usize
+        | (((value >> 3) & 1) as usize) << 1
+        | (((value >> 5) & 1) as usize) << 2
+        | (((value >> 7) & 1) as usize) << 3
+}
+
+/// Apply the STM32 FSMC 512-byte Hamming syndrome.
+///
+/// This follows the SmartMedia-order correction used by the Linux STM32 FSMC
+/// NAND driver. The first two ECC bytes carry the low eight byte-address bits;
+/// ECC byte 2 carries the ninth byte-address bit and the three data-bit bits.
 fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     if data.len() != FSMC_ECC_CHUNK_SIZE {
         return false;
     }
 
-    let mut syndrome = (stored ^ calculated) & 0x00FF_FFFF;
+    let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
     if syndrome == 0 {
         return true;
     }
 
-    // A single parity-bit error affects the stored ECC, not the data.
-    if syndrome.count_ones() == 1 {
-        return true;
+    let b0 = syndrome as u8;
+    let b1 = (syndrome >> 8) as u8;
+    let b2 = (syndrome >> 16) as u8;
+
+    // For a data-bit error, all 12 parity pairs must differ (01 or 10).
+    if ((b0 ^ (b0 >> 1)) & 0x55) != 0x55
+        || ((b1 ^ (b1 >> 1)) & 0x55) != 0x55
+        || ((b2 ^ (b2 >> 1)) & 0x55) != 0x55
+    {
+        // A single changed ECC bit is an ECC-bit error; data is still valid.
+        return syndrome.count_ones() == 1;
     }
 
-    let mut bit_index = 0usize;
-    for pair_index in 0..3 {
-        match syndrome & 0x03 {
-            0x01 => {}
-            0x02 => bit_index |= 1 << pair_index,
-            _ => return false,
-        }
-        syndrome >>= 2;
-    }
-
-    let mut byte_index = 0usize;
-    for pair_index in 0..9 {
-        match syndrome & 0x03 {
-            0x01 => {}
-            0x02 => byte_index |= 1 << pair_index,
-            _ => return false,
-        }
-        syndrome >>= 2;
-    }
+    let byte_index = (hamming_address_bits(b2 & 0x03) << 8)
+        | (hamming_address_bits(b1) << 4)
+        | hamming_address_bits(b0);
+    let bit_index = hamming_address_bits(b2 >> 2);
 
     if byte_index >= data.len() || bit_index >= 8 {
         return false;
