@@ -908,7 +908,7 @@ const FORMAT_NAND_ONCE: bool = false;
 
 /// Initialize NAND, perform the explicitly enabled initial format if needed,
 /// then mount. Normal boots with FORMAT_NAND_ONCE=false are mount-only.
-pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
+pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
     let mut report = [0u8; 192];
     let mut len = 0;
     append(&mut report, &mut len, b"XCore407I NAND / LittleFS\r\n");
@@ -959,19 +959,27 @@ pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
             append_hex(&mut report, &mut len, free as u32, 8);
             append(&mut report, &mut len, b" bytes\r\n");
             append(&mut report, &mut len, b"ECC: single-bit correction; uncorrectable errors rejected\r\n");
+            #[cfg(feature = "dhara-eval")]
+            {
+                append(&mut report, &mut len, b"Dhara spare blocks: ");
+                append_hex(&mut report, &mut len, storage.dhara_test_blocks().len() as u32, 2);
+                append(&mut report, &mut len, b" (");
+                append_hex(&mut report, &mut len, storage.dhara_test_capacity_bytes() as u32, 8);
+                append(&mut report, &mut len, b" bytes)\r\n");
+            }
         }
         Err(_) => append(&mut report, &mut len, b"ERROR: mount failed; NAND unchanged\r\n"),
     }
     (report, len)
 }
 
-fn append(out: &mut [u8; 192], len: &mut usize, bytes: &[u8]) {
+fn append(out: &mut [u8; 256], len: &mut usize, bytes: &[u8]) {
     let count = bytes.len().min(out.len() - *len);
     out[*len..*len + count].copy_from_slice(&bytes[..count]);
     *len += count;
 }
 
-fn append_hex(out: &mut [u8; 192], len: &mut usize, value: u32, digits: usize) {
+fn append_hex(out: &mut [u8; 256], len: &mut usize, value: u32, digits: usize) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for shift in (0..digits).rev() {
         let nibble = ((value >> (shift * 4)) & 0xF) as usize;
@@ -979,7 +987,7 @@ fn append_hex(out: &mut [u8; 192], len: &mut usize, value: u32, digits: usize) {
     }
 }
 
-fn append_init_error(out: &mut [u8; 192], len: &mut usize, error: InitError) {
+fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
     let message = match error {
         InitError::Timeout => b"timeout" as &[u8],
         InitError::WrongDevice => b"wrong device",
