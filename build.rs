@@ -51,6 +51,8 @@ fn main() {
     println!("cargo:rerun-if-changed=usb/tusb_class_drivers.c");
     println!("cargo:rerun-if-changed=usb/tusb_class_drivers.h");
     println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
+    println!("cargo:rerun-if-changed=vendor/dhara");
+    println!("cargo:rerun-if-changed=csrc/dhara_adapter.c");
 
     let target = env::var("TARGET").expect("TARGET not set");
 
@@ -74,6 +76,25 @@ fn main() {
         ])
         .compile("bk_cpu");
 
+    // Dhara is the only NAND storage backend. Compile it unconditionally.
+        let mut dhara = Build::new();
+        dhara
+            .target(&target)
+            .flag("-std=gnu11")
+            .flag("-w") // Suppress all compiler warnings from Dhara and its adapter only.
+            .flag("-ffunction-sections")
+            .flag("-fdata-sections")
+            .include("vendor/dhara/include")
+            .files([
+                "vendor/dhara/dhara/error.c",
+                "vendor/dhara/dhara/journal.c",
+                "vendor/dhara/dhara/map.c",
+            ]);
+        // Keep the adapter in the same archive as Dhara to avoid
+        // static-library link-order dependencies between the two.
+        dhara.file("csrc/dhara_adapter.c");
+        dhara.compile("dhara");
+
     // Build TinyUSB directly from its upstream C sources. This removes the
     // tinyusb-sys Rust wrapper while retaining the existing checked-in
     // TinyUSB 0.21.0 source tree during the stack migration.
@@ -86,6 +107,7 @@ fn main() {
     tinyusb
         .target(&target)
         .flag("-std=gnu11")
+        .flag("-w") // Suppress all compiler warnings from TinyUSB only.
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
         .include("usb")

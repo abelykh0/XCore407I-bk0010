@@ -1,25 +1,20 @@
-//! LittleFS block device for the XCore407I Samsung K9F1G08U0E NAND.
+//! Low-level raw NAND driver for the XCore407I Samsung K9F1G08U0E.
 //!
-//! Geometry: 2 KiB data pages, 64 pages per 128 KiB erase block, 1,024
-//! physical blocks. Sixteen good blocks are held in reserve for bad-block
-//! tolerance; LittleFS sees 1,008 logical blocks. Two additional good blocks
-//! hold redundant, CRC-protected physical mapping snapshots.
+//! Dhara is the sole logical storage layer and owns physical block mapping,
+//! bad-block handling, and wear leveling. This module provides the NAND
+//! command, erase, page-program, and page-read primitives used by Dhara.
 //!
-//! New page writes store the STM32 FSMC's 512-byte Hamming ECC values in the
-//! spare area. Reads verify ECC-tagged pages and retain compatibility with
-//! legacy pages that have no ECC tag. Reads correct single-bit errors in
-//! tagged pages and reject uncorrectable syndromes. Corrected data is returned
-//! in RAM; NAND pages are not scrubbed
-//! yet, and grown-bad blocks are not remapped.
+//! Geometry: 2 KiB data pages, 64 pages per 128 KiB erase block, and 1,024
+//! physical blocks. Page programs store the STM32 FSMC's four 512-byte
+//! Hamming ECC values and an ECC tag in the spare area. Reads correct
+//! single-bit data errors and reject uncorrectable ECC syndromes.
 
 use core::ptr::{read_volatile, write_volatile};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
-    consts::{U2048, U32},
-    driver::Storage,
     fs::Filesystem,
-    io::{Error as LfsError, Result as LfsResult},
+    io::Result as LfsResult,
 };
 
 const FSMC_BASE: usize = 0xA000_0000;
@@ -36,10 +31,10 @@ const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
-const RB_MASK: u32 = 1 << 6;
-const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
-const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
-const DATA: *mut u8 = NAND_BASE as *mut u8;
+pub(crate) const RB_MASK: u32 = 1 << 6;
+pub(crate) const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
+pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
+pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
 
 pub const PAGE_SIZE: usize = 2048;
@@ -47,51 +42,23 @@ pub const SPARE_SIZE: usize = 64;
 pub const PAGES_PER_BLOCK: u32 = 64;
 pub const PHYSICAL_BLOCKS: u32 = 1024;
 pub const ERASE_BLOCK_SIZE: usize = PAGE_SIZE * PAGES_PER_BLOCK as usize;
-pub const RESERVED_BLOCKS: usize = 16;
-pub const LOGICAL_BLOCKS: usize = PHYSICAL_BLOCKS as usize - RESERVED_BLOCKS;
-
-/// Keep the 2 KiB logical-to-physical map in static RAM, not on the
-/// small startup stack while LittleFS is being mounted/formatted.
-static mut PHYSICAL_BLOCK_MAP: [u16; LOGICAL_BLOCKS] = [0; LOGICAL_BLOCKS];
-
-// A complete mapping record fits in one NAND data page. Keep one scratch page
-// in static RAM so NAND initialization does not consume 2 KiB of stack.
-static mut MAP_METADATA_PAGE: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
-
-const MAP_METADATA_MAGIC: [u8; 8] = *b"XCMAP001";
-const MAP_METADATA_VERSION: u16 = 1;
-const MAP_METADATA_HEADER_SIZE: usize = 20;
-const MAP_METADATA_MAP_OFFSET: usize = MAP_METADATA_HEADER_SIZE;
-const MAP_METADATA_CRC_OFFSET: usize =
-    MAP_METADATA_MAP_OFFSET + LOGICAL_BLOCKS * core::mem::size_of::<u16>();
-const _: () = assert!(MAP_METADATA_CRC_OFFSET + 4 <= PAGE_SIZE);
-
-pub struct NandStorage {
-    physical_blocks: &'static mut [u16; LOGICAL_BLOCKS],
-    good_blocks: usize,
-    factory_bad_blocks: u16,
-    metadata_blocks: [u16; 2],
-    active_metadata_slot: u8,
-    mapping_generation: u32,
-    /// A spare good block beyond LittleFS and mapping metadata, reserved for ECC self-test.
-    #[cfg(feature = "nand-ecc-test")]
-    ecc_test_block: Option<u16>,
-}
+pub type ActiveStorage = crate::dhara_fs::DharaStorage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitError {
     Timeout,
     WrongDevice,
     MarkerRead,
-    TooManyBadBlocks,
-    MetadataFailure,
     MountFailed,
+    DharaNoJournal,
+    DharaCapacity,
+    ProvisionFailed,
 }
 
-fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
-fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
-fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
-fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
+pub(crate) fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
+pub(crate) fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
+pub(crate) fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
+pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
 /// Prepare the FSMC ECC engine for one 512-byte data chunk.
 fn ecc_begin_chunk() {
@@ -117,7 +84,7 @@ fn ecc_end_chunk() -> u32 {
     }
 }
 
-fn wait_ready_status() -> bool {
+pub(crate) fn wait_ready_status() -> bool {
     for _ in 0..TIMEOUT {
         command(0x70);
         if read_data() & 0x40 != 0 { return true; }
@@ -126,7 +93,7 @@ fn wait_ready_status() -> bool {
     false
 }
 
-fn wait_ready_rb() -> bool {
+pub(crate) fn wait_ready_rb() -> bool {
     let mut busy_seen = false;
     for _ in 0..TIMEOUT {
         let ready = unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0;
@@ -140,7 +107,7 @@ fn wait_ready_rb() -> bool {
     false
 }
 
-fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
+pub(crate) fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
     if out.is_empty() || column as usize + out.len() > PAGE_SIZE + SPARE_SIZE {
         return false;
     }
@@ -155,7 +122,7 @@ fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
     true
 }
 
-fn erase_physical_block(block: u16) -> bool {
+pub(crate) fn erase_physical_block(block: u16) -> bool {
     let first_page = block as u32 * PAGES_PER_BLOCK;
     command(0x60);
     address(first_page as u8);
@@ -179,7 +146,7 @@ fn encode_ecc(ecc: u32, out: &mut [u8]) {
     out[2] = (ecc >> 16) as u8;
 }
 
-fn program_physical_page(page: u32, data: &[u8]) -> bool {
+pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
 
     command(0x80);
@@ -262,7 +229,7 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     true
 }
 
-fn read_data_page(page: u32, out: &mut [u8]) -> bool {
+pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE {
         return false;
     }
@@ -321,134 +288,7 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 }
 
 
-/// CRC-32/IEEE used to reject incomplete or corrupted mapping records.
-fn mapping_crc32(bytes: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &byte in bytes {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
-        }
-    }
-    !crc
-}
-
-fn metadata_page() -> &'static mut [u8; PAGE_SIZE] {
-    unsafe { &mut *core::ptr::addr_of_mut!(MAP_METADATA_PAGE) }
-}
-
-fn build_mapping_record(
-    generation: u32,
-    physical_blocks: &[u16; LOGICAL_BLOCKS],
-) {
-    let page = metadata_page();
-    page.fill(0xFF);
-    page[..8].copy_from_slice(&MAP_METADATA_MAGIC);
-    page[8..12].copy_from_slice(&generation.to_le_bytes());
-    page[12..14].copy_from_slice(&MAP_METADATA_VERSION.to_le_bytes());
-    page[14..16].copy_from_slice(&(LOGICAL_BLOCKS as u16).to_le_bytes());
-    page[16..20].copy_from_slice(&0u32.to_le_bytes());
-
-    for (index, &block) in physical_blocks.iter().enumerate() {
-        let offset = MAP_METADATA_MAP_OFFSET + index * 2;
-        page[offset..offset + 2].copy_from_slice(&block.to_le_bytes());
-    }
-
-    let crc = mapping_crc32(&page[..MAP_METADATA_CRC_OFFSET]);
-    page[MAP_METADATA_CRC_OFFSET..MAP_METADATA_CRC_OFFSET + 4]
-        .copy_from_slice(&crc.to_le_bytes());
-}
-
-/// Validate a mapping record and return its generation. The map is checked
-/// for range, reserved-block collisions, and duplicate physical blocks.
-fn validate_mapping_record(page: &[u8; PAGE_SIZE], metadata_blocks: &[u16; 2]) -> Option<u32> {
-    if page[..8] != MAP_METADATA_MAGIC
-        || u16::from_le_bytes([page[12], page[13]]) != MAP_METADATA_VERSION
-        || u16::from_le_bytes([page[14], page[15]]) as usize != LOGICAL_BLOCKS
-    {
-        return None;
-    }
-
-    let stored_crc = u32::from_le_bytes([
-        page[MAP_METADATA_CRC_OFFSET],
-        page[MAP_METADATA_CRC_OFFSET + 1],
-        page[MAP_METADATA_CRC_OFFSET + 2],
-        page[MAP_METADATA_CRC_OFFSET + 3],
-    ]);
-    if mapping_crc32(&page[..MAP_METADATA_CRC_OFFSET]) != stored_crc {
-        return None;
-    }
-
-    for index in 0..LOGICAL_BLOCKS {
-        let offset = MAP_METADATA_MAP_OFFSET + index * 2;
-        let block = u16::from_le_bytes([page[offset], page[offset + 1]]);
-        if block as u32 >= PHYSICAL_BLOCKS
-            || block == metadata_blocks[0]
-            || block == metadata_blocks[1]
-        {
-            return None;
-        }
-        for previous in 0..index {
-            let previous_offset = MAP_METADATA_MAP_OFFSET + previous * 2;
-            let previous_block = u16::from_le_bytes([
-                page[previous_offset],
-                page[previous_offset + 1],
-            ]);
-            if block == previous_block {
-                return None;
-            }
-        }
-    }
-
-    Some(u32::from_le_bytes([page[8], page[9], page[10], page[11]]))
-}
-
-fn read_mapping_record(block: u16, metadata_blocks: &[u16; 2]) -> Option<u32> {
-    let page = metadata_page();
-    if !read_data_page(block as u32 * PAGES_PER_BLOCK, page) {
-        return None;
-    }
-    validate_mapping_record(page, metadata_blocks)
-}
-
-fn load_mapping_record(
-    block: u16,
-    metadata_blocks: &[u16; 2],
-    physical_blocks: &mut [u16; LOGICAL_BLOCKS],
-) -> Option<u32> {
-    let page = metadata_page();
-    if !read_data_page(block as u32 * PAGES_PER_BLOCK, page) {
-        return None;
-    }
-    let generation = validate_mapping_record(page, metadata_blocks)?;
-    for (index, entry) in physical_blocks.iter_mut().enumerate() {
-        let offset = MAP_METADATA_MAP_OFFSET + index * 2;
-        *entry = u16::from_le_bytes([page[offset], page[offset + 1]]);
-    }
-    Some(generation)
-}
-
-/// Write the next complete mapping snapshot to the inactive metadata block.
-/// The active copy is never erased by this operation.
-fn write_initial_mapping(
-    block: u16,
-    generation: u32,
-    physical_blocks: &[u16; LOGICAL_BLOCKS],
-) -> bool {
-    build_mapping_record(generation, physical_blocks);
-    let page = metadata_page();
-    if !erase_physical_block(block)
-        || !program_physical_page(block as u32 * PAGES_PER_BLOCK, page)
-    {
-        return false;
-    }
-    if !read_data_page(block as u32 * PAGES_PER_BLOCK, page) {
-        return false;
-    }
-    validate_mapping_record(page, &[u16::MAX; 2]) == Some(generation)
-}
-
-fn configure_fsmc() {
+pub(crate) fn configure_fsmc() {
     unsafe {
         let rcc = &*pac::RCC::ptr();
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
@@ -466,379 +306,54 @@ fn configure_fsmc() {
     }
 }
 
-impl NandStorage {
-    /// Reset the NAND, preserve the legacy logical map, and load or initialize
-    /// redundant persistent mapping metadata. Requires 1,010 factory-good blocks.
-    pub fn new() -> Result<Self, InitError> {
-        configure_fsmc();
-        command(0xFF);
-        if !wait_ready_status() { return Err(InitError::Timeout); }
-
-        command(0x90);
-        address(0);
-        let id = [read_data(), read_data(), read_data(), read_data(), read_data()];
-        if id[0] != 0xEC || id[1] != 0xF1 {
-            return Err(InitError::WrongDevice);
-        }
-
-        // The map contains 1,008 u16 entries (2,016 bytes). Keep it out of
-        // the call stack: this routine runs alongside the USB polling ISR.
-        // Only one NandStorage instance is created for this firmware lifetime.
-        let physical_blocks = unsafe {
-            &mut *core::ptr::addr_of_mut!(PHYSICAL_BLOCK_MAP)
-        };
-        physical_blocks.fill(0);
-        let mut storage = Self {
-            physical_blocks,
-            good_blocks: 0,
-            factory_bad_blocks: 0,
-            metadata_blocks: [u16::MAX; 2],
-            active_metadata_slot: 0,
-            mapping_generation: 0,
-            #[cfg(feature = "nand-ecc-test")]
-            ecc_test_block: None,
-        };
-        let mut metadata_count = 0usize;
-        let mut marker = [0u8; 1];
-
-        for block in 0..PHYSICAL_BLOCKS {
-            let first = block * PAGES_PER_BLOCK;
-            let second = first + 1;
-            if !read_page(first, PAGE_SIZE as u16, &mut marker) {
-                return Err(InitError::MarkerRead);
-            }
-            let first_good = marker[0] == 0xFF;
-            if !read_page(second, PAGE_SIZE as u16, &mut marker) {
-                return Err(InitError::MarkerRead);
-            }
-            if first_good && marker[0] == 0xFF {
-                if storage.good_blocks < LOGICAL_BLOCKS {
-                    // Preserve the original physical layout used by the
-                    // existing LittleFS volume.
-                    storage.physical_blocks[storage.good_blocks] = block as u16;
-                    storage.good_blocks += 1;
-                } else if metadata_count < 2 {
-                    // The first two additional good blocks hold redundant
-                    // mapping snapshots and are never exposed to LittleFS.
-                    storage.metadata_blocks[metadata_count] = block as u16;
-                    metadata_count += 1;
-                } else {
-                    #[cfg(feature = "nand-ecc-test")]
-                    if storage.ecc_test_block.is_none() {
-                        // The opt-in destructive test uses a spare, not metadata.
-                        storage.ecc_test_block = Some(block as u16);
-                    }
-                }
-            } else {
-                storage.factory_bad_blocks += 1;
-            }
-        }
-
-        if storage.good_blocks != LOGICAL_BLOCKS || metadata_count != 2 {
-            return Err(InitError::TooManyBadBlocks);
-        }
-
-        // Prefer the newest valid snapshot. Generation comparison uses
-        // wrapping arithmetic so rollover does not make an older copy win.
-        let generation0 = read_mapping_record(storage.metadata_blocks[0], &storage.metadata_blocks);
-        let generation1 = read_mapping_record(storage.metadata_blocks[1], &storage.metadata_blocks);
-        let selected = match (generation0, generation1) {
-            (Some(a), Some(b)) => {
-                if b.wrapping_sub(a) < 0x8000_0000 { 1 } else { 0 }
-            }
-            (Some(_), None) => 0,
-            (None, Some(_)) => 1,
-            (None, None) => {
-                // First boot after adding metadata support: the old mapping
-                // remains exactly the first 1,008 factory-good blocks.
-                if !write_initial_mapping(storage.metadata_blocks[0], 1, storage.physical_blocks) {
-                    return Err(InitError::MetadataFailure);
-                }
-                storage.active_metadata_slot = 0;
-                storage.mapping_generation = 1;
-                return Ok(storage);
-            }
-        };
-
-        let generation = load_mapping_record(
-            storage.metadata_blocks[selected],
-            &storage.metadata_blocks,
-            storage.physical_blocks,
-        ).ok_or(InitError::MetadataFailure)?;
-        storage.active_metadata_slot = selected as u8;
-        storage.mapping_generation = generation;
-        Ok(storage)
-    }
-
-    pub fn factory_bad_blocks(&self) -> u16 { self.factory_bad_blocks }
-    pub fn logical_capacity(&self) -> usize { LOGICAL_BLOCKS * ERASE_BLOCK_SIZE }
-
-    fn physical_block(&self, logical: usize) -> Option<u16> {
-        self.physical_blocks.get(logical).copied()
-    }
-
-    /// Persist a changed map to the inactive metadata block before callers
-    /// switch or retire any physical data block.
-    fn persist_mapping(&mut self) -> bool {
-        let next_slot = 1usize - self.active_metadata_slot as usize;
-        let next_generation = self.mapping_generation.wrapping_add(1);
-        let block = self.metadata_blocks[next_slot];
-
-        build_mapping_record(next_generation, self.physical_blocks);
-        let page = metadata_page();
-        if !erase_physical_block(block)
-            || !program_physical_page(block as u32 * PAGES_PER_BLOCK, page)
-        {
-            return false;
-        }
-        if !read_data_page(block as u32 * PAGES_PER_BLOCK, page)
-            || validate_mapping_record(page, &self.metadata_blocks) != Some(next_generation)
-        {
-            return false;
-        }
-
-        self.active_metadata_slot = next_slot as u8;
-        self.mapping_generation = next_generation;
-        true
-    }
-}
-
-/// Result of the destructive ECC fault-injection test.
-///
-/// The test only erases one factory-good block that is beyond LittleFS's
-/// logical capacity. It never selects a block used by the filesystem.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(feature = "nand-ecc-test")]
-pub enum EccSelfTestError {
-    NoReservedGoodBlock,
-    EraseFailed,
-    ProgramFailed,
-    SingleBitReadRejected,
-    SingleBitDataMismatch,
-    DoubleBitDetectionFailed,
-    CleanupFailed,
-}
-
-/// Program test pages with ECC for an all-0xFF page, then alter selected
-/// data-register bytes with ECC disabled before the same page-program confirm.
-#[cfg(feature = "nand-ecc-test")]
-fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
-    command(0x80);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    cortex_m::asm::delay(1_000);
-
-    let mut ecc = [0u8; ECC_OOB_BYTES];
-    let blank = [0xFFu8; FSMC_ECC_CHUNK_SIZE];
-    for chunk_index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
-        ecc_begin_chunk();
-        for &byte in &blank {
-            write_data(byte);
-        }
-        encode_ecc(
-            ecc_end_chunk(),
-            &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK],
-        );
-    }
-
-    // Random Data Input changes the NAND page buffer after ECC calculation,
-    // but before the single final program-confirm operation.
-    for &(column, value) in corruptions {
-        if column as usize >= PAGE_SIZE {
-            return false;
-        }
-        command(0x85);
-        address(column as u8);
-        address((column >> 8) as u8);
-        cortex_m::asm::delay(1_000);
-        write_data(value);
-    }
-
-    // Start at OOB byte 0 because the two 0xFF marker placeholders
-    // precede ECC bytes 2..13 and the tag at bytes 14..15.
-    command(0x85);
-    address(PAGE_SIZE as u16 as u8);
-    address(((PAGE_SIZE as u16) >> 8) as u8);
-    cortex_m::asm::delay(1_000);
-    write_data(0xFF);
-    write_data(0xFF);
-    for &byte in &ecc {
-        write_data(byte);
-    }
-    for &byte in &ECC_TAG {
-        write_data(byte);
-    }
-
-    command(0x10);
-    if !wait_ready_rb() {
-        return false;
-    }
-    command(0x70);
-    if read_data() & 0x01 != 0 {
-        return false;
-    }
-
-    // Verify the tag with a fresh raw OOB read immediately after programming.
-    // This separates a failed OOB program from a later read-path problem.
-    let tag_column = PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16;
-    let mut tag_readback = [0u8; ECC_TAG.len()];
-    if !read_page(page, tag_column, &mut tag_readback) {
-        return false;
-    }
-    if tag_readback != ECC_TAG {
-        return false;
-    }
-    true
-}
-
-/// Exercise one-bit correction and two-bit detection on a reserved NAND block.
-///
-/// The test erases and reuses only the first factory-good block excluded from
-/// LittleFS. It attempts to erase that block again before returning.
-#[cfg(feature = "nand-ecc-test")]
-pub fn run_ecc_fault_injection_test() -> Result<(), EccSelfTestError> {
-    let storage = NandStorage::new().map_err(|_| EccSelfTestError::EraseFailed)?;
-    let block = storage.ecc_test_block.ok_or(EccSelfTestError::NoReservedGoodBlock)?;
-    if !erase_physical_block(block) {
-        return Err(EccSelfTestError::EraseFailed);
-    }
-
-    let first_page = block as u32 * PAGES_PER_BLOCK;
-    let one_bit = [(0x0125u16, 0xF7u8)]; // Clear bit 3.
-    let two_bits = [(0x0125u16, 0xEDu8)]; // Clear bits 1 and 4.
-
-    let test_result = (|| {
-        if !program_ecc_test_page(first_page, &one_bit)
-            || !program_ecc_test_page(first_page + 1, &two_bits)
-        {
-            return Err(EccSelfTestError::ProgramFailed);
-        }
-
-        let mut readback = [0u8; PAGE_SIZE];
-        if !read_data_page(first_page, &mut readback) {
-            return Err(EccSelfTestError::SingleBitReadRejected);
-        }
-        if let Some((index, &value)) = readback
-            .iter()
-            .enumerate()
-            .find(|(_, byte)| **byte != 0xFF)
-        {
-            let _ = (index, value);
-            return Err(EccSelfTestError::SingleBitDataMismatch);
-        }
-
-        if read_data_page(first_page + 1, &mut readback) {
-            return Err(EccSelfTestError::DoubleBitDetectionFailed);
-        }
-
-        Ok(())
-    })();
-
-    if !erase_physical_block(block) {
-        return Err(EccSelfTestError::CleanupFailed);
-    }
-    test_result
-}
-
-impl Storage for NandStorage {
-    type CACHE_SIZE = U2048;
-    type LOOKAHEAD_SIZE = U32;
-
-    const READ_SIZE: usize = PAGE_SIZE;
-    const WRITE_SIZE: usize = PAGE_SIZE;
-    const BLOCK_SIZE: usize = ERASE_BLOCK_SIZE;
-    const BLOCK_COUNT: usize = LOGICAL_BLOCKS;
-    const BLOCK_CYCLES: isize = 100;
-
-    fn read(&mut self, off: usize, buf: &mut [u8]) -> LfsResult<usize> {
-        if off % PAGE_SIZE != 0 || buf.len() % PAGE_SIZE != 0 {
-            return Err(LfsError::IO);
-        }
-        let capacity = Self::BLOCK_COUNT * ERASE_BLOCK_SIZE;
-        if off.checked_add(buf.len()).filter(|&end| end <= capacity).is_none() {
-            return Err(LfsError::IO);
-        }
-
-        for (index, page_buf) in buf.chunks_exact_mut(PAGE_SIZE).enumerate() {
-            let absolute = off + index * PAGE_SIZE;
-            let logical_block = absolute / ERASE_BLOCK_SIZE;
-            let page_in_block = (absolute % ERASE_BLOCK_SIZE) / PAGE_SIZE;
-            let physical = self.physical_block(logical_block).ok_or(LfsError::IO)?;
-            let page = physical as u32 * PAGES_PER_BLOCK + page_in_block as u32;
-            if !read_data_page(page, page_buf) { return Err(LfsError::IO); }
-        }
-        Ok(buf.len())
-    }
-
-    fn write(&mut self, off: usize, data: &[u8]) -> LfsResult<usize> {
-        if off % PAGE_SIZE != 0 || data.is_empty() || data.len() % PAGE_SIZE != 0 {
-            return Err(LfsError::IO);
-        }
-        let capacity = Self::BLOCK_COUNT * Self::BLOCK_SIZE;
-        if off.checked_add(data.len()).filter(|&end| end <= capacity).is_none() {
-            return Err(LfsError::IO);
-        }
-
-        for (index, page_data) in data.chunks_exact(PAGE_SIZE).enumerate() {
-            let absolute = off + index * PAGE_SIZE;
-            let logical_block = absolute / ERASE_BLOCK_SIZE;
-            let page_in_block = (absolute % ERASE_BLOCK_SIZE) / PAGE_SIZE;
-            let physical = self.physical_block(logical_block).ok_or(LfsError::IO)?;
-            let page = physical as u32 * PAGES_PER_BLOCK + page_in_block as u32;
-            if !program_physical_page(page, page_data) { return Err(LfsError::IO); }
-        }
-        Ok(data.len())
-    }
-
-    fn erase(&mut self, off: usize, len: usize) -> LfsResult<usize> {
-        if off % ERASE_BLOCK_SIZE != 0 || len == 0 || len % ERASE_BLOCK_SIZE != 0 {
-            return Err(LfsError::IO);
-        }
-        let capacity = Self::BLOCK_COUNT * Self::BLOCK_SIZE;
-        if off.checked_add(len).filter(|&end| end <= capacity).is_none() {
-            return Err(LfsError::IO);
-        }
-
-        for logical in (off / ERASE_BLOCK_SIZE)..((off + len) / ERASE_BLOCK_SIZE) {
-            let physical = self.physical_block(logical).ok_or(LfsError::IO)?;
-            if !erase_physical_block(physical) { return Err(LfsError::IO); }
-        }
-        Ok(len)
-    }
-}
-
 /// Keep the LittleFS mount alive for the duration of the supplied service closure.
 ///
-/// NAND initialization and all filesystem operations run in the caller's
-/// context (never in the USB polling ISR). This is deliberately mount-only:
-/// it never formats or erases the NAND.
+/// NAND initialization and filesystem operations run in caller context,
+/// never in a USB ISR. Dhara-backed storage is mount-only.
+/// Failure stage for a read/write operation on the active LittleFS volume.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FsAccessError {
+    Init(InitError),
+    Mount(i32),
+    Operation,
+}
+
+/// Mount the active volume and preserve whether failure occurred during NAND
+/// initialization, mount, or the caller's filesystem operation.
+pub fn with_mounted_detailed<R>(
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
+) -> Result<R, FsAccessError> {
+    let mut storage = ActiveStorage::new().map_err(FsAccessError::Init)?;
+    // Mount directly rather than using is_mountable(): the latter only
+    // returns a bool and discards LittleFS's actual error code.
+    // Nest the service result so a caller-operation error remains distinct.
+    let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
+        Ok(service(fs))
+    }).map_err(|error| FsAccessError::Mount(error.code()))?;
+    mounted.map_err(|_| FsAccessError::Operation)
+}
+
+/// Compatibility wrapper for existing callers that only need success/failure.
 pub fn with_mounted<R>(
-    service: impl FnOnce(&Filesystem<'_, NandStorage>) -> LfsResult<R>,
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
 ) -> Result<R, InitError> {
-    let mut storage = NandStorage::new()?;
-    if !Filesystem::<NandStorage>::is_mountable(&mut storage) {
-        return Err(InitError::MountFailed);
-    }
-    Filesystem::<NandStorage>::mount_and_then(&mut storage, service)
-        .map_err(|_| InitError::MountFailed)
+    with_mounted_detailed(service).map_err(|_| InitError::MountFailed)
 }
 
 /// Mount the existing volume once, publish its diagnostic report, and keep
 /// the filesystem mounted for the entire service closure.
 ///
 /// Unlike initialize_and_mount_report(), this does not mount and immediately
-/// unmount before the caller starts using the filesystem. It never formats.
+/// unmount before the caller starts using the filesystem.
 pub fn with_mounted_report<R>(
-    service: impl FnOnce(&Filesystem<'_, NandStorage>, &[u8], usize) -> LfsResult<R>,
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>, &[u8], usize) -> LfsResult<R>,
 ) -> Result<R, InitError> {
-    let mut storage = NandStorage::new()?;
-    if !Filesystem::<NandStorage>::is_mountable(&mut storage) {
+    let mut storage = ActiveStorage::new()?;
+    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
         return Err(InitError::MountFailed);
     }
 
-    let mut report = [0u8; 192];
+    let mut report = [0u8; 256];
     let mut len = 0;
     append(&mut report, &mut len, b"XCore407I NAND / LittleFS\r\n");
     append(&mut report, &mut len, b"Factory bad blocks: ");
@@ -847,7 +362,7 @@ pub fn with_mounted_report<R>(
     append(&mut report, &mut len, b"LittleFS: existing volume mounted\r\n");
     append(&mut report, &mut len, b"Capacity: ");
 
-    Filesystem::<NandStorage>::mount_and_then(&mut storage, |fs| {
+    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
         append_hex(&mut report, &mut len, fs.total_space() as u32, 8);
         append(&mut report, &mut len, b" bytes\r\nFree: ");
         append_hex(
@@ -863,19 +378,14 @@ pub fn with_mounted_report<R>(
     .map_err(|_| InitError::MountFailed)
 }
 
-/// Set true only for the initial provisioning flash. After README reports
-/// "LittleFS: formatted and mounted", change this to false and rebuild.
-/// With this false, an absent/corrupt filesystem is never reformatted.
-const FORMAT_NAND_ONCE: bool = false;
-
-/// Initialize NAND, perform the explicitly enabled initial format if needed,
-/// then mount. Normal boots with FORMAT_NAND_ONCE=false are mount-only.
-pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
-    let mut report = [0u8; 192];
+/// Initialize NAND and mount the existing LittleFS volume. This routine
+/// never formats or erases NAND.
+pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
+    let mut report = [0u8; 256];
     let mut len = 0;
     append(&mut report, &mut len, b"XCore407I NAND / LittleFS\r\n");
 
-    let mut storage = match NandStorage::new() {
+    let mut storage = match ActiveStorage::new() {
         Ok(storage) => storage,
         Err(error) => {
             append(&mut report, &mut len, b"NAND init failed: ");
@@ -889,32 +399,16 @@ pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
     append_hex(&mut report, &mut len, storage.factory_bad_blocks() as u32, 4);
     append(&mut report, &mut len, b"\r\n");
 
-    let mountable = Filesystem::<NandStorage>::is_mountable(&mut storage);
-    let mut formatted_now = false;
-
-    if !mountable {
-        if !FORMAT_NAND_ONCE {
-            append(&mut report, &mut len, b"ERROR: no valid LittleFS; not formatted\r\n");
-            return (report, len);
-        }
-
-        append(&mut report, &mut len, b"Initial LittleFS format...\r\n");
-        if Filesystem::<NandStorage>::format(&mut storage).is_err() {
-            append(&mut report, &mut len, b"ERROR: format failed\r\n");
-            return (report, len);
-        }
-        formatted_now = true;
+    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
+        append(&mut report, &mut len, b"ERROR: no valid LittleFS; NAND unchanged\r\n");
+        return (report, len);
     }
 
-    match Filesystem::<NandStorage>::mount_and_then(&mut storage, |fs| {
+    match Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
         Ok((fs.total_space(), fs.available_space().unwrap_or(0)))
     }) {
         Ok((total, free)) => {
-            if formatted_now {
-                append(&mut report, &mut len, b"LittleFS: formatted and mounted\r\n");
-            } else {
-                append(&mut report, &mut len, b"LittleFS: existing volume mounted\r\n");
-            }
+            append(&mut report, &mut len, b"LittleFS: existing volume mounted\r\n");
             append(&mut report, &mut len, b"Capacity: ");
             append_hex(&mut report, &mut len, total as u32, 8);
             append(&mut report, &mut len, b" bytes\r\nFree: ");
@@ -927,13 +421,13 @@ pub fn initialize_and_mount_report() -> ([u8; 192], usize) {
     (report, len)
 }
 
-fn append(out: &mut [u8; 192], len: &mut usize, bytes: &[u8]) {
+fn append(out: &mut [u8; 256], len: &mut usize, bytes: &[u8]) {
     let count = bytes.len().min(out.len() - *len);
     out[*len..*len + count].copy_from_slice(&bytes[..count]);
     *len += count;
 }
 
-fn append_hex(out: &mut [u8; 192], len: &mut usize, value: u32, digits: usize) {
+fn append_hex(out: &mut [u8; 256], len: &mut usize, value: u32, digits: usize) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for shift in (0..digits).rev() {
         let nibble = ((value >> (shift * 4)) & 0xF) as usize;
@@ -941,14 +435,38 @@ fn append_hex(out: &mut [u8; 192], len: &mut usize, value: u32, digits: usize) {
     }
 }
 
-fn append_init_error(out: &mut [u8; 192], len: &mut usize, error: InitError) {
+fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
     let message = match error {
         InitError::Timeout => b"timeout" as &[u8],
         InitError::WrongDevice => b"wrong device",
         InitError::MarkerRead => b"bad-block marker read",
-        InitError::TooManyBadBlocks => b"not enough good blocks",
-        InitError::MetadataFailure => b"mapping metadata read/write failed",
         InitError::MountFailed => b"LittleFS mount failed",
+        InitError::DharaNoJournal => b"Dhara journal missing",
+        InitError::DharaCapacity => b"Dhara capacity too small",
+        InitError::ProvisionFailed => b"Dhara provisioning failed",
     };
     append(out, len, message);
+}
+
+
+/// Initialize an unprovisioned NAND after explicit user confirmation.
+/// This erases every non-factory-bad physical block, creates a new Dhara
+/// journal and marker, then formats and verifies an empty LittleFS volume.
+pub fn initialize_nand_volume() -> Result<(), InitError> {
+    let mut storage = ActiveStorage::initialize_new_volume()?;
+    Filesystem::<ActiveStorage>::format(&mut storage)
+        .map_err(|_| InitError::MountFailed)?;
+    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
+        .map_err(|_| InitError::MountFailed)
+}
+
+/// Format only the LittleFS logical volume on an already-valid Dhara journal.
+/// DharaStorage::new() verifies NAND identity, resumes Dhara, checks the
+/// volume marker, and validates capacity before any LittleFS erase is issued.
+pub fn format_existing_littlefs() -> Result<(), InitError> {
+    let mut storage = ActiveStorage::new()?;
+    Filesystem::<ActiveStorage>::format(&mut storage)
+        .map_err(|_| InitError::MountFailed)?;
+    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
+        .map_err(|_| InitError::MountFailed)
 }

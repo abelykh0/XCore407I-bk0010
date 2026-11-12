@@ -7,6 +7,9 @@ use crate::file_browser::{
     SAVE_DIALOG_WRITE, SAVE_RESULT_CANCELLED, SAVE_NAME_CAPACITY,
     SAVE_FILENAME, SAVE_FILENAME_LEN, SAVE_DIALOG_RESULT, SAVE_DIALOG_STATE,
     SAVE_DIALOG_DIRTY, SAVE_OVERWRITE,
+    FORMAT_STATE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL, FORMAT_REQUEST,
+    FORMAT_CANCELLED,
+    INIT_STATE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST, INIT_CANCELLED,
 };
 use crate::usb_host::USB_FS_STATUS;
 use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
@@ -182,8 +185,11 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
 
     // AZBK modifier keys are only forwarded while the emulator owns input.
     let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
-        || FILE_BROWSER_ACTIVE.load(Ordering::Acquire);
-    if !keyboard_captured && control_pressed {
+        || FORMAT_STATE.load(Ordering::Acquire) != 0
+        || INIT_STATE.load(Ordering::Acquire) != 0
+        || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
+;
+    if !keyboard_captured && control_pressed && modifiers & 0x44 == 0 {
         append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
     }
     // АР2 is a modifier (Alt/AltGr), not a standalone BK key code.
@@ -271,9 +277,68 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             continue;
         }
 
+        // LittleFS formatting requires two explicit confirmations.
+        // The actual flash operation runs later in main-loop context.
+        let format_state = FORMAT_STATE.load(Ordering::Acquire);
+        if format_state == FORMAT_CONFIRM || format_state == FORMAT_CONFIRM_FINAL {
+            match key {
+                0x29 => FORMAT_STATE.store(FORMAT_CANCELLED, Ordering::Release),
+                _ => match key_to_ascii(key, shift, false, false, control_or_alt) {
+                    Some(b'y') | Some(b'Y') if format_state == FORMAT_CONFIRM => {
+                        FORMAT_STATE.store(FORMAT_CONFIRM_FINAL, Ordering::Release);
+                    }
+                    Some(b'y') | Some(b'Y') if format_state == FORMAT_CONFIRM_FINAL => {
+                        FORMAT_STATE.store(FORMAT_REQUEST, Ordering::Release);
+                    }
+                    Some(b'n') | Some(b'N') => {
+                        FORMAT_STATE.store(FORMAT_CANCELLED, Ordering::Release);
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        // First-time NAND provisioning is deliberately destructive and
+        // requires two confirmations. The erase/provision operation runs in main().
+        let init_state = INIT_STATE.load(Ordering::Acquire);
+        if init_state == INIT_CONFIRM || init_state == INIT_CONFIRM_FINAL {
+            match key {
+                0x29 => INIT_STATE.store(INIT_CANCELLED, Ordering::Release),
+                _ => match key_to_ascii(key, shift, false, false, control_or_alt) {
+                    Some(b'y') | Some(b'Y') if init_state == INIT_CONFIRM => {
+                        INIT_STATE.store(INIT_CONFIRM_FINAL, Ordering::Release);
+                    }
+                    Some(b'y') | Some(b'Y') if init_state == INIT_CONFIRM_FINAL => {
+                        INIT_STATE.store(INIT_REQUEST, Ordering::Release);
+                    }
+                    Some(b'n') | Some(b'N') => {
+                        INIT_STATE.store(INIT_CANCELLED, Ordering::Release);
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        // Ctrl+Alt+F12 is an opt-in destructive maintenance command.
+        #[cfg(feature = "destructive-nand-init")]
+        if key == 0x45 && modifiers & 0x11 != 0 && modifiers & 0x44 != 0 {
+            if INIT_STATE.load(Ordering::Acquire) == 0 {
+                keyboard_queue_discard();
+                INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
+            }
+            continue;
+        }
+
         // STOP is a hardware IRQ1, not a character sent through 177662.
-        // Pause and F12 are equivalent host keys for the BK STOP signal.
-        if key == 0x48 || key == 0x45 {
+        // F12 is reserved for NAND initialization only in the feature build.
+        if key == 0x48 || (key == 0x45 && {
+            #[cfg(feature = "destructive-nand-init")]
+            { modifiers & 0x11 == 0 || modifiers & 0x44 == 0 }
+            #[cfg(not(feature = "destructive-nand-init"))]
+            { true }
+        }) {
             unsafe { bk_request_stop_irq(); }
             continue;
         }

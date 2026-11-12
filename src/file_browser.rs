@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, AtomicU8};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8};
 
 use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line, show_usb_status};
 
@@ -15,6 +15,23 @@ pub(crate) const SAVE_DIALOG_WRITE: u8 = 4;
 pub(crate) const SAVE_RESULT_CANCELLED: u8 = 1;
 pub(crate) const SAVE_RESULT_OK: u8 = 2;
 pub(crate) const SAVE_RESULT_ERROR: u8 = 3;
+pub(crate) const FORMAT_IDLE: u8 = 0;
+pub(crate) const FORMAT_CONFIRM: u8 = 1;
+pub(crate) const FORMAT_CONFIRM_FINAL: u8 = 2;
+pub(crate) const FORMAT_REQUEST: u8 = 3;
+pub(crate) const FORMAT_CANCELLED: u8 = 4;
+pub(crate) const FORMAT_DONE: u8 = 5;
+pub(crate) const FORMAT_FAILED: u8 = 6;
+pub(crate) static FORMAT_STATE: AtomicU8 = AtomicU8::new(FORMAT_IDLE);
+pub(crate) static FORMAT_ERROR: AtomicI32 = AtomicI32::new(0);
+pub(crate) const INIT_IDLE: u8 = 0;
+pub(crate) const INIT_CONFIRM: u8 = 1;
+pub(crate) const INIT_CONFIRM_FINAL: u8 = 2;
+pub(crate) const INIT_REQUEST: u8 = 3;
+pub(crate) const INIT_CANCELLED: u8 = 4;
+pub(crate) const INIT_DONE: u8 = 5;
+pub(crate) const INIT_FAILED: u8 = 6;
+pub(crate) static INIT_STATE: AtomicU8 = AtomicU8::new(INIT_IDLE);
 pub(crate) const SAVE_RAM_START: usize = 0x0200;
 pub(crate) const SAVE_RAM_LENGTH: usize = 15_872;
 pub(crate) const SAVE_NAME_CAPACITY: usize = 24;
@@ -44,8 +61,8 @@ unsafe extern "C" {
 pub(crate) fn list_root_files(
     paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
     path_lengths: &mut [u16; MAX_BROWSER_FILES],
-) -> Result<usize, ()> {
-    xcore407i_blinker::nand_fs::with_mounted(|fs| {
+) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
+    xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
             let mut count = 0usize;
             for item in directory {
@@ -84,7 +101,6 @@ pub(crate) fn list_root_files(
             Ok(count)
         })
     })
-    .map_err(|_| ())
 }
 
 pub(crate) fn draw_file_browser(
@@ -266,3 +282,81 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
+
+
+/// Display the exact LittleFS mount failure and the two-step destructive confirmation.
+pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
+    clear_demo_canvas(0);
+    show_file_browser_line(0, b"LITTLEFS MOUNT FAILED", true);
+    show_file_browser_line(3, b"STAGE: LITTLEFS MOUNT", false);
+    let detail: &[u8] = match error {
+        -5 => b"LFS_ERR_IO (-5): device I/O failure",
+        -84 => b"LFS_ERR_CORRUPTION (-84): invalid filesystem",
+        -2 => b"LFS_ERR_NO_SUCH_ENTRY (-2)",
+        -17 => b"LFS_ERR_ENTRY_ALREADY_EXISTED (-17)",
+        -20 => b"LFS_ERR_PATH_NOT_DIR (-20)",
+        -21 => b"LFS_ERR_PATH_IS_DIR (-21)",
+        -39 => b"LFS_ERR_DIR_NOT_EMPTY (-39)",
+        -9 => b"LFS_ERR_BAD_FILE_DESCRIPTOR (-9)",
+        -27 => b"LFS_ERR_FILE_TOO_BIG (-27)",
+        -22 => b"LFS_ERR_INVALID (-22)",
+        -28 => b"LFS_ERR_NO_SPACE (-28)",
+        -12 => b"LFS_ERR_NO_MEMORY (-12)",
+        -61 => b"LFS_ERR_NO_ATTRIBUTE (-61)",
+        -36 => b"LFS_ERR_FILENAME_TOO_LONG (-36)",
+        _ => b"",
+    };
+    if !detail.is_empty() {
+        show_file_browser_line(4, detail, false);
+    } else {
+        let mut line = [b' '; 64];
+        let prefix = b"LFS ERROR CODE: ";
+        line[..prefix.len()].copy_from_slice(prefix);
+        let mut value = if error < 0 { error.wrapping_neg() as u32 } else { error as u32 };
+        let mut digits = [b'0'; 10];
+        let mut count = 0usize;
+        loop {
+            digits[count] = b'0' + (value % 10) as u8;
+            count += 1;
+            value /= 10;
+            if value == 0 { break; }
+        }
+        let mut len = prefix.len();
+        if error < 0 {
+            line[len] = b'-';
+            len += 1;
+        }
+        for index in (0..count).rev() {
+            line[len] = digits[index];
+            len += 1;
+        }
+        show_file_browser_line(4, &line[..len], false);
+    }
+    if final_confirmation {
+        show_file_browser_line(7, b"ARE YOU REALLY SURE?", true);
+        show_file_browser_line(9, b"ALL LITTLEFS FILES WILL BE LOST", false);
+        show_file_browser_line(27, b"Y FORMAT NOW  N/ESC CANCEL", false);
+    } else {
+        show_file_browser_line(7, b"FORMAT THE LITTLEFS VOLUME?", true);
+        show_file_browser_line(9, b"THIS DELETES ALL FILES", false);
+        show_file_browser_line(27, b"Y CONTINUE  N/ESC CANCEL", false);
+    }
+}
+
+
+/// Display the two-step confirmation for first-time NAND provisioning.
+pub(crate) fn draw_init_confirmation(final_confirmation: bool) {
+    clear_demo_canvas(0);
+    show_file_browser_line(0, b"MANUAL NAND REINITIALIZATION", true);
+    show_file_browser_line(3, b"ERASES EVEN A VALID DHARA VOLUME", false);
+    if final_confirmation {
+        show_file_browser_line(7, b"ERASE AND INITIALIZE NAND?", true);
+        show_file_browser_line(9, b"ALL DATA ON NAND WILL BE LOST", false);
+        show_file_browser_line(11, b"THIS CANNOT BE UNDONE", false);
+        show_file_browser_line(27, b"Y INITIALIZE  N/ESC CANCEL", false);
+    } else {
+        show_file_browser_line(7, b"REINITIALIZE NAND STORAGE?", true);
+        show_file_browser_line(9, b"ERASES ALL USABLE NAND BLOCKS", false);
+        show_file_browser_line(27, b"Y CONTINUE  N/ESC CANCEL", false);
+    }
+}

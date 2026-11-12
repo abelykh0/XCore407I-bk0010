@@ -36,6 +36,11 @@ use file_browser::{
     SAVE_DIALOG_IDLE, SAVE_DIALOG_INPUT, SAVE_DIALOG_STATE, SAVE_DIALOG_CHECK, SAVE_DIALOG_CONFIRM, SAVE_DIALOG_WRITE,
     SAVE_DIALOG_DIRTY, SAVE_DIALOG_RESULT, SAVE_OVERWRITE,
     SAVE_RESULT_CANCELLED, SAVE_RESULT_OK, SAVE_RESULT_ERROR,
+    FORMAT_STATE, FORMAT_ERROR, FORMAT_IDLE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL,
+    FORMAT_REQUEST, FORMAT_CANCELLED, FORMAT_DONE, FORMAT_FAILED,
+    draw_format_confirmation,
+    INIT_STATE, INIT_IDLE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST,
+    INIT_CANCELLED, INIT_DONE, INIT_FAILED, draw_init_confirmation,
 };
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
@@ -156,10 +161,6 @@ fn main() -> ! {
         &mut core.NVIC,
     );
 
-    #[cfg(feature = "nand-ecc-test")]
-    let _nand_ecc_test_result =
-        xcore407i_blinker::nand_fs::run_ecc_fault_injection_test();
-
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
     let mut browser_count = 0usize;
@@ -168,7 +169,9 @@ fn main() -> ! {
     // Real-time emulator pacing uses the PDP cycle counter.
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
-    let mut save_dialog_was_active = false;
+    let mut emulator_was_paused = false;
+    let mut format_screen_state = FORMAT_IDLE;
+    let mut init_screen_state = INIT_IDLE;
     #[cfg(feature = "cpu-cycle-diag")]
     let mut diagnostic_last_dwt = read_dwt_cycle_count();
     #[cfg(feature = "cpu-cycle-diag")]
@@ -210,6 +213,82 @@ fn main() -> ! {
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
+        match INIT_STATE.load(Ordering::Acquire) {
+            INIT_CONFIRM | INIT_CONFIRM_FINAL => {}
+            INIT_CANCELLED => {
+                INIT_STATE.store(INIT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"NAND INIT CANCELLED");
+            }
+            INIT_REQUEST => {
+                let result = xcore407i_blinker::nand_fs::initialize_nand_volume();
+                if result.is_ok() {
+                    INIT_STATE.store(INIT_DONE, Ordering::Release);
+                } else {
+                    INIT_STATE.store(INIT_FAILED, Ordering::Release);
+                }
+            }
+            INIT_DONE => {
+                INIT_STATE.store(INIT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"NAND READY - EMPTY LFS");
+            }
+            INIT_FAILED => {
+                INIT_STATE.store(INIT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"NAND INIT FAILED");
+            }
+            _ => {}
+        }
+
+        let current_init_state = INIT_STATE.load(Ordering::Acquire);
+        if current_init_state != init_screen_state {
+            match current_init_state {
+                INIT_CONFIRM => draw_init_confirmation(false),
+                INIT_CONFIRM_FINAL => draw_init_confirmation(true),
+                _ => {}
+            }
+            init_screen_state = current_init_state;
+        }
+
+        match FORMAT_STATE.load(Ordering::Acquire) {
+            FORMAT_CONFIRM | FORMAT_CONFIRM_FINAL => {}
+            FORMAT_CANCELLED => {
+                FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"FORMAT CANCELLED");
+            }
+            FORMAT_REQUEST => {
+                let result = xcore407i_blinker::nand_fs::format_existing_littlefs();
+                if result.is_ok() {
+                    FORMAT_STATE.store(FORMAT_DONE, Ordering::Release);
+                } else {
+                    FORMAT_STATE.store(FORMAT_FAILED, Ordering::Release);
+                }
+            }
+            FORMAT_DONE => {
+                FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"LITTLEFS FORMATTED - REOPEN F2");
+            }
+            FORMAT_FAILED => {
+                FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
+                clear_demo_canvas(0x10);
+                show_usb_status(b"LITTLEFS FORMAT FAILED");
+            }
+            _ => {}
+        }
+
+        let current_format_state = FORMAT_STATE.load(Ordering::Acquire);
+        if current_format_state != format_screen_state {
+            match current_format_state {
+                FORMAT_CONFIRM => draw_format_confirmation(false, FORMAT_ERROR.load(Ordering::Acquire)),
+                FORMAT_CONFIRM_FINAL => draw_format_confirmation(true, FORMAT_ERROR.load(Ordering::Acquire)),
+                _ => {}
+            }
+            format_screen_state = current_format_state;
+        }
+
         let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
         if save_state == SAVE_DIALOG_CHECK {
             let mut path = [0u8; MAX_BROWSER_PATH];
@@ -248,13 +327,6 @@ fn main() -> ! {
             }
         }
 
-        let save_dialog_active = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE;
-        if save_dialog_active != save_dialog_was_active {
-            pacing_start_ms = TICKS.load(Ordering::Relaxed);
-            pacing_start_cycles = unsafe { bk_timing_cycles() };
-            save_dialog_was_active = save_dialog_active;
-        }
-
         match SAVE_DIALOG_RESULT.swap(0, Ordering::AcqRel) {
             SAVE_RESULT_CANCELLED => {
                 clear_demo_canvas(0x10);
@@ -286,10 +358,53 @@ fn main() -> ! {
                         browser_selected,
                     );
                 }
-                Err(()) => {
+                Err(error) => {
                     browser_open = false;
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
-                    show_usb_status(b"NAND FILE LIST FAILED");
+                    if matches!(
+                        error,
+                        xcore407i_blinker::nand_fs::FsAccessError::Init(
+                            xcore407i_blinker::nand_fs::InitError::DharaNoJournal
+                        )
+                    ) {
+                        INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
+                    } else if matches!(
+                        error,
+                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_)
+                    ) {
+                        let detail = match error {
+                            xcore407i_blinker::nand_fs::FsAccessError::Mount(code) => code,
+                            _ => 0,
+                        };
+                        FORMAT_ERROR.store(detail, Ordering::Release);
+                        FORMAT_STATE.store(FORMAT_CONFIRM, Ordering::Release);
+                    } else {
+                    let message: &[u8] = match error {
+                        xcore407i_blinker::nand_fs::FsAccessError::Init(error) => {
+                            match error {
+                                xcore407i_blinker::nand_fs::InitError::Timeout =>
+                                    b"NAND TIMEOUT",
+                                xcore407i_blinker::nand_fs::InitError::WrongDevice =>
+                                    b"NAND WRONG DEVICE",
+                                xcore407i_blinker::nand_fs::InitError::MarkerRead =>
+                                    b"NAND MARKER READ",
+                                xcore407i_blinker::nand_fs::InitError::MountFailed =>
+                                    b"NAND INIT MOUNT FAIL",
+                                xcore407i_blinker::nand_fs::InitError::DharaNoJournal =>
+                                    b"DHARA JOURNAL MISSING",
+                                xcore407i_blinker::nand_fs::InitError::DharaCapacity =>
+                                    b"DHARA CAPACITY LOW",
+                                xcore407i_blinker::nand_fs::InitError::ProvisionFailed =>
+                                    b"DHARA PROVISION FAILED",
+                            }
+                        },
+                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_) =>
+                            b"LFS MOUNT FAILED",
+                        xcore407i_blinker::nand_fs::FsAccessError::Operation =>
+                            b"LFS ROOT READ FAILED",
+                    };
+                    show_usb_status(message);
+                    }
                 }
             }
         }
@@ -335,6 +450,20 @@ fn main() -> ! {
             }
         }
 
+        // Freeze PDP execution while any modal UI owns input. Rebase the
+        // pacing clock on both entry and exit so the emulator never tries to
+        // catch up for time spent in the file chooser or format recovery UI.
+        let emulator_paused = browser_open
+            || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
+            || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
+            || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE
+            || INIT_STATE.load(Ordering::Acquire) != INIT_IDLE;
+        if emulator_paused != emulator_was_paused {
+            pacing_start_ms = TICKS.load(Ordering::Relaxed);
+            pacing_start_cycles = unsafe { bk_timing_cycles() };
+            emulator_was_paused = emulator_paused;
+        }
+
         // Replenish USB video buffers before emulator work. The producer
         // also runs between individual PDP instructions below, so a newly
         // freed DMA buffer is refilled promptly instead of waiting for a
@@ -363,7 +492,7 @@ fn main() -> ! {
         // Pace PDP execution against the 1 ms hardware timebase. This keeps
         // the emulated 3 MHz clock aligned with real time in both color and
         // monochrome modes. USB/audio/video servicing continues while ahead.
-        if !browser_open && SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_IDLE {
+        if !emulator_paused {
             let now_ms = TICKS.load(Ordering::Relaxed);
             let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
             let now_cycles = unsafe { bk_timing_cycles() };
