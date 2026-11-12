@@ -28,6 +28,7 @@ const FSMC_PCR_ECCEN: u32 = 1 << 6;
 const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
+const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
 const RB_MASK: u32 = 1 << 6;
 const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
