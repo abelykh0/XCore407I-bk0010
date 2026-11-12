@@ -44,7 +44,7 @@ int xcore_dhara_map_provision(uint32_t sector, const uint8_t *data, int32_t *err
 
 	if (!xcore_initialized || !data) {
 		if (error)
-			*error = DHARA_E_CORRUPT;
+			*error = DHARA_E_CORRUPT_MAP;
 		return -1;
 	}
 
