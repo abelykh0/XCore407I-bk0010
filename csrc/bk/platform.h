@@ -29,7 +29,6 @@ uint32_t bk_timing_cycles(void);
 uint8_t bk_audio_start(void);
 void bk_audio_stop(void);
 uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level);
-void bk_audio_get_edge_queue_stats(uint16_t *occupancy, uint32_t *oldest_cycles);
 
 void bk_platform_init(const uint8_t *monitor_rom,
                       const uint8_t *basic_rom,

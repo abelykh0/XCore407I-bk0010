@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(suspicious_runtime_symbol_definitions)]
 
 pub mod bk_screen;
 pub mod camera;

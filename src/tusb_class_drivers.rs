@@ -43,8 +43,6 @@ static mut UVC_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
 
 unsafe extern "C" {
     fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
-    fn xcore_usbd_edpt_iso_activate(rhport: u8, endpoint_desc: *const c_void) -> bool;
-    fn xcore_usbd_edpt_close(rhport: u8, ep_addr: u8);
     fn xcore_usbd_edpt_claim(rhport: u8, ep_addr: u8) -> bool;
     fn xcore_usbd_edpt_release(rhport: u8, ep_addr: u8) -> bool;
     fn xcore_usbd_edpt_xfer(rhport: u8, ep_addr: u8, buffer: *mut u8, length: u16) -> bool;
@@ -391,7 +389,7 @@ pub extern "C" fn xcore_tud_uvc_open(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_uvc_reset(rhport: u8) {
+pub extern "C" fn xcore_tud_uvc_reset(_rhport: u8) {
     cortex_m::interrupt::free(|_| {
     let _ = with_uvc_state(|state| {
         let _ = state.set_interface(UVC_STREAMING_INTERFACE, 0);
