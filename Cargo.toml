@@ -15,6 +15,9 @@ nand-ecc-test = []
 # Compile Dhara's read-only evaluation callbacks; erase is separately opt-in.
 dhara-eval = []
 dhara-eval-erase-spares = ["dhara-eval"]
+dhara-littlefs = []
+# Destructive first-use provisioning: erase all factory-good NAND blocks if no Dhara journal exists.
+dhara-format-nand = ["dhara-littlefs"]
 
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
