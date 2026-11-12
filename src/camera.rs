@@ -546,6 +546,7 @@ pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
 pub fn show_dhara_spare_inventory(
     block_count: Option<usize>,
     read_test: Option<(usize, usize)>,
+    erase_status: Option<bool>,
 ) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
@@ -562,6 +563,9 @@ pub fn show_dhara_spare_inventory(
                 append_hex(&mut line, &mut pos, first_page_free as u32, 2);
             } else {
                 append_bytes(&mut line, &mut pos, b" READ TEST PENDING");
+            }
+            if let Some(success) = erase_status {
+                append_bytes(&mut line, &mut pos, if success { b" ERASE OK" } else { b" ERASE FAIL" });
             }
         }
         None => append_bytes(&mut line, &mut pos, b"WAITING FOR NAND"),
