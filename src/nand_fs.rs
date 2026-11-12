@@ -113,6 +113,11 @@ const MAP_METADATA_CRC_OFFSET: usize =
     MAP_METADATA_MAP_OFFSET + LOGICAL_BLOCKS * core::mem::size_of::<u16>();
 const _: () = assert!(MAP_METADATA_CRC_OFFSET + 4 <= PAGE_SIZE);
 
+#[cfg(feature = "dhara-littlefs")]
+pub type ActiveStorage = crate::dhara_fs::DharaStorage;
+#[cfg(not(feature = "dhara-littlefs"))]
+pub type ActiveStorage = NandStorage;
+
 pub struct NandStorage {
     physical_blocks: &'static mut [u16; LOGICAL_BLOCKS],
     good_blocks: usize,
@@ -138,6 +143,10 @@ pub enum InitError {
     TooManyBadBlocks,
     MetadataFailure,
     MountFailed,
+    DharaNoJournal,
+    DharaCapacity,
+    DharaErase,
+    DharaFormat,
 }
 
 pub(crate) fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
@@ -1185,16 +1194,16 @@ pub enum FsAccessError {
 /// NAND initialization, mount, or the caller's filesystem operation.
 /// This function never formats or modifies NAND by itself.
 pub fn with_mounted_detailed<R>(
-    service: impl FnOnce(&Filesystem<'_, NandStorage>) -> LfsResult<R>,
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
 ) -> Result<R, FsAccessError> {
-    let mut storage = NandStorage::new().map_err(FsAccessError::Init)?;
-    if !Filesystem::<NandStorage>::is_mountable(&mut storage) {
+    let mut storage = ActiveStorage::new().map_err(FsAccessError::Init)?;
+    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
         return Err(FsAccessError::NotMountable);
     }
 
     // Nest the service result so an error returned by the caller is not
     // confused with an error returned while mounting LittleFS.
-    let mounted = Filesystem::<NandStorage>::mount_and_then(&mut storage, |fs| {
+    let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
         Ok(service(fs))
     }).map_err(|_| FsAccessError::Mount)?;
     mounted.map_err(|_| FsAccessError::Operation)
@@ -1202,7 +1211,7 @@ pub fn with_mounted_detailed<R>(
 
 /// Compatibility wrapper for existing callers that only need success/failure.
 pub fn with_mounted<R>(
-    service: impl FnOnce(&Filesystem<'_, NandStorage>) -> LfsResult<R>,
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
 ) -> Result<R, InitError> {
     with_mounted_detailed(service).map_err(|_| InitError::MountFailed)
 }
@@ -1213,10 +1222,10 @@ pub fn with_mounted<R>(
 /// Unlike initialize_and_mount_report(), this does not mount and immediately
 /// unmount before the caller starts using the filesystem. It never formats.
 pub fn with_mounted_report<R>(
-    service: impl FnOnce(&Filesystem<'_, NandStorage>, &[u8], usize) -> LfsResult<R>,
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>, &[u8], usize) -> LfsResult<R>,
 ) -> Result<R, InitError> {
-    let mut storage = NandStorage::new()?;
-    if !Filesystem::<NandStorage>::is_mountable(&mut storage) {
+    let mut storage = ActiveStorage::new()?;
+    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
         return Err(InitError::MountFailed);
     }
 
@@ -1229,7 +1238,7 @@ pub fn with_mounted_report<R>(
     append(&mut report, &mut len, b"LittleFS: existing volume mounted\r\n");
     append(&mut report, &mut len, b"Capacity: ");
 
-    Filesystem::<NandStorage>::mount_and_then(&mut storage, |fs| {
+    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
         append_hex(&mut report, &mut len, fs.total_space() as u32, 8);
         append(&mut report, &mut len, b" bytes\r\nFree: ");
         append_hex(
@@ -1245,10 +1254,10 @@ pub fn with_mounted_report<R>(
     .map_err(|_| InitError::MountFailed)
 }
 
-/// Set true only for the initial provisioning flash. After README reports
-/// "LittleFS: formatted and mounted", change this to false and rebuild.
-/// With this false, an absent/corrupt filesystem is never reformatted.
-const FORMAT_NAND_ONCE: bool = false;
+/// Raw-NAND mode keeps formatting disabled. Dhara provisioning is separately
+/// gated by the explicit dhara-format-nand feature and only runs when no
+/// valid Dhara journal exists.
+const FORMAT_NAND_ONCE: bool = cfg!(feature = "dhara-format-nand");
 
 /// Initialize NAND, perform the explicitly enabled initial format if needed,
 /// then mount. Normal boots with FORMAT_NAND_ONCE=false are mount-only.
@@ -1257,7 +1266,7 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
     let mut len = 0;
     append(&mut report, &mut len, b"XCore407I NAND / LittleFS\r\n");
 
-    let mut storage = match NandStorage::new() {
+    let mut storage = match ActiveStorage::new() {
         Ok(storage) => storage,
         Err(error) => {
             append(&mut report, &mut len, b"NAND init failed: ");
@@ -1280,7 +1289,7 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
         append(&mut report, &mut len, b" bytes)\r\n");
     }
 
-    let mountable = Filesystem::<NandStorage>::is_mountable(&mut storage);
+    let mountable = Filesystem::<ActiveStorage>::is_mountable(&mut storage);
     let mut formatted_now = false;
 
     if !mountable {
@@ -1290,14 +1299,14 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
         }
 
         append(&mut report, &mut len, b"Initial LittleFS format...\r\n");
-        if Filesystem::<NandStorage>::format(&mut storage).is_err() {
+        if Filesystem::<ActiveStorage>::format(&mut storage).is_err() {
             append(&mut report, &mut len, b"ERROR: format failed\r\n");
             return (report, len);
         }
         formatted_now = true;
     }
 
-    match Filesystem::<NandStorage>::mount_and_then(&mut storage, |fs| {
+    match Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
         Ok((fs.total_space(), fs.available_space().unwrap_or(0)))
     }) {
         Ok((total, free)) => {
