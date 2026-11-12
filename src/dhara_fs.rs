@@ -1,7 +1,7 @@
 //! Dhara-backed logical block device for LittleFS.
 //!
 //! Dhara owns all 1,024 physical NAND blocks. LittleFS sees a fixed logical
-//! geometry of 740 erase blocks; its reads, writes and erases are translated
+//! geometry of 700 erase blocks; its reads, writes and erases are translated
 //! to Dhara sectors. The NAND OOB layout remains unchanged: factory markers
 //! at bytes 0..1 and STM32 FSMC Hamming ECC/tag at bytes 2..15.
 
