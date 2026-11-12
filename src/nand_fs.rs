@@ -192,6 +192,7 @@ fn program_physical_page(page: u32, data: &[u8]) -> bool {
 
 /// Read a full data page, computing ECC as the four 512-byte chunks are read.
 /// Pages without the tag are treated as legacy raw-NAND pages.
+///
 /// Apply the STM32 FSMC 512-byte Hamming syndrome to a data chunk.
 ///
 /// The low three parity pairs encode the bit position (P4, P2, P1); the
@@ -426,6 +427,7 @@ fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
         command(0x85);
         address(column as u8);
         address((column >> 8) as u8);
+        cortex_m::asm::delay(1_000);
         write_data(value);
     }
 
@@ -433,6 +435,7 @@ fn program_ecc_test_page(page: u32, corruptions: &[(u16, u8)]) -> bool {
     command(0x85);
     address((PAGE_SIZE as u16 + ECC_OOB_OFFSET) as u8);
     address(((PAGE_SIZE as u16 + ECC_OOB_OFFSET) >> 8) as u8);
+    cortex_m::asm::delay(1_000);
     write_data(0xFF);
     write_data(0xFF);
     for &byte in &ecc {
