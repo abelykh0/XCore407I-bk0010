@@ -58,35 +58,25 @@ cargo build --release --features cpu-cycle-diag
 probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
 ```
 
-## Experimental Dhara-backed LittleFS
+## Dhara-backed LittleFS
 
 The `dhara-littlefs` feature places Dhara between the raw K9F1G08U0E NAND
-and LittleFS. Dhara owns all physical blocks, handles factory/grown bad blocks,
-wear levelling and ECC-backed page I/O; LittleFS sees 700 logical erase blocks
-(87.5 MiB). A private Dhara sector outside the LittleFS range identifies the
-formatted volume.
+and LittleFS. Dhara manages all physical blocks, including bad-block handling
+and wear levelling, while the existing STM32 FSMC Hamming ECC protects page
+data. LittleFS sees 700 logical erase blocks (87.5 MiB). A private Dhara sector
+outside the LittleFS range identifies the formatted volume.
 
-**Destructive first provisioning:** build and flash once with:
+The NAND has already been provisioned for this layout. Normal builds must use
+`dhara-littlefs`; there is no firmware feature for erasing or reformatting
+the entire NAND. If the Dhara journal or volume marker is missing or invalid,
+initialization fails safely and leaves NAND unchanged.
 
-```powershell
-cargo build --release --target thumbv7em-none-eabihf --features "dhara-format-nand,cpu-cycle-diag"
-probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
-```
-
-If no valid Dhara volume exists, this build erases every factory-good NAND
-block, initializes Dhara, and formats LittleFS. Factory-marked bad blocks are
-preserved. All existing files and the old raw-NAND LittleFS volume are lost.
-
-After confirming that files can be created and read, rebuild without the
-provisioning feature:
+Build and flash:
 
 ```powershell
 cargo build --release --target thumbv7em-none-eabihf --features "dhara-littlefs,cpu-cycle-diag"
+probe-rs download --chip STM32F407IGTx target/thumbv7em-none-eabihf/release/xcore407i_blinker
 ```
-
-Do not keep `dhara-format-nand` enabled for normal use: if the Dhara journal
-or volume signature later becomes invalid, that feature authorizes another
-full-device erase.
 
 ## Not implemented / TODO
 
