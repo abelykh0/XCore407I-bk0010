@@ -347,15 +347,15 @@ pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
 /// Display the two-step confirmation for first-time NAND provisioning.
 pub(crate) fn draw_init_confirmation(final_confirmation: bool) {
     clear_demo_canvas(0);
-    show_file_browser_line(0, b"NAND NOT INITIALIZED", true);
-    show_file_browser_line(3, b"DHARA VOLUME MISSING", false);
+    show_file_browser_line(0, b"MANUAL NAND REINITIALIZATION", true);
+    show_file_browser_line(3, b"ERASES EVEN A VALID DHARA VOLUME", false);
     if final_confirmation {
         show_file_browser_line(7, b"ERASE AND INITIALIZE NAND?", true);
         show_file_browser_line(9, b"ALL DATA ON NAND WILL BE LOST", false);
         show_file_browser_line(11, b"THIS CANNOT BE UNDONE", false);
         show_file_browser_line(27, b"Y INITIALIZE  N/ESC CANCEL", false);
     } else {
-        show_file_browser_line(7, b"INITIALIZE NAND STORAGE?", true);
+        show_file_browser_line(7, b"REINITIALIZE NAND STORAGE?", true);
         show_file_browser_line(9, b"ERASES ALL USABLE NAND BLOCKS", false);
         show_file_browser_line(27, b"Y CONTINUE  N/ESC CANCEL", false);
     }
