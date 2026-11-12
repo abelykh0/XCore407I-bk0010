@@ -9,9 +9,9 @@ use crate::file_browser::{
     SAVE_DIALOG_DIRTY, SAVE_OVERWRITE,
     FORMAT_STATE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL, FORMAT_REQUEST,
     FORMAT_CANCELLED,
-    #[cfg(feature = "destructive-lfs-test")]
-    LFS_TEST_ACTIVE, LFS_TEST_REQUEST,
 };
+#[cfg(feature = "destructive-lfs-test")]
+use crate::file_browser::{LFS_TEST_ACTIVE, LFS_TEST_REQUEST};
 use crate::usb_host::USB_FS_STATUS;
 use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
 use xcore407i_blinker::camera::request_camera_mode_toggle;
