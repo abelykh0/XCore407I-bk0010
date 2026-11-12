@@ -7,7 +7,7 @@
 
 #![cfg(feature = "dhara-littlefs")]
 
-use core::ffi::{c_int, c_uint};
+use core::ffi::c_int;
 use core::slice;
 
 use littlefs2::{
@@ -21,7 +21,7 @@ use crate::nand_fs::{
     self, ERASE_BLOCK_SIZE, PAGE_SIZE, PHYSICAL_BLOCKS, PAGES_PER_BLOCK, SPARE_SIZE,
 };
 
-const LITTLEFS_BLOCK_COUNT: usize = 740;
+const LITTLEFS_BLOCK_COUNT: usize = 700;
 const SECTORS_PER_LITTLEFS_BLOCK: usize = ERASE_BLOCK_SIZE / PAGE_SIZE;
 const DHARA_E_BAD_BLOCK: i32 = 1;
 const DHARA_E_ECC: i32 = 2;
