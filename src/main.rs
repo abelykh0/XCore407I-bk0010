@@ -93,6 +93,8 @@ fn main() -> ! {
     // This does not mount LittleFS or program/erase any NAND block.
     #[cfg(feature = "dhara-eval")]
     let _ = xcore407i_blinker::nand_fs::NandStorage::scan_dhara_spare_inventory();
+    #[cfg(feature = "dhara-eval")]
+    let _ = xcore407i_blinker::nand_fs::verify_dhara_read_only_callbacks();
 
     // Non-destructive NAND identification and factory bad-block scan.
     // No blocks are erased or programmed.
@@ -375,6 +377,7 @@ fn main() -> ! {
             if now.wrapping_sub(dhara_diag_last_ms) >= 1_000 {
                 show_dhara_spare_inventory(
                     xcore407i_blinker::nand_fs::NandStorage::dhara_test_block_count_cached(),
+                    xcore407i_blinker::nand_fs::dhara_read_only_test_cached(),
                 );
                 dhara_diag_last_ms = now;
             }
