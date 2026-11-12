@@ -188,6 +188,49 @@ fn program_physical_page(page: u32, data: &[u8]) -> bool {
 
 /// Read a full data page, computing ECC as the four 512-byte chunks are read.
 /// Pages without the tag are treated as legacy raw-NAND pages.
+/// Apply the STM32 FSMC 512-byte Hamming syndrome to a data chunk.
+///
+/// The 24-bit syndrome consists of 12 two-bit parity pairs. For a data-bit
+/// error every pair is 01 or 10; 10 contributes the corresponding address
+/// bit. Pair order is P8, P16, P32, P64, P128, P256, P512, P1024,
+/// P4, P2, P1, P2048. A syndrome with one set bit is an ECC-bit error and
+/// does not require changing the data.
+fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
+    if data.len() != FSMC_ECC_CHUNK_SIZE {
+        return false;
+    }
+
+    let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
+    if syndrome == 0 {
+        return true;
+    }
+
+    // A single parity-bit error affects the stored ECC, not the data.
+    if syndrome.count_ones() == 1 {
+        return true;
+    }
+
+    let mut location = 0usize;
+    for pair_index in 0..12 {
+        match (syndrome >> (pair_index * 2)) & 0x03 {
+            0x01 => {}
+            0x02 => location |= 1 << pair_index,
+            _ => return false,
+        }
+    }
+
+    // The first eight address bits select the byte; P2048 (pair 11)
+    // supplies byte-address bit 8. P4/P2/P1 (pairs 8..10) select its bit.
+    let byte_index = (location & 0xFF) | (((location >> 11) & 1) << 8);
+    let bit_index = (location >> 8) & 0x07;
+    if byte_index >= data.len() {
+        return false;
+    }
+
+    data[byte_index] ^= 1 << bit_index;
+    true
+}
+
 fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE { return false; }
 
@@ -221,7 +264,25 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return false;
     }
 
-    stored[..ECC_OOB_BYTES] == calculated
+    for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        let offset = chunk_index * ECC_BYTES_PER_CHUNK;
+        let stored_ecc = u32::from_le_bytes([
+            stored[offset],
+            stored[offset + 1],
+            stored[offset + 2],
+            0,
+        ]);
+        let calculated_ecc = u32::from_le_bytes([
+            calculated[offset],
+            calculated[offset + 1],
+            calculated[offset + 2],
+            0,
+        ]);
+        if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
+            return false;
+        }
+    }
+    true
 }
 
 fn configure_fsmc() {
