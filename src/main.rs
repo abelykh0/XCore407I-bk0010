@@ -11,7 +11,7 @@ use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, request_camera_mode_toggle, show_file_browser_line, show_usb_status, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
-use xcore407i_blinker::camera::{show_performance_status, show_rtc_read_cycles};
+use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -104,8 +104,6 @@ unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
-    #[cfg(feature = "cpu-cycle-diag")]
-    fn bk_rtc_get_cycles_between_reads() -> u32;
     fn bk_try_send_input_byte(value: u8) -> u8;
     fn bk_set_pc(start: u16);
     fn bk_request_stop_irq();
@@ -122,6 +120,7 @@ fn main() -> ! {
 
     rtc::initialize(&device.RCC, &device.PWR, &device.RTC);
 
+    #[cfg(feature = "cpu-cycle-diag")]
     enable_cycle_counter(&mut core);
 
     // BK emulator initialization
@@ -226,9 +225,9 @@ fn main() -> ! {
     let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
     let mut save_dialog_was_active = false;
     #[cfg(feature = "cpu-cycle-diag")]
-    let mut performance_last_ms = pacing_start_ms;
+    let mut diagnostic_last_dwt = read_dwt_cycle_count();
     #[cfg(feature = "cpu-cycle-diag")]
-    let mut performance_last_cycles = pacing_start_cycles;
+    let mut diagnostic_last_pdp = pacing_start_cycles;
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -399,18 +398,20 @@ fn main() -> ! {
 
         #[cfg(feature = "cpu-cycle-diag")]
         {
-            let now_ms = TICKS.load(Ordering::Relaxed);
-            let elapsed_ms = now_ms.wrapping_sub(performance_last_ms);
-            if elapsed_ms >= 1_000 {
-                let now_cycles = unsafe { bk_timing_cycles() };
-                let elapsed_cycles = now_cycles.wrapping_sub(performance_last_cycles);
-                let cycles_per_second =
-                    ((elapsed_cycles as u64 * 1_000) / elapsed_ms as u64) as u32;
-                show_performance_status(cycles_per_second);
-                let rtc_read_cycles = unsafe { bk_rtc_get_cycles_between_reads() };
-                show_rtc_read_cycles(rtc_read_cycles);
-                performance_last_ms = now_ms;
-                performance_last_cycles = now_cycles;
+            // DWT provides an independent wall-time reference for the PDP rate.
+            const DWT_CYCLES_PER_SECOND: u32 = 168_000_000;
+            let now_dwt = read_dwt_cycle_count();
+            let elapsed_dwt = now_dwt.wrapping_sub(diagnostic_last_dwt);
+            if elapsed_dwt >= DWT_CYCLES_PER_SECOND {
+                let now_pdp = unsafe { bk_timing_cycles() };
+                let elapsed_pdp = now_pdp.wrapping_sub(diagnostic_last_pdp);
+                let pdp_cycles_per_second =
+                    (elapsed_pdp as u64 * DWT_CYCLES_PER_SECOND as u64
+                        / elapsed_dwt as u64) as u32;
+
+                show_pdp_cycles_per_second(pdp_cycles_per_second);
+                diagnostic_last_dwt = now_dwt;
+                diagnostic_last_pdp = now_pdp;
             }
         }
 
@@ -1282,6 +1283,14 @@ fn configure_exception_priorities(scb: &mut SCB) {
     }
 }
 
+#[cfg(feature = "cpu-cycle-diag")]
+#[inline]
+fn read_dwt_cycle_count() -> u32 {
+    // ARM DWT_CYCCNT at 0xE000_1004; 32-bit wrap is handled by wrapping_sub.
+    unsafe { core::ptr::read_volatile(0xE000_1004 as *const u32) }
+}
+
+#[cfg(feature = "cpu-cycle-diag")]
 fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
     // DWT access is provided by cortex-m; global trace must be enabled first.
     core.DCB.enable_trace();

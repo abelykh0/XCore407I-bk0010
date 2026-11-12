@@ -61,31 +61,6 @@ impl BkEmulatorAudio {
         unsafe { bk_timing_cycles() }.wrapping_mul(PHASE_UNITS_PER_CYCLE)
     }
 
-    fn apply_edges_through(&mut self, sample_phase: u32) {
-        loop {
-            if self.pending_edge.is_none() {
-                if self.edge_queue_empty {
-                    break;
-                }
-                let mut cycles = 0u32;
-                let mut level = 0u8;
-                if unsafe { bk_audio_pop_edge(&mut cycles, &mut level) } == 0 {
-                    self.edge_queue_empty = true;
-                    break;
-                }
-                self.pending_edge = Some((cycles, level != 0));
-            }
-
-            let (edge_cycle, edge_level) = self.pending_edge.unwrap();
-            if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE)) as i32 >= 0 {
-                self.sample_level = edge_level;
-                self.pending_edge = None;
-            } else {
-                break;
-            }
-        }
-    }
-
     /// Start/stop edge capture. Called from TinyUSB control/task context.
     pub fn tinyusb_set_active(&mut self, active: bool) {
         if active {
@@ -150,6 +125,31 @@ impl BkEmulatorAudio {
         }
         rendered
     }
+    fn apply_edges_through(&mut self, sample_phase: u32) {
+        loop {
+            if self.pending_edge.is_none() {
+                if self.edge_queue_empty {
+                    break;
+                }
+                let mut cycles = 0u32;
+                let mut level = 0u8;
+                if unsafe { bk_audio_pop_edge(&mut cycles, &mut level) } == 0 {
+                    self.edge_queue_empty = true;
+                    break;
+                }
+                self.pending_edge = Some((cycles, level != 0));
+            }
+
+            let (edge_cycle, edge_level) = self.pending_edge.unwrap();
+            if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE)) as i32 >= 0 {
+                self.sample_level = edge_level;
+                self.pending_edge = None;
+            } else {
+                break;
+            }
+        }
+    }
+
 }
 
 /// Copy one USB microframe of pre-rendered PCM. Missing samples are zero-filled.

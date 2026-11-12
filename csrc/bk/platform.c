@@ -9,33 +9,15 @@
 #include <stddef.h>
 #include "platform.h"
 
+
 // Emulator RTC extension: expose the low 32 bits of Unix milliseconds.
 // Reading the low word captures a snapshot; the high word uses that snapshot.
 extern uint32_t bk_rtc_unix_millis(void);
 static uint32_t bk_rtc_latched_millis;
-// Preserve the diagnostic's cycle timeline across bk_reset(), which resets
-// the emulator's live timing counter.
-static uint64_t bk_rtc_cycle_epoch;
-static uint64_t bk_rtc_previous_low_read_cycles;
-static uint32_t bk_rtc_cycles_between_low_reads;
-static uint8_t bk_rtc_have_previous_low_read;
-
 static uint16_t bk_rtc_read_time_low(void)
 {
-    uint64_t now_cycles = bk_rtc_cycle_epoch + bk_timing_cycles();
-    if (bk_rtc_have_previous_low_read) {
-        bk_rtc_cycles_between_low_reads = (uint32_t)(now_cycles - bk_rtc_previous_low_read_cycles);
-    } else {
-        bk_rtc_have_previous_low_read = 1u;
-    }
-    bk_rtc_previous_low_read_cycles = now_cycles;
     bk_rtc_latched_millis = bk_rtc_unix_millis();
     return (uint16_t)bk_rtc_latched_millis;
-}
-
-uint32_t bk_rtc_get_cycles_between_reads(void)
-{
-    return bk_rtc_cycles_between_low_reads;
 }
 
 static uint16_t bk_rtc_read_time_high(void)
@@ -194,9 +176,6 @@ void bk_reset(void)
     pdp.ir = 0;
     pdp.ea_addr = 0;
     pdp.total = 0;
-    // Keep RTC-read diagnostics continuous even though the live emulator
-    // cycle counter is restarted here.
-    bk_rtc_cycle_epoch += bk_timing_cycles();
     bk_timing_reset();
     pdp.look_time = 0;
     pdp.regs[PC] = MONITOR_BASE;

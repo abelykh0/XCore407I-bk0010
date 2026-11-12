@@ -25,7 +25,7 @@ littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"
 codegen-units = 1
 debug = 2
 lto = true
-opt-level = "s"
+opt-level = 3
 panic = "abort"
 
 [profile.dev]

@@ -1,17 +1,14 @@
 #include "platform.h"
 
-float ticks = 0.0f;    /* legacy floating-point timing accumulator */
 static uint32_t pdp_cycle_count;
 
 void bk_timing_reset(void)
 {
-    ticks = 0.0f;
     pdp_cycle_count = 0;
 }
 
 void bk_timing_add_cycles(uint32_t cycles)
 {
-    ticks += (float)cycles;
     pdp_cycle_count += cycles;
 }
 
