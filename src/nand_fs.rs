@@ -216,6 +216,8 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
         return false;
     }
 
+    // Linux's ecc_sw_hamming_correct() with NAND_ECC_SOFT_HAMMING_SM_ORDER.
+    // The STM32 FSMC emits the same 3-byte Hamming code, in SmartMedia order.
     let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
     if syndrome == 0 {
         return true;
@@ -225,26 +227,29 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     let b1 = (syndrome >> 8) as u8;
     let b2 = (syndrome >> 16) as u8;
 
-    // For a data-bit error, all 12 parity pairs must differ (01 or 10).
-    if ((b0 ^ (b0 >> 1)) & 0x55) != 0x55
-        || ((b1 ^ (b1 >> 1)) & 0x55) != 0x55
-        || ((b2 ^ (b2 >> 1)) & 0x55) != 0x55
-    {
-        // A single changed ECC bit is an ECC-bit error; data is still valid.
-        return syndrome.count_ones() == 1;
+    // For a 512-byte step, bit 0/1 of b2 are not part of the address
+    // parity test. This is the exact 512-byte condition from Linux MTD.
+    let data_bit_error =
+        ((b0 ^ (b0 >> 1)) & 0x55) == 0x55
+        && ((b1 ^ (b1 >> 1)) & 0x55) == 0x55
+        && ((b2 ^ (b2 >> 1)) & 0x54) == 0x54;
+
+    if data_bit_error {
+        let byte_index = (hamming_address_bits(b2 & 0x03) << 8)
+            | (hamming_address_bits(b1) << 4)
+            | hamming_address_bits(b0);
+        let bit_index = hamming_address_bits(b2 >> 2);
+
+        if byte_index >= data.len() || bit_index >= 8 {
+            return false;
+        }
+
+        data[byte_index] ^= 1 << bit_index;
+        return true;
     }
 
-    let byte_index = (hamming_address_bits(b2 & 0x03) << 8)
-        | (hamming_address_bits(b1) << 4)
-        | hamming_address_bits(b0);
-    let bit_index = hamming_address_bits(b2 >> 2);
-
-    if byte_index >= data.len() || bit_index >= 8 {
-        return false;
-    }
-
-    data[byte_index] ^= 1 << bit_index;
-    true
+    // Exactly one changed ECC bit means the data itself is intact.
+    syndrome.count_ones() == 1
 }
 
 fn read_data_page(page: u32, out: &mut [u8]) -> bool {
