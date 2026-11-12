@@ -7,6 +7,8 @@ use crate::file_browser::{
     SAVE_DIALOG_WRITE, SAVE_RESULT_CANCELLED, SAVE_NAME_CAPACITY,
     SAVE_FILENAME, SAVE_FILENAME_LEN, SAVE_DIALOG_RESULT, SAVE_DIALOG_STATE,
     SAVE_DIALOG_DIRTY, SAVE_OVERWRITE,
+    FORMAT_STATE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL, FORMAT_REQUEST,
+    FORMAT_CANCELLED,
 };
 use crate::usb_host::USB_FS_STATUS;
 use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
@@ -182,6 +184,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
 
     // AZBK modifier keys are only forwarded while the emulator owns input.
     let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
+        || FORMAT_STATE.load(Ordering::Acquire) != 0
         || FILE_BROWSER_ACTIVE.load(Ordering::Acquire);
     if !keyboard_captured && control_pressed {
         append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
@@ -268,6 +271,28 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             }
             continue;
         } else if save_state != SAVE_DIALOG_IDLE {
+            continue;
+        }
+
+        // LittleFS formatting requires two explicit confirmations.
+        // The actual flash operation runs later in main-loop context.
+        let format_state = FORMAT_STATE.load(Ordering::Acquire);
+        if format_state == FORMAT_CONFIRM || format_state == FORMAT_CONFIRM_FINAL {
+            match key {
+                0x29 => FORMAT_STATE.store(FORMAT_CANCELLED, Ordering::Release),
+                _ => match key_to_ascii(key, shift, false, false, control_or_alt) {
+                    Some(b'y') | Some(b'Y') if format_state == FORMAT_CONFIRM => {
+                        FORMAT_STATE.store(FORMAT_CONFIRM_FINAL, Ordering::Release);
+                    }
+                    Some(b'y') | Some(b'Y') if format_state == FORMAT_CONFIRM_FINAL => {
+                        FORMAT_STATE.store(FORMAT_REQUEST, Ordering::Release);
+                    }
+                    Some(b'n') | Some(b'N') => {
+                        FORMAT_STATE.store(FORMAT_CANCELLED, Ordering::Release);
+                    }
+                    _ => {}
+                }
+            }
             continue;
         }
 
