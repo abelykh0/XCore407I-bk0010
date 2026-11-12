@@ -70,7 +70,7 @@ static DHARA_TEST_BLOCK_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 #[cfg(feature = "dhara-eval")]
 #[repr(C)]
-struct DharaNand {
+pub struct DharaNand {
     log2_page_size: u8,
     log2_ppb: u8,
     num_blocks: u32,
@@ -378,7 +378,7 @@ fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 #[cfg(feature = "dhara-eval")]
 unsafe fn dhara_context_for(nand: *const DharaNand) -> Option<*mut DharaNandContext> {
     let context = core::ptr::addr_of_mut!(DHARA_NAND_CONTEXT);
-    let expected = core::ptr::addr_of!((*context).nand);
+    let expected = unsafe { core::ptr::addr_of!((*context).nand) };
     if nand == expected { Some(context) } else { None }
 }
 
