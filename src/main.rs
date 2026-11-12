@@ -45,11 +45,6 @@ use usb_host::{
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
-// Set true temporarily to run the destructive ECC fault-injection test.
-// It uses only a factory-good block outside LittleFS capacity; set false
-// again after recording the result.
-const RUN_NAND_ECC_FAULT_TEST: bool = true;
-
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
@@ -161,23 +156,9 @@ fn main() -> ! {
         &mut core.NVIC,
     );
 
-    // Retain the result for the persistent diagnostic row. The ordinary
-    // status-message queue is transient and can be overwritten by BK drawing.
-    let nand_ecc_test_status = if RUN_NAND_ECC_FAULT_TEST {
-        use xcore407i_blinker::nand_fs::EccSelfTestError as E;
-        match xcore407i_blinker::nand_fs::run_ecc_fault_injection_test() {
-            Ok(()) => 1,
-            Err(E::NoReservedGoodBlock) => 2,
-            Err(E::EraseFailed) => 3,
-            Err(E::ProgramFailed) => 4,
-            Err(E::SingleBitReadRejected) => 5,
-            Err(E::SingleBitDataMismatch) => 6,
-            Err(E::DoubleBitDetectionFailed) => 7,
-            Err(E::CleanupFailed) => 8,
-        }
-    } else {
-        0
-    };
+    #[cfg(feature = "nand-ecc-test")]
+    let _nand_ecc_test_result =
+        xcore407i_blinker::nand_fs::run_ecc_fault_injection_test();
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
@@ -374,55 +355,6 @@ fn main() -> ! {
                         / elapsed_dwt as u64) as u32;
 
                 show_pdp_cycles_per_second(pdp_cycles_per_second);
-                let ecc_line: &[u8] = match nand_ecc_test_status {
-                    1 => b"NAND ECC: PASS",
-                    2 => b"NAND ECC: NO SPARE BLOCK",
-                    3 => b"NAND ECC: ERASE FAILED",
-                    4 => b"NAND ECC: PROGRAM FAILED",
-                    5 => b"NAND ECC: 1-BIT READ REJECTED",
-                    6 => b"NAND ECC: 1-BIT DATA WRONG",
-                    7 => b"NAND ECC: 2-BIT CHECK FAILED",
-                    8 => b"NAND ECC: CLEANUP FAILED",
-                    _ => b"NAND ECC: NOT RUN",
-                };
-                if nand_ecc_test_status == 4
-                    || nand_ecc_test_status == 5
-                    || nand_ecc_test_status == 6
-                {
-                    let (stage, chunk, syndrome, stored_ecc, calculated_ecc) =
-                        xcore407i_blinker::nand_fs::ecc_diagnostic();
-                    let mut detail = [b' '; 32];
-                    detail[..2].copy_from_slice(b"S ");
-                    detail[2] = b'0' + (stage.min(9) as u8);
-                    detail[4] = b'C';
-                    detail[5] = b'0' + (chunk.min(9) as u8);
-                    detail[7] = b'P';
-                    detail[16] = b'R';
-                    for i in 0..6 {
-                        let shift = (5 - i) * 4;
-                        for (value, start) in [(stored_ecc, 8usize), (calculated_ecc, 17usize)] {
-                            let nibble = ((value >> shift) & 0xF) as u8;
-                            detail[start + i] = if nibble < 10 {
-                                b'0' + nibble
-                            } else {
-                                b'A' + nibble - 10
-                            };
-                        }
-                    }
-                    // Keep the syndrome visible at the end of the row.
-                    detail[24] = b'X';
-                    for i in 0..6 {
-                        let nibble = ((syndrome >> ((5 - i) * 4)) & 0xF) as u8;
-                        detail[25 + i] = if nibble < 10 {
-                            b'0' + nibble
-                        } else {
-                            b'A' + nibble - 10
-                        };
-                    }
-                    xcore407i_blinker::camera::show_file_browser_line(29, &detail, false);
-                } else {
-                    xcore407i_blinker::camera::show_file_browser_line(29, ecc_line, false);
-                }
                 diagnostic_last_dwt = now_dwt;
                 diagnostic_last_pdp = now_pdp;
             }
