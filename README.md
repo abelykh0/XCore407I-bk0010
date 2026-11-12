@@ -63,26 +63,25 @@ raw-NAND filesystem backend and no firmware feature for erasing or reformatting
 the entire NAND. If the Dhara journal or volume marker is missing or invalid,
 initialization fails safely and leaves NAND unchanged.
 
-## Destructive LittleFS Recovery Test
+## LittleFS Formatting and NAND Provisioning
 
-This test is opt-in and is not included in normal builds. It deliberately trims
-LittleFS logical erase blocks 0 and 1 (the initial LittleFS metadata pair)
-through Dhara. It does not address raw NAND blocks and does not touch Dhara's
-journal or the private volume-marker sector. All files in the LittleFS volume
-may become inaccessible; use only when the volume can be discarded.
+If LittleFS cannot be mounted but Dhara initializes successfully, the file
+browser offers a two-step, explicit confirmation to format the LittleFS
+volume. Formatting deletes all files in LittleFS but preserves Dhara's
+journal and the private volume marker. After formatting, reopen the file
+browser with F2.
 
-Build the test firmware with:
+This operation formats **only the existing LittleFS volume**. It does not
+initialize or format raw NAND, create a Dhara journal, or recover a missing
+Dhara volume.
 
-```powershell
-cargo build --release --target thumbv7em-none-eabihf --features "cpu-cycle-diag destructive-lfs-test"
-```
-
-With a USB keyboard connected, press **Ctrl+Alt+F12** while the emulator is
-running and no file/save/format dialog is open. The firmware trims the two
-LittleFS metadata blocks in main-loop context, displays the result, and pauses
-PDP emulation. Reset the board, then press F2 to test the mount-failure
-diagnostic and two-step LittleFS format recovery. The trigger is absent unless
-`destructive-lfs-test` is explicitly enabled.
+The firmware expects the NAND to have already been provisioned for this
+Dhara-backed layout. On NAND containing arbitrary data, or on a new/unprepared
+device, Dhara initialization will normally fail with `DHARA JOURNAL MISSING`
+because the expected journal and private volume marker are absent or invalid.
+The firmware fails safely and does not automatically erase or provision that
+NAND. Initial Dhara provisioning must be performed separately before the
+LittleFS format option can be used.
 
 ## Commands to Build and Flash
 
