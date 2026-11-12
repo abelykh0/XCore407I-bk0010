@@ -161,15 +161,17 @@ fn main() -> ! {
         &mut core.NVIC,
     );
 
-    if RUN_NAND_ECC_FAULT_TEST {
+    // Retain the result for the persistent diagnostic row. The ordinary
+    // status-message queue is transient and can be overwritten by BK drawing.
+    let nand_ecc_test_status = if RUN_NAND_ECC_FAULT_TEST {
         match xcore407i_blinker::nand_fs::run_ecc_fault_injection_test() {
-            Ok(()) => show_usb_status(b"NAND ECC TEST PASS"),
-            Err(xcore407i_blinker::nand_fs::EccSelfTestError::NoReservedGoodBlock) => {
-                show_usb_status(b"NAND ECC TEST: NO SPARE");
-            }
-            Err(_) => show_usb_status(b"NAND ECC TEST FAILED"),
+            Ok(()) => 1,
+            Err(xcore407i_blinker::nand_fs::EccSelfTestError::NoReservedGoodBlock) => 2,
+            Err(_) => 3,
         }
-    }
+    } else {
+        0
+    };
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
@@ -366,6 +368,13 @@ fn main() -> ! {
                         / elapsed_dwt as u64) as u32;
 
                 show_pdp_cycles_per_second(pdp_cycles_per_second);
+                let ecc_line: &[u8] = match nand_ecc_test_status {
+                    1 => b"NAND ECC: PASS",
+                    2 => b"NAND ECC: NO SPARE BLOCK",
+                    3 => b"NAND ECC: FAILED",
+                    _ => b"NAND ECC: NOT RUN",
+                };
+                xcore407i_blinker::camera::show_file_browser_line(29, ecc_line, false);
                 diagnostic_last_dwt = now_dwt;
                 diagnostic_last_pdp = now_pdp;
             }
