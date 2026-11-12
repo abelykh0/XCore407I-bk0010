@@ -5,14 +5,14 @@
 - **Video:** USB UVC, uncompressed NV12, 25 fps.
 - **Audio:** USB Line In.
 - **Input:** USB keyboard connected to the board's host port.
-- **Storage:** onboard 128 MB raw NAND, managed by Dhara and LittleFS.
+- **Storage:** Samsung K9F1G08U0E 1-Gbit raw NAND.
 
 [Video demo](https://www.youtube.com/watch?v=IPjBy6mAeOw)
 
 ## Hardware
 
 The board uses an STM32F407IGT6 with 192 KB SRAM, a USB3300 high-speed PHY,
-and a K9F1G08U0E 1-Gbit NAND chip.
+and onboard Samsung K9F1G08U0E 1-Gbit raw NAND.
 
 Video is generated and streamed without storing a complete frame in RAM.
 The firmware coordinates USB video, audio, keyboard input, and emulator timing.
@@ -29,7 +29,9 @@ The STM32 calendar is exposed as read-only Unix milliseconds (low 32 bits):
 Read the low word first; it captures a snapshot used by the following high-word
 read. The value wraps every 49.7 days. RTC resolution is approximately 3.9 ms.
 
-## NAND storage
+## Implementation
+
+### NAND storage
 
 Dhara is the only raw-NAND backend. It handles physical blocks, bad blocks,
 and wear levelling; STM32 FSMC Hamming ECC protects page data. LittleFS uses
