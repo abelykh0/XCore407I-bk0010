@@ -23,6 +23,9 @@ use crate::nand_fs::{
 
 const LITTLEFS_BLOCK_COUNT: usize = 700;
 const SECTORS_PER_LITTLEFS_BLOCK: usize = ERASE_BLOCK_SIZE / PAGE_SIZE;
+const VOLUME_MARKER_SECTOR: u32 =
+    (LITTLEFS_BLOCK_COUNT * SECTORS_PER_LITTLEFS_BLOCK) as u32;
+const VOLUME_MARKER: &[u8; 8] = b"XCDHARA1";
 const DHARA_E_BAD_BLOCK: i32 = 1;
 const DHARA_E_ECC: i32 = 2;
 
@@ -308,14 +311,47 @@ impl DharaStorage {
 
         unsafe { xcore_dhara_map_init(); }
         let mut dhara_error = 0i32;
-        let resumed = unsafe { xcore_dhara_map_resume(&mut dhara_error) } == 0;
+        let mut resumed = unsafe { xcore_dhara_map_resume(&mut dhara_error) } == 0;
         let mut bad_blocks = 0u16;
+
+        let capacity = unsafe { xcore_dhara_map_capacity() } as usize;
+        if capacity <= VOLUME_MARKER_SECTOR as usize {
+            return Err(crate::nand_fs::InitError::DharaCapacity);
+        }
+
+        // A private logical sector outside LittleFS carries an application
+        // signature. It prevents arbitrary raw-NAND contents from being
+        // mistaken for a valid Dhara volume during first provisioning.
+        if resumed {
+            let mut marker = [0xFFu8; PAGE_SIZE];
+            let mut error = 0i32;
+            resumed = unsafe {
+                xcore_dhara_map_read(
+                    VOLUME_MARKER_SECTOR,
+                    marker.as_mut_ptr(),
+                    &mut error,
+                )
+            } == 0 && &marker[..VOLUME_MARKER.len()] == VOLUME_MARKER;
+        }
 
         if !resumed {
             #[cfg(feature = "dhara-format-nand")]
             {
                 bad_blocks = erase_all_good_blocks()?;
                 unsafe { xcore_dhara_map_init(); }
+
+                let mut marker = [0xFFu8; PAGE_SIZE];
+                marker[..VOLUME_MARKER.len()].copy_from_slice(VOLUME_MARKER);
+                let mut error = 0i32;
+                if unsafe {
+                    xcore_dhara_map_write(
+                        VOLUME_MARKER_SECTOR,
+                        marker.as_ptr(),
+                        &mut error,
+                    )
+                } != 0 || unsafe { xcore_dhara_map_sync(&mut error) } != 0 {
+                    return Err(crate::nand_fs::InitError::DharaFormat);
+                }
             }
             #[cfg(not(feature = "dhara-format-nand"))]
             {
@@ -333,7 +369,9 @@ impl DharaStorage {
         }
 
         let capacity = unsafe { xcore_dhara_map_capacity() } as usize;
-        if capacity < LITTLEFS_BLOCK_COUNT * SECTORS_PER_LITTLEFS_BLOCK {
+        if capacity <= VOLUME_MARKER_SECTOR as usize
+            || capacity < LITTLEFS_BLOCK_COUNT * SECTORS_PER_LITTLEFS_BLOCK
+        {
             return Err(crate::nand_fs::InitError::DharaCapacity);
         }
 
