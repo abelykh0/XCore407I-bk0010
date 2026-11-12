@@ -48,7 +48,7 @@ const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 // Set true temporarily to run the destructive ECC fault-injection test.
 // It uses only a factory-good block outside LittleFS capacity; set false
 // again after recording the result.
-const RUN_NAND_ECC_FAULT_TEST: bool = false;
+const RUN_NAND_ECC_FAULT_TEST: bool = true;
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
