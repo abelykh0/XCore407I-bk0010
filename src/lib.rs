@@ -4,7 +4,6 @@
 pub mod bk_screen;
 pub mod camera;
 pub mod nand_fs;
-#[cfg(feature = "dhara-littlefs")]
 pub mod dhara_fs;
 pub mod libc_shims;
 mod copy_words;
