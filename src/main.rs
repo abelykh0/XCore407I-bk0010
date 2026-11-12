@@ -286,7 +286,8 @@ fn main() -> ! {
             }
         }
 
-        let save_dialog_active = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE;
+        let save_dialog_active = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
+            || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE;
         if save_dialog_active != save_dialog_was_active {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
             pacing_start_cycles = unsafe { bk_timing_cycles() };
@@ -439,7 +440,10 @@ fn main() -> ! {
         // Pace PDP execution against the 1 ms hardware timebase. This keeps
         // the emulated 3 MHz clock aligned with real time in both color and
         // monochrome modes. USB/audio/video servicing continues while ahead.
-        if !browser_open && SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_IDLE {
+        if !browser_open
+            && SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_IDLE
+            && FORMAT_STATE.load(Ordering::Acquire) == FORMAT_IDLE
+        {
             let now_ms = TICKS.load(Ordering::Relaxed);
             let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
             let now_cycles = unsafe { bk_timing_cycles() };
