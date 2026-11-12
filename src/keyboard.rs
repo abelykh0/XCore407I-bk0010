@@ -321,9 +321,20 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             continue;
         }
 
+        // Ctrl+Alt+F12 opens the explicit NAND reinitialization flow.
+        // This is intentionally available even when a valid Dhara volume
+        // already exists; the two confirmation screens guard the erase.
+        if key == 0x45 && modifiers & 0x55 == 0x55 {
+            if INIT_STATE.load(Ordering::Acquire) == 0 {
+                keyboard_queue_discard();
+                INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
+            }
+            continue;
+        }
+
         // STOP is a hardware IRQ1, not a character sent through 177662.
-        // Pause and F12 are equivalent host keys for the BK STOP signal.
-        if key == 0x48 || key == 0x45 {
+        // Pause remains available as the host key for the BK STOP signal.
+        if key == 0x48 {
             unsafe { bk_request_stop_irq(); }
             continue;
         }
