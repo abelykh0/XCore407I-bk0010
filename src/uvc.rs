@@ -32,6 +32,11 @@ pub fn set_cdc_mode(enabled: bool) {
 }
 
 #[inline]
+pub fn cdc_mode_enabled() -> bool {
+    CDC_MODE.load(Ordering::Acquire)
+}
+
+#[inline]
 pub fn active_frame_interval_100ns() -> u32 {
     if CDC_MODE.load(Ordering::Acquire) {
         10_000_000
