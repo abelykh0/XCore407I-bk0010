@@ -32,3 +32,6 @@ panic = "abort"
 
 [profile.dev]
 panic = "abort"
+
+[patch.crates-io]
+hex = { path = "vendor/hex" }
