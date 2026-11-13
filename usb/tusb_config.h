@@ -45,6 +45,32 @@
 #define CFG_TUD_VIDEO_STREAMING 0
 #define CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE 2304
 
+// TinyUSB's built-in MTP class is enabled for the F10-selected MTP
+// configuration only. Its 512-byte transfer buffer keeps the transport
+// footprint small; object contents are staged in the unused camera canvas
+// SRAM region in MTP mode.
+#define CFG_TUD_MTP 1
+#define CFG_TUD_MTP_EP_BUFSIZE 512
+#define CFG_TUD_MTP_EP_CONTROL_BUFSIZE 16
+#define CFG_TUD_MTP_DEVICEINFO_EXTENSIONS "microsoft.com: 1.0; "
+#define CFG_TUD_MTP_DEVICEINFO_SUPPORTED_OPERATIONS \
+  MTP_OP_GET_DEVICE_INFO, \
+  MTP_OP_OPEN_SESSION, \
+  MTP_OP_CLOSE_SESSION, \
+  MTP_OP_GET_STORAGE_IDS, \
+  MTP_OP_GET_STORAGE_INFO, \
+  MTP_OP_GET_NUM_OBJECTS, \
+  MTP_OP_GET_OBJECT_HANDLES, \
+  MTP_OP_GET_OBJECT_INFO, \
+  MTP_OP_GET_OBJECT, \
+  MTP_OP_GET_PARTIAL_OBJECT, \
+  MTP_OP_GET_DEVICE_PROP_DESC, \
+  MTP_OP_GET_DEVICE_PROP_VALUE
+#define CFG_TUD_MTP_DEVICEINFO_SUPPORTED_EVENTS MTP_EVENT_OBJECT_ADDED
+#define CFG_TUD_MTP_DEVICEINFO_SUPPORTED_DEVICE_PROPERTIES MTP_DEV_PROP_DEVICE_FRIENDLY_NAME
+#define CFG_TUD_MTP_DEVICEINFO_CAPTURE_FORMATS MTP_OBJ_FORMAT_UNDEFINED
+#define CFG_TUD_MTP_DEVICEINFO_PLAYBACK_FORMATS MTP_OBJ_FORMAT_UNDEFINED
+
 // TinyUSB's built-in UAC2 class driver owns audio controls, alternate
 // settings, endpoint activation, and its internal software FIFO.
 // Keep the 10-byte endpoint/FIFO capacity from the 32 kHz sizing experiment.
