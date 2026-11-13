@@ -14,7 +14,8 @@ static mut WAS_CONNECTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
 const HELP: &[u8] = b"\r\nCommands:\r\n  HELP     Show this help\r\n  STATUS   Show USB/storage status\r\n  VERSION  Show firmware target\r\n  RECV     Receive a file with ZMODEM\r\n> ";
-const STATUS: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n> ";
+const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n> ";
+const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n> ";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
 pub(crate) fn write_status(bytes: &[u8]) {
@@ -48,6 +49,7 @@ pub fn service(
         if !connected {
             LINE_LEN = 0;
             WAS_CONNECTED = false;
+            cdc_zmodem::cancel(zmodem);
             return;
         }
         WAS_CONNECTED = true;
@@ -71,7 +73,11 @@ pub fn service(
                     if command_is(line, b"HELP") {
                         write_status(HELP);
                     } else if command_is(line, b"STATUS") {
-                        write_status(STATUS);
+                        write_status(if fs.is_some() {
+                            STATUS_MOUNTED
+                        } else {
+                            STATUS_UNAVAILABLE
+                        });
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
                     } else if command_is(line, b"RECV") {
