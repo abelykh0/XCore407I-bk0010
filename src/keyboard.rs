@@ -32,7 +32,6 @@ pub(crate) const BOOT_SELECTION_NORMAL: u8 = 1;
 pub(crate) const BOOT_SELECTION_MTP: u8 = 2;
 pub(crate) const BOOT_SELECTION_TIMEOUT: u8 = 3;
 static BOOT_SELECTION: AtomicU8 = AtomicU8::new(BOOT_SELECTION_WAITING);
-static BOOT_KEYBOARD_READY: AtomicBool = AtomicBool::new(false);
 static EMULATOR_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn boot_selection() -> u8 {
@@ -130,7 +129,6 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
         KEYBOARD_LOCKS.store(0, Ordering::Release);
-        BOOT_KEYBOARD_READY.store(false, Ordering::Release);
         keyboard_queue_discard();
         unsafe {
             PREVIOUS_KEYS = [0; 6];
@@ -172,7 +170,6 @@ pub extern "C" fn tuh_hid_report_received_cb(
 
     if len >= 8 && !report.is_null() {
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
-        BOOT_KEYBOARD_READY.store(true, Ordering::Release);
 
         let selection = BOOT_SELECTION.load(Ordering::Acquire);
         if selection == BOOT_SELECTION_WAITING {
