@@ -6,6 +6,7 @@
 use crate::camera::{HEIGHT, WIDTH};
 use crate::uvc::{
     active_frame_interval_100ns, active_frame_rate_fps, FRAME_BIT_RATE, FRAME_BYTES,
+    FRAME_INTERVAL_100NS,
     ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
 };
 
