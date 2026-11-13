@@ -23,7 +23,7 @@ pub const ISO_BATCH_BYTES: usize =
 pub const USB_HS_DMA_BUFFER_LIMIT: usize = 4096;
 const _: () = assert!(ISO_BATCH_BYTES <= USB_HS_DMA_BUFFER_LIMIT);
 pub const MAX_PAYLOAD_TRANSFER_SIZE: u32 = ISO_BATCH_BYTES as u32;
-pub const FRAME_RATE_FPS: u32 = 25;
+pub const FRAME_RATE_FPS: u32 = 1;
 pub const FRAME_INTERVAL_100NS: u32 = 10_000_000 / FRAME_RATE_FPS;
 pub const FRAME_BYTES: u32 = crate::camera::FRAME_BYTES as u32;
 pub const FRAME_BIT_RATE: u32 = FRAME_BYTES * 8 * FRAME_RATE_FPS;
