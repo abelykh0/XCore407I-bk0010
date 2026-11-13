@@ -187,12 +187,6 @@ fn main() -> ! {
     }
     while prepare_next_video_batch(&mut video_renderer) {}
 
-    // Build the MTP object list with the same bounded root-directory
-    // enumerator used by F2. This is a directory listing, not a NAND scan.
-    if boot_mode == keyboard::BOOT_SELECTION_MTP {
-        xcore407i_blinker::mtp_storage::prepare_storage();
-    }
-
     // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
     // independently initialized on rhport 0.
     device.RCC.ahb1enr().modify(|_, w| {
@@ -224,6 +218,12 @@ fn main() -> ! {
         core.NVIC.set_priority(interrupt::OTG_HS, 0);
         NVIC::unpend(interrupt::OTG_HS);
         NVIC::unmask(interrupt::OTG_HS);
+    }
+
+    // Defer NAND/LittleFS directory enumeration until the USB device is
+    // initialized and its interrupt can service host enumeration requests.
+    if boot_mode == keyboard::BOOT_SELECTION_MTP {
+        xcore407i_blinker::mtp_storage::prepare_storage();
     }
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
