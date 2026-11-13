@@ -7,7 +7,7 @@
 //! ISO IN endpoint at `ENDPOINT_IN`.
 
 use crate::camera::{Nv12DemoImage, HEIGHT, WIDTH};
-use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 pub const CONTROL_INTERFACE: u8 = 0;
 pub const STREAMING_INTERFACE: u8 = 1;
@@ -23,8 +23,23 @@ pub const ISO_BATCH_BYTES: usize =
 pub const USB_HS_DMA_BUFFER_LIMIT: usize = 4096;
 const _: () = assert!(ISO_BATCH_BYTES <= USB_HS_DMA_BUFFER_LIMIT);
 pub const MAX_PAYLOAD_TRANSFER_SIZE: u32 = ISO_BATCH_BYTES as u32;
-pub const FRAME_RATE_FPS: u32 = 1;
+pub const FRAME_RATE_FPS: u32 = 25;
 pub const FRAME_INTERVAL_100NS: u32 = 10_000_000 / FRAME_RATE_FPS;
+static CDC_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_cdc_mode(enabled: bool) {
+    CDC_MODE.store(enabled, Ordering::Release);
+}
+
+#[inline]
+fn active_frame_interval_100ns() -> u32 {
+    if CDC_MODE.load(Ordering::Acquire) {
+        10_000_000
+    } else {
+        FRAME_INTERVAL_100NS
+    }
+}
+
 pub const FRAME_BYTES: u32 = crate::camera::FRAME_BYTES as u32;
 pub const FRAME_BIT_RATE: u32 = FRAME_BYTES * 8 * FRAME_RATE_FPS;
 pub const UVC_VERSION: u16 = 0x0110;
@@ -329,10 +344,11 @@ const fn make_stream_control() -> [u8; PROBE_LENGTH] {
     let mut d = [0u8; PROBE_LENGTH];
     d[2] = 1; // bFormatIndex
     d[3] = 1; // bFrameIndex
-    d[4] = FRAME_INTERVAL_100NS as u8;
-    d[5] = (FRAME_INTERVAL_100NS >> 8) as u8;
-    d[6] = (FRAME_INTERVAL_100NS >> 16) as u8;
-    d[7] = (FRAME_INTERVAL_100NS >> 24) as u8;
+    let frame_interval = active_frame_interval_100ns();
+    d[4] = frame_interval as u8;
+    d[5] = (frame_interval >> 8) as u8;
+    d[6] = (frame_interval >> 16) as u8;
+    d[7] = (frame_interval >> 24) as u8;
     d[18] = FRAME_BYTES as u8;
     d[19] = (FRAME_BYTES >> 8) as u8;
     d[20] = (FRAME_BYTES >> 16) as u8;
@@ -383,9 +399,10 @@ pub fn configuration_descriptor(out: &mut [u8]) -> Option<usize> {
     frame[9..13].copy_from_slice(&bitrate.to_le_bytes());
     frame[13..17].copy_from_slice(&bitrate.to_le_bytes());
     frame[17..21].copy_from_slice(&FRAME_BYTES.to_le_bytes());
-    frame[21..25].copy_from_slice(&FRAME_INTERVAL_100NS.to_le_bytes());
+    let frame_interval = active_frame_interval_100ns();
+    frame[21..25].copy_from_slice(&frame_interval.to_le_bytes());
     frame[25] = 1;
-    frame[26..30].copy_from_slice(&FRAME_INTERVAL_100NS.to_le_bytes());
+    frame[26..30].copy_from_slice(&frame_interval.to_le_bytes());
     w.desc(&frame)?;
     w.desc(&[6, 0x24, 0x0d, 1, 1, 4])?;
     // Alternate 1 is the high-speed isochronous IN stream endpoint.
