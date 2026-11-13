@@ -198,10 +198,9 @@ pub fn service_background() {
                 continue;
             }
 
-            // Publish names without per-file metadata lookups. On this NAND/
-            // LittleFS volume, resolving each file's metadata can add substantial
-            // latency; this first pass is intentionally name-only.
-            let size = 0;
+            // Read filesystem metadata only; do not open or read file contents
+            // during enumeration. File data is accessed only for GetObject.
+            let size = filesystem.metadata(path)?.len() as u32;
             // The count remains at one until the whole directory is read, so
             // TinyUSB can never observe a partially populated object table.
             let objects = unsafe { &mut *addr_of_mut!(OBJECTS) };
