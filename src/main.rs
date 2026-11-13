@@ -54,6 +54,7 @@ unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
+    fn xcore_mtp_service_read();
 }
 
 #[entry]
@@ -281,6 +282,7 @@ fn main() -> ! {
             // outside TinyUSB callbacks, after this iteration's USB service.
             if boot_mode == keyboard::BOOT_SELECTION_MTP {
                 xcore407i_blinker::mtp_storage::service_background();
+                unsafe { xcore_mtp_service_read(); }
             }
             while prepare_next_video_batch(&mut video_renderer) {}
             continue;
