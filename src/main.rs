@@ -249,7 +249,7 @@ fn main() -> ! {
         }
     }
 
-  let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
+    let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
     let mut browser_count = 0usize;
     let mut browser_selected = 0usize;
