@@ -69,7 +69,7 @@ static int32_t send_simple_response(tud_mtp_cb_data_t *cb_data, uint16_t code) {
 static int32_t get_device_info(tud_mtp_cb_data_t *cb_data) {
   mtp_container_info_t *io = &cb_data->io_container;
   (void) mtp_container_add_cstring(io, "XCore407I");
-  (void) mtp_container_add_cstring(io, "XCore407I BK-0010");
+  (void) mtp_container_add_cstring(io, "XCore407I BK-0010 MTP");
   (void) mtp_container_add_cstring(io, "1.0");
   (void) mtp_container_add_cstring(io, "XCORE407I");
   return send_data(cb_data);
@@ -321,8 +321,8 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
       };
       mtp_container_info_t *io = &cb_data->io_container;
       (void) mtp_container_add_raw(io, &desc, sizeof(desc));
-      (void) mtp_container_add_cstring(io, "XCore407I BK-0010");
-      (void) mtp_container_add_cstring(io, "XCore407I BK-0010");
+      (void) mtp_container_add_cstring(io, "XCore407I BK-0010 MTP");
+      (void) mtp_container_add_cstring(io, "XCore407I BK-0010 MTP");
       (void) mtp_container_add_uint8(io, 0);
       response = send_data(cb_data);
       break;
@@ -332,7 +332,7 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
           MTP_DEV_PROP_DEVICE_FRIENDLY_NAME) {
         response = MTP_RESP_PARAMETER_NOT_SUPPORTED;
       } else {
-        (void) mtp_container_add_cstring(&cb_data->io_container, "XCore407I BK-0010");
+        (void) mtp_container_add_cstring(&cb_data->io_container, "XCore407I BK-0010 MTP");
         response = send_data(cb_data);
       }
       break;
