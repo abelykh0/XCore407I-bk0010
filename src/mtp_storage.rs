@@ -38,7 +38,7 @@ fn file_at(index: u32) -> Result<Option<MtpFile>, xcore407i_blinker::nand_fs::In
     let mut current = 0u32;
     let mut found = None;
     xcore407i_blinker::nand_fs::with_mounted(|fs| {
-        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
+        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| -> littlefs2::io::Result<()> {
             for item in directory {
                 let entry = item?;
                 if !entry.file_type().is_file() {
