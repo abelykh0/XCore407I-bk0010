@@ -74,7 +74,7 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
     // UVC VideoStreaming alternate setting 0 and class-specific descriptors.
     push_bytes(&mut descriptor, &mut offset, &[
         9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
-        14, 0x24, 0x01, 1, 77, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
+        14, 0x24, 0x01, 1, 83, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
         27, 0x24, 0x04, 1, 1,
         0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
         12, 1, 0, 0, 0, 0,
