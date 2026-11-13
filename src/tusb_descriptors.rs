@@ -31,7 +31,7 @@ const fn push_u16<const N: usize>(
 }
 
 const fn push_u32<const N: usize>(
-    descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
+    descriptor: &mut [u8; N],
     offset: &mut usize,
     value: u32,
 ) {
