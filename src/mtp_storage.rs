@@ -190,3 +190,130 @@ pub extern "C" fn xcore_mtp_load_object(
         -1
     }
 }
+
+
+const MTP_UPLOAD_TEMP: &str = "/.mtp-upload.tmp";
+static mut UPLOAD_NAME: [u8; MAX_NAME] = [0; MAX_NAME];
+static mut UPLOAD_NAME_LEN: usize = 0;
+static mut UPLOAD_EXPECTED: u32 = 0;
+static mut UPLOAD_ACTIVE: bool = false;
+
+/// Start a streamed upload into a temporary LittleFS file. The existing
+/// destination is not touched until xcore_mtp_finish_upload succeeds.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_mtp_begin_upload(name: *const u8, name_len: u32, expected_size: u32) -> bool {
+    if name.is_null() || name_len == 0 || name_len as usize > MAX_NAME {
+        return false;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(name, name_len as usize) };
+    if !bytes.iter().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-' | b'.' | b' ')
+    }) || bytes == b"." || bytes == b".." || bytes.starts_with(b".mtp-") {
+        return false;
+    }
+
+    let mut total = 0u32;
+    let mut free = 0u32;
+    let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        total = fs.total_space().min(u32::MAX as usize) as u32;
+        free = fs.available_space().unwrap_or(0).min(u32::MAX as usize) as u32;
+        if expected_size > total || expected_size > free {
+            return Err(littlefs2::io::Error::IO);
+        }
+        fs.create_file_and_then(&littlefs2::path!("/.mtp-upload.tmp"), |_| Ok(()))
+    });
+    if result.is_err() {
+        return false;
+    }
+
+    let target = unsafe { core::ptr::addr_of_mut!(UPLOAD_NAME).cast::<u8>() };
+    for index in 0..name_len as usize {
+        unsafe { target.add(index).write(bytes[index]); }
+    }
+    unsafe {
+        UPLOAD_NAME_LEN = name_len as usize;
+        UPLOAD_EXPECTED = expected_size;
+        UPLOAD_ACTIVE = true;
+    }
+    let _ = (total, free);
+    true
+}
+
+/// Persist one MTP payload packet at its absolute file offset.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_mtp_write_upload_chunk(offset: u32, data: *const u8, len: u32) -> bool {
+    if data.is_null() || len == 0 {
+        return len == 0;
+    }
+    let (active, expected) = unsafe { (UPLOAD_ACTIVE, UPLOAD_EXPECTED) };
+    if !active || offset > expected || len > expected - offset {
+        return false;
+    }
+    let input = unsafe { core::slice::from_raw_parts(data, len as usize) };
+    xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        fs.open_file_with_options_and_then(
+            |options| options.write(true),
+            &littlefs2::path!("/.mtp-upload.tmp"),
+            |file| {
+                file.seek(littlefs2::io::SeekFrom::Start(offset as u64))?;
+                file.write_all(input)?;
+                file.flush()
+            },
+        )
+    }).is_ok()
+}
+
+/// Atomically publish the completed temporary file under its requested name.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_mtp_finish_upload() -> bool {
+    let (active, name_len, expected) = unsafe {
+        (UPLOAD_ACTIVE, UPLOAD_NAME_LEN, UPLOAD_EXPECTED)
+    };
+    if !active || name_len == 0 {
+        return false;
+    }
+    let name_ptr = core::ptr::addr_of!(UPLOAD_NAME).cast::<u8>();
+    let mut name = [0u8; MAX_NAME + 1];
+    for index in 0..name_len {
+        name[index] = unsafe { name_ptr.add(index).read() };
+    }
+    let name = match core::str::from_utf8(&name[..name_len]) {
+        Ok(name) => name,
+        Err(_) => return false,
+    };
+    let relative = match littlefs2::path::PathBuf::try_from(name) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    let destination = littlefs2::path!("/").join(relative.as_path());
+
+    let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        let metadata = fs.metadata(&littlefs2::path!("/.mtp-upload.tmp"))?;
+        if metadata.len() != expected as usize {
+            return Err(littlefs2::io::Error::IO);
+        }
+        fs.rename(&littlefs2::path!("/.mtp-upload.tmp"), &destination)
+    });
+    unsafe { UPLOAD_ACTIVE = false; }
+    if result.is_ok() {
+        xcore_mtp_refresh();
+        true
+    } else {
+        false
+    }
+}
+
+/// Abandon the pending upload without changing the destination file.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_mtp_abort_upload() {
+    if unsafe { UPLOAD_ACTIVE } {
+        let _ = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+            fs.remove(&littlefs2::path!("/.mtp-upload.tmp"))
+        });
+    }
+    unsafe {
+        UPLOAD_ACTIVE = false;
+        UPLOAD_NAME_LEN = 0;
+        UPLOAD_EXPECTED = 0;
+    }
+}
