@@ -25,6 +25,32 @@ static mut PREVIOUS_MODIFIERS: u8 = 0;
 static KEYBOARD_LOCKS: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
+
+// Startup mode is latched from the first valid boot-keyboard report.
+pub(crate) const BOOT_SELECTION_WAITING: u8 = 0;
+pub(crate) const BOOT_SELECTION_NORMAL: u8 = 1;
+pub(crate) const BOOT_SELECTION_MTP: u8 = 2;
+pub(crate) const BOOT_SELECTION_TIMEOUT: u8 = 3;
+static BOOT_SELECTION: AtomicU8 = AtomicU8::new(BOOT_SELECTION_WAITING);
+static BOOT_KEYBOARD_READY: AtomicBool = AtomicBool::new(false);
+static EMULATOR_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn boot_selection() -> u8 {
+    BOOT_SELECTION.load(Ordering::Acquire)
+}
+
+pub(crate) fn set_boot_timeout() {
+    let _ = BOOT_SELECTION.compare_exchange(
+        BOOT_SELECTION_WAITING,
+        BOOT_SELECTION_TIMEOUT,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
+pub(crate) fn enable_emulator_input() {
+    EMULATOR_INPUT_ENABLED.store(true, Ordering::Release);
+}
 static mut KEYBOARD_LED_REPORT: u8 = 0;
 const KEYBOARD_QUEUE_CAPACITY: u16 = 128;
 const KEYBOARD_QUEUE_MASK: u16 = KEYBOARD_QUEUE_CAPACITY - 1;
@@ -104,6 +130,7 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
         KEYBOARD_LOCKS.store(0, Ordering::Release);
+        BOOT_KEYBOARD_READY.store(false, Ordering::Release);
         keyboard_queue_discard();
         unsafe {
             PREVIOUS_KEYS = [0; 6];
@@ -145,7 +172,40 @@ pub extern "C" fn tuh_hid_report_received_cb(
 
     if len >= 8 && !report.is_null() {
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
-        process_boot_keyboard_report(dev_addr, instance, bytes);
+        BOOT_KEYBOARD_READY.store(true, Ordering::Release);
+
+        let selection = BOOT_SELECTION.load(Ordering::Acquire);
+        if selection == BOOT_SELECTION_WAITING {
+            let selected = if bytes[2..8].contains(&0x43) {
+                BOOT_SELECTION_MTP
+            } else {
+                BOOT_SELECTION_NORMAL
+            };
+            if BOOT_SELECTION.compare_exchange(
+                BOOT_SELECTION_WAITING,
+                selected,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                // Do not forward the boot-selection report. In particular, F10
+                // must not become an emulator key when normal mode is selected.
+                unsafe {
+                    PREVIOUS_KEYS.copy_from_slice(&bytes[2..8]);
+                    PREVIOUS_MODIFIERS = bytes[0];
+                }
+            }
+        } else if selection == BOOT_SELECTION_NORMAL
+            && EMULATOR_INPUT_ENABLED.load(Ordering::Acquire)
+        {
+            process_boot_keyboard_report(dev_addr, instance, bytes);
+        } else {
+            // Ignore all keyboard input in MTP/error startup modes and while
+            // the emulator is still being initialized.
+            unsafe {
+                PREVIOUS_KEYS.copy_from_slice(&bytes[2..8]);
+                PREVIOUS_MODIFIERS = bytes[0];
+            }
+        }
     }
     // Re-arm only the still-active keyboard. A disconnect/reconnect can
     // reuse device addresses, so stale callbacks must not target a new HID.
