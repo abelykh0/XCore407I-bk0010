@@ -151,6 +151,7 @@ pub fn service_background() {
     // Publish only the synthetic object while rebuilding the real-file table.
     // The object count is updated after enumeration has completed.
     OBJECT_COUNT.store(1, Ordering::Release);
+    let mut real_count = 0usize;
     let result = crate::nand_fs::enumerate_root_files(
         MAX_REAL_FILES,
         true,
@@ -160,34 +161,27 @@ pub fn service_background() {
                 return;
             }
             let name = &path[1..path.len() - 1];
-            if name.len() > MAX_NAME {
+            if name.len() > MAX_NAME || real_count >= MAX_REAL_FILES {
                 return;
             }
 
-            // The enumerator is capped at MAX_REAL_FILES, and this callback
-            // runs synchronously before the completed count is published.
             let objects = unsafe { &mut *addr_of_mut!(OBJECTS) };
-            let index = OBJECT_COUNT.load(Ordering::Relaxed) as usize - 1;
-            if index >= MAX_REAL_FILES {
-                return;
-            }
-            let object = &mut objects[index];
+            let object = &mut objects[real_count];
             object.name[..name.len()].copy_from_slice(name);
             object.name_len = name.len() as u8;
             object.size = size.unwrap_or(0);
-            OBJECT_COUNT.store((index + 2) as u32, Ordering::Relaxed);
+            real_count += 1;
         },
     );
 
-    // On an enumeration error, leave the synthetic test object available.
-    if result.is_err() {
-        OBJECT_COUNT.store(1, Ordering::Release);
+    // Publish the completed table in one step. On error, keep only the
+    // synthetic test object available.
+    let object_count = if result.is_ok() {
+        real_count as u32 + 1
     } else {
-        // The callback count includes only real files; add the synthetic
-        // object as the final handle.
-        let real_count = OBJECT_COUNT.load(Ordering::Relaxed);
-        OBJECT_COUNT.store(real_count, Ordering::Release);
-    }
+        1
+    };
+    OBJECT_COUNT.store(object_count, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
