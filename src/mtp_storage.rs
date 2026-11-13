@@ -78,7 +78,7 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
     let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
         total = fs.total_space().min(u32::MAX as usize) as u32;
         free = fs.available_space().unwrap_or(0).min(u32::MAX as usize) as u32;
-        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
+        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| -> littlefs2::io::Result<()> {
             for item in directory {
                 let entry = item?;
                 if !entry.file_type().is_file() {
