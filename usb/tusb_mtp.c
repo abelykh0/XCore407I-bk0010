@@ -238,6 +238,7 @@ static int32_t start_object_data(tud_mtp_cb_data_t *cb_data, bool partial) {
   object_read_offset = offset;
   object_read_count = first;
   object_read_failed = false;
+  __asm volatile ("" ::: "memory");
   object_read_pending = true;
   return 0;
 }
@@ -308,6 +309,7 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
           object_read_offset = active_object_offset + sent;
           object_read_count = count;
           object_read_failed = false;
+          __asm volatile ("" ::: "memory");
           object_read_pending = true;
           response = 0;
         }
@@ -403,6 +405,7 @@ void xcore_mtp_service_read(void) {
   if (!object_read_pending) {
     return;
   }
+  __asm volatile ("" ::: "memory");
 
   if (!object_read_failed) {
     const int32_t read = xcore_mtp_read_object_chunk(
@@ -411,6 +414,12 @@ void xcore_mtp_service_read(void) {
     if (read < 0 || (uint32_t)read != object_read_count) {
       object_read_failed = true;
     }
+  }
+
+  // A Cancel or Device Reset may have arrived while LittleFS was being read.
+  __asm volatile ("" ::: "memory");
+  if (!object_read_pending) {
+    return;
   }
 
   if (object_read_failed) {
