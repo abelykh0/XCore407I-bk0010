@@ -136,21 +136,70 @@ pub extern "C" fn xcore_mtp_object_info(
     true
 }
 
-/// The synthetic test object remains the only readable object in this step.
+/// Read one bounded chunk from either a real root file or the synthetic test object.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_read_object_chunk(
     handle: u32, offset: u32, destination: *mut u8, capacity: u32,
 ) -> i32 {
-    let synthetic = OBJECT_COUNT.load(Ordering::Acquire);
-    if handle != synthetic || destination.is_null() || offset as usize > FILE_CONTENT.len() {
+    let object_count = OBJECT_COUNT.load(Ordering::Acquire);
+    if handle == object_count {
+        if offset as usize > FILE_CONTENT.len() {
+            return -1;
+        }
+        let start = offset as usize;
+        let count = (FILE_CONTENT.len() - start).min(capacity as usize);
+        if count != 0 {
+            if destination.is_null() {
+                return -1;
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(FILE_CONTENT.as_ptr().add(start), destination, count);
+            }
+        }
+        return count as i32;
+    }
+
+    if handle == 0 || handle >= object_count || handle as usize > MAX_REAL_FILES {
         return -1;
     }
-    let start = offset as usize;
-    let count = (FILE_CONTENT.len() - start).min(capacity as usize);
-    if count != 0 {
-        unsafe { core::ptr::copy_nonoverlapping(FILE_CONTENT.as_ptr().add(start), destination, count); }
+    let objects = unsafe { &*core::ptr::addr_of!(OBJECTS) };
+    let object = &objects[handle as usize - 1];
+    let size = object.size as usize;
+    if offset as usize > size {
+        return -1;
     }
-    count as i32
+    let count = (size - offset as usize).min(capacity as usize);
+    if count == 0 {
+        return 0;
+    }
+    if destination.is_null() {
+        return -1;
+    }
+
+    let name = match core::str::from_utf8(&object.name[..object.name_len as usize]) {
+        Ok(name) => name,
+        Err(_) => return -1,
+    };
+    let relative_path = match littlefs2::path::PathBuf::try_from(name) {
+        Ok(path) => path,
+        Err(_) => return -1,
+    };
+    let full_path = littlefs2::path!("/").join(relative_path.as_path());
+    let output = unsafe { core::slice::from_raw_parts_mut(destination, count) };
+
+    let mut storage = match DharaStorage::new_mtp() {
+        Ok(storage) => storage,
+        Err(_) => return -1,
+    };
+    match Filesystem::<DharaStorage>::mount_and_then(&mut storage, |fs| {
+        fs.open_file_and_then(&full_path, |file| {
+            littlefs2::io::Seek::seek(file, littlefs2::io::SeekFrom::Start(offset))?;
+            littlefs2::io::Read::read(file, output)
+        })
+    }) {
+        Ok(read) if read == count => read as i32,
+        _ => -1,
+    }
 }
 
 #[unsafe(no_mangle)]
