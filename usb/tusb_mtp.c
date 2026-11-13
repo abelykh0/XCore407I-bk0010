@@ -433,9 +433,9 @@ bool xcore_mtp_service_read_prepare(void) {
   return true;
 }
 
-void xcore_mtp_service_read_submit(void) {
+bool xcore_mtp_service_read_submit(void) {
   if (!object_read_pending || !object_read_ready) {
-    return;
+    return false;
   }
   __asm volatile ("" ::: "memory");
 
@@ -450,10 +450,16 @@ void xcore_mtp_service_read_submit(void) {
 
   // A refused submission is retried next loop. Keep the already-read chunk.
   if (submitted) {
+    // Return true only after an intermediate chunk of the synthetic file.
+    // The main loop then waits 2.5 seconds before preparing the next chunk.
+    const bool delay_next = object_read_handle == xcore_mtp_object_count() &&
+        object_read_offset + object_read_count < active_object_offset + active_object_length;
     object_read_pending = false;
     object_read_failed = false;
     object_read_ready = false;
+    return delay_next;
   }
+  return false;
 }
 
 void xcore_tud_mtp_reset_session(void) {
