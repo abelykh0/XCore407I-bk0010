@@ -195,6 +195,10 @@ pub fn set_mtp_mode(enabled: bool) {
     crate::uvc::set_mtp_mode(enabled);
 }
 
+pub fn is_mtp_mode() -> bool {
+    MTP_MODE.load(Ordering::Acquire)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_cb() -> *const u8 {
     DEVICE_DESCRIPTOR.as_ptr()
