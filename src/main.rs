@@ -69,16 +69,8 @@ fn main() -> ! {
     #[cfg(feature = "cpu-cycle-diag")]
     enable_cycle_counter(&mut core);
 
-    // BK emulator initialization
-    unsafe {
-         bk_platform_init(
-             xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
-             xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
-             xcore407i_blinker::rom::BASIC_ROM.len() as u32,
-         );
-    }
-
-    // initialize_demo_canvas();
+    // The BK emulator is initialized only after the startup keyboard report
+    // selects normal mode. MTP and keyboard-error modes never touch BK state.
     clear_demo_canvas(0x10);
 
     configure_board_pins(
@@ -119,6 +111,71 @@ fn main() -> ! {
         );
     }
 
+    // TIM3 schedules the TinyUSB FS host task at 1 kHz. Start it before
+    // selecting the boot mode so a keyboard can enumerate and report F10.
+    configure_usb_host_task_timer(
+        &device.RCC,
+        &device.TIM3,
+        &mut core.NVIC,
+    );
+
+    const KEYBOARD_DETECT_TIMEOUT_MS: u32 = 30_000;
+    let keyboard_wait_started = TICKS.load(Ordering::Relaxed);
+    while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
+        if !USB_FS_READY.load(Ordering::Acquire) {
+            let now = TICKS.load(Ordering::Relaxed);
+            let retry_at = USB_FS_RETRY_AT.load(Ordering::Acquire);
+            if now.wrapping_sub(retry_at) as i32 >= 0 {
+                if !try_init_usb_fs_host(&device.RCC, &mut core.NVIC) {
+                    USB_FS_RETRY_AT.store(
+                        now.wrapping_add(USB_FS_RETRY_INTERVAL_MS),
+                        Ordering::Release,
+                    );
+                }
+            }
+        }
+
+        if USB_FS_READY.load(Ordering::Acquire)
+            && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+        {
+            unsafe { tusb::tuh_task_ext(0, false); }
+        } else {
+            USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        }
+
+        let now = TICKS.load(Ordering::Relaxed);
+        if now.wrapping_sub(keyboard_wait_started) >= KEYBOARD_DETECT_TIMEOUT_MS {
+            keyboard::set_boot_timeout();
+            break;
+        }
+        cortex_m::asm::wfi();
+    }
+
+    let boot_mode = keyboard::boot_selection();
+    let emulator_enabled = boot_mode == keyboard::BOOT_SELECTION_NORMAL;
+    match boot_mode {
+        keyboard::BOOT_SELECTION_NORMAL => {
+            unsafe {
+                bk_platform_init(
+                    xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
+                    xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
+                    xcore407i_blinker::rom::BASIC_ROM.len() as u32,
+                );
+            }
+            keyboard::enable_emulator_input();
+            clear_demo_canvas(0x10);
+        }
+        keyboard::BOOT_SELECTION_MTP => {
+            clear_demo_canvas(0x10);
+            show_usb_status(b"PC CONNECT");
+        }
+        keyboard::BOOT_SELECTION_TIMEOUT => {
+            clear_demo_canvas(0x10);
+            show_usb_status(b"KEYBOARD NOT DETECTED");
+        }
+        _ => panic!("invalid startup mode"),
+    }
+
     // The main loop owns the renderer; TinyUSB UVC completion callbacks
     // consume prepared batches from the OTG_HS device interrupt.
     let mut video_renderer = Nv12DemoImage::try_new()
@@ -153,14 +210,6 @@ fn main() -> ! {
         NVIC::unmask(interrupt::OTG_HS);
     }
 
-    // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
-    // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
-    configure_usb_host_task_timer(
-        &device.RCC,
-        &device.TIM3,
-        &mut core.NVIC,
-    );
-
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
     let mut browser_count = 0usize;
@@ -168,14 +217,18 @@ fn main() -> ! {
     let mut browser_open = false;
     // Real-time emulator pacing uses the PDP cycle counter.
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
-    let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
+    let mut pacing_start_cycles = if emulator_enabled {
+        unsafe { bk_timing_cycles() }
+    } else {
+        0
+    };
     let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
     let mut init_screen_state = INIT_IDLE;
     #[cfg(feature = "cpu-cycle-diag")]
     let mut diagnostic_last_dwt = read_dwt_cycle_count();
     #[cfg(feature = "cpu-cycle-diag")]
-    let mut diagnostic_last_pdp = pacing_start_cycles;
+    let mut diagnostic_last_pdp = if emulator_enabled { pacing_start_cycles } else { 0 };
 
     loop {
         // Retry OTG_FS initialization outside interrupt context. Keep the
@@ -198,7 +251,9 @@ fn main() -> ! {
         unsafe {
             let _ = tusb::tud_task_ext(0, false);
             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
+            if emulator_enabled {
+                xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
+            }
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
@@ -209,6 +264,13 @@ fn main() -> ! {
             unsafe { tusb::tuh_task_ext(0, false); }
         } else {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        }
+
+        // MTP and startup-error modes keep USB/video alive but never run
+        // emulator, keyboard-to-BK, save-dialog, or file-browser work.
+        if !emulator_enabled {
+            while prepare_next_video_batch(&mut video_renderer) {}
+            continue;
         }
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
