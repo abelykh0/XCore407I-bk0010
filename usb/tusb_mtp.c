@@ -409,7 +409,7 @@ static bool parse_upload_object_info(void) {
   memcpy(&storage_id, upload_info + 0, sizeof(storage_id));
   memcpy(&object_format, upload_info + 4, sizeof(object_format));
   memcpy(&object_size, upload_info + 8, sizeof(object_size));
-  memcpy(&parent, upload_info + 38, sizeof(parent));
+  memcpy(&parent, upload_info + 42, sizeof(parent));
   if (storage_id != MTP_STORAGE_ID || parent != 0 || object_format == MTP_OBJ_FORMAT_ASSOCIATION) {
     return false;
   }
