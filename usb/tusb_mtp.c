@@ -628,6 +628,9 @@ int32_t tud_mtp_data_complete_cb(tud_mtp_cb_data_t *cb_data) {
 
 int32_t tud_mtp_response_complete_cb(tud_mtp_cb_data_t *cb_data) {
   (void) cb_data;
+  if (active_object_handle != 0) {
+    xcore_mtp_close_file();
+  }
   active_object_handle = 0;
   active_object_offset = 0;
   active_object_length = 0;
