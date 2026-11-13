@@ -55,6 +55,15 @@ static bool upload_data_active;
 static uint32_t active_handles_count;
 static uint32_t send_object_info_params[3];
 
+// GET_OBJECT reads are requested by the USB callback but executed by the main
+// loop. The saved container points into TinyUSB's persistent MTP endpoint buffer.
+static volatile bool object_read_pending;
+static volatile bool object_read_failed;
+static mtp_container_info_t object_read_io;
+static uint32_t object_read_handle;
+static uint32_t object_read_offset;
+static uint32_t object_read_count;
+
 static int32_t send_data(tud_mtp_cb_data_t *cb_data) {
   return tud_mtp_data_send(&cb_data->io_container) ? 0 : MTP_RESP_DEVICE_BUSY;
 }
@@ -220,11 +229,17 @@ static int32_t start_object_data(tud_mtp_cb_data_t *cb_data, bool partial) {
   mtp_container_info_t *io = &cb_data->io_container;
   io->header->len = sizeof(mtp_container_header_t) + length;
   const uint32_t first = tu_min32(length, io->payload_bytes);
-  if (first != 0) {
-    const int32_t read = xcore_mtp_read_object_chunk(handle, offset, io->payload, first);
-    if (read < 0 || (uint32_t)read != first) return MTP_RESP_GENERAL_ERROR;
+  if (first == 0) {
+    return tud_mtp_data_send(io) ? 0 : MTP_RESP_DEVICE_BUSY;
   }
-  return tud_mtp_data_send(io) ? 0 : MTP_RESP_DEVICE_BUSY;
+
+  object_read_io = *io;
+  object_read_handle = handle;
+  object_read_offset = offset;
+  object_read_count = first;
+  object_read_failed = false;
+  object_read_pending = true;
+  return 0;
 }
 
 static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
@@ -288,11 +303,13 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
         } else {
           const uint32_t count = tu_min32(
               active_object_length - sent, cb_data->io_container.payload_bytes);
-          const int32_t read = xcore_mtp_read_object_chunk(
-              active_object_handle, active_object_offset + sent,
-              cb_data->io_container.payload, count);
-          response = (read >= 0 && (uint32_t)read == count &&
-                      tud_mtp_data_send(&cb_data->io_container)) ? 0 : -1;
+          object_read_io = cb_data->io_container;
+          object_read_handle = active_object_handle;
+          object_read_offset = active_object_offset + sent;
+          object_read_count = count;
+          object_read_failed = false;
+          object_read_pending = true;
+          response = 0;
         }
       }
       break;
@@ -380,6 +397,39 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
   return response;
 }
 
+// Called from the MTP-mode main loop. NAND/LittleFS access therefore never
+// runs in the TinyUSB endpoint callback or OTG_HS interrupt.
+void xcore_mtp_service_read(void) {
+  if (!object_read_pending) {
+    return;
+  }
+
+  if (!object_read_failed) {
+    const int32_t read = xcore_mtp_read_object_chunk(
+        object_read_handle, object_read_offset,
+        object_read_io.payload, object_read_count);
+    if (read < 0 || (uint32_t)read != object_read_count) {
+      object_read_failed = true;
+    }
+  }
+
+  if (object_read_failed) {
+    object_read_io.header->len = sizeof(mtp_container_header_t);
+    object_read_io.header->code = MTP_RESP_GENERAL_ERROR;
+    if (tud_mtp_response_send(&object_read_io)) {
+      object_read_pending = false;
+      object_read_failed = false;
+    }
+    return;
+  }
+
+  // If the endpoint is temporarily unavailable, retain the pending request
+  // and retry on the next main-loop iteration.
+  if (tud_mtp_data_send(&object_read_io)) {
+    object_read_pending = false;
+  }
+}
+
 void xcore_tud_mtp_reset_session(void) {
   xcore_mtp_abort_upload();
   upload_info_len = 0;
@@ -391,6 +441,8 @@ void xcore_tud_mtp_reset_session(void) {
   active_object_offset = 0;
   active_object_length = 0;
   active_partial_object = false;
+  object_read_pending = false;
+  object_read_failed = false;
 }
 
 bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
@@ -400,6 +452,8 @@ bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
   upload_data_active = false;
   active_object_handle = 0;
   active_object_length = 0;
+  object_read_pending = false;
+  object_read_failed = false;
   return true;
 }
 
@@ -411,6 +465,8 @@ bool tud_mtp_request_device_reset_cb(tud_mtp_request_cb_data_t *cb_data) {
   session_open = false;
   active_object_handle = 0;
   active_object_length = 0;
+  object_read_pending = false;
+  object_read_failed = false;
   return true;
 }
 
