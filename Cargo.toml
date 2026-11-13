@@ -21,6 +21,7 @@ stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm
 panic-halt = "1.0.0"
 libm = "0.2"
 littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"] }
+zmodem2 = { version = "0.7.3", default-features = false }
 
 [profile.release]
 codegen-units = 1
