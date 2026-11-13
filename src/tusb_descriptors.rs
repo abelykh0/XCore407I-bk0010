@@ -258,22 +258,25 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
     let descriptor = core::ptr::addr_of_mut!(CDC_CONFIGURATION_DESCRIPTOR).cast::<u8>();
     unsafe {
         for (offset, value) in [
-            (121usize, bitrate as u8),
-            (122, (bitrate >> 8) as u8),
-            (123, (bitrate >> 16) as u8),
-            (124, (bitrate >> 24) as u8),
-            (125, bitrate as u8),
-            (126, (bitrate >> 8) as u8),
-            (127, (bitrate >> 16) as u8),
-            (128, (bitrate >> 24) as u8),
-            (133, interval as u8),
-            (134, (interval >> 8) as u8),
-            (135, (interval >> 16) as u8),
-            (136, (interval >> 24) as u8),
-            (138, interval as u8),
-            (139, (interval >> 8) as u8),
-            (140, (interval >> 16) as u8),
-            (141, (interval >> 24) as u8),
+            // Uncompressed frame descriptor starts at byte 106:
+            // dwMinBitRate=115, dwMaxBitRate=119,
+            // dwDefaultFrameInterval=127, dwFrameInterval[0]=132.
+            (115usize, bitrate as u8),
+            (116, (bitrate >> 8) as u8),
+            (117, (bitrate >> 16) as u8),
+            (118, (bitrate >> 24) as u8),
+            (119, bitrate as u8),
+            (120, (bitrate >> 8) as u8),
+            (121, (bitrate >> 16) as u8),
+            (122, (bitrate >> 24) as u8),
+            (127, interval as u8),
+            (128, (interval >> 8) as u8),
+            (129, (interval >> 16) as u8),
+            (130, (interval >> 24) as u8),
+            (132, interval as u8),
+            (133, (interval >> 8) as u8),
+            (134, (interval >> 16) as u8),
+            (135, (interval >> 24) as u8),
         ] {
             descriptor.add(offset).write(value);
         }
