@@ -81,6 +81,12 @@ static int32_t open_close_session(tud_mtp_cb_data_t *cb_data) {
     if (session_open) {
       return MTP_RESP_SESSION_ALREADY_OPEN;
     }
+    // Initialize the existing LittleFS volume only after the host has
+    // discovered the USB device and explicitly opened an MTP session.
+    // This read-only refresh also caches the first root file for later reads.
+    if (!xcore_mtp_refresh()) {
+      return MTP_RESP_GENERAL_ERROR;
+    }
     session_open = true;
     return MTP_RESP_OK;
   }
