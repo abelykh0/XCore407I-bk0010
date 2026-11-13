@@ -169,8 +169,6 @@ fn main() -> ! {
         keyboard::BOOT_SELECTION_MTP => {
             // The canvas SRAM is reserved as the MTP transfer workspace in
             // this mode; the UVC renderer generates its status frame directly.
-            // TEMPORARY ENUMERATION ISOLATION: skip the pre-USB LittleFS scan.
-            // Restore MTP storage refresh after the MTP-mode USB startup issue is isolated.
         }
         keyboard::BOOT_SELECTION_TIMEOUT => {
             clear_demo_canvas(0x10);
@@ -210,6 +208,12 @@ fn main() -> ! {
     };
     if !unsafe { tusb::tusb_rhport_init(1, &hs_device_init) } {
         panic!("TinyUSB OTG_HS device initialization failed");
+    }
+
+    // Initialize the MTP file listing only after the device controller has
+    // been initialized, so LittleFS scanning cannot interfere with USB setup.
+    if boot_mode == keyboard::BOOT_SELECTION_MTP {
+        let _ = xcore407i_blinker::mtp_storage::xcore_mtp_refresh();
     }
 
     // Service the DWC2 device controller from its real OTG_HS interrupt.
