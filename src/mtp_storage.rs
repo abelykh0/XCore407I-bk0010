@@ -5,7 +5,7 @@ use core::mem::MaybeUninit;
 use core::ptr::{addr_of, addr_of_mut};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use littlefs2::fs::{File, FileAllocation, Filesystem};
-use littlefs2::io::{Read, Seek, SeekFrom};
+use littlefs2::io::SeekFrom;
 
 use crate::dhara_fs::DharaStorage;
 
@@ -294,7 +294,7 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
             Ok(file) => file,
             Err(_) => return -1,
         };
-        if file.seek(SeekFrom::Start(offset as u64)).is_err() {
+        if file.seek(SeekFrom::Start(offset)).is_err() {
             let _ = unsafe { file.close() };
             return -1;
         }
