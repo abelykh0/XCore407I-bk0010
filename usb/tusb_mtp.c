@@ -494,6 +494,7 @@ bool tud_mtp_request_device_reset_cb(tud_mtp_request_cb_data_t *cb_data) {
   active_object_length = 0;
   object_read_pending = false;
   object_read_failed = false;
+  object_read_ready = false;
   return true;
 }
 
