@@ -333,6 +333,57 @@ pub fn with_mounted_detailed<R>(
     mounted.map_err(|_| FsAccessError::Operation)
 }
 
+/// Enumerate regular files in the LittleFS root using one shared path/filtering
+/// implementation for the F2 browser and MTP. The visitor receives the
+/// NUL-terminated full path and, when requested, its file size.
+pub fn enumerate_root_files(
+    max_files: usize,
+    include_sizes: bool,
+    mut include: impl FnMut(&[u8]) -> bool,
+    mut visit: impl FnMut(&[u8], Option<u32>),
+) -> Result<usize, FsAccessError> {
+    with_mounted_detailed(|fs| {
+        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
+            let mut count = 0usize;
+            for item in directory {
+                let entry = item?;
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+
+                let path = entry.path();
+                let path_bytes = path.as_str_ref_with_trailing_nul().as_bytes();
+                if path_bytes.len() < 3
+                    || path_bytes[0] != b'/'
+                    || path_bytes.last() != Some(&0)
+                    || !path_bytes[..path_bytes.len() - 1]
+                        .iter()
+                        .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+                {
+                    continue;
+                }
+
+                let name = &path_bytes[1..path_bytes.len() - 1];
+                if !include(name) {
+                    continue;
+                }
+
+                let size = if include_sizes {
+                    Some(fs.metadata(path)?.len() as u32)
+                } else {
+                    None
+                };
+                visit(path_bytes, size);
+                count += 1;
+                if count >= max_files {
+                    break;
+                }
+            }
+            Ok(count)
+        })
+    })
+}
+
 /// Compatibility wrapper for existing callers that only need success/failure.
 pub fn with_mounted<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
