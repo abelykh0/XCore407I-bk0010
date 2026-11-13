@@ -2,11 +2,7 @@
 //! loop, never from a TinyUSB request callback.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use littlefs2::{
-    fs::{Allocation, File, FileAllocation, Filesystem},
-    io::Result as LfsResult,
-};
-use core::mem::MaybeUninit;
+use littlefs2::{fs::Filesystem, io::Result as LfsResult};
 
 use crate::dhara_fs::DharaStorage;
 
@@ -32,21 +28,6 @@ const EMPTY_OBJECT: Object = Object {
 };
 
 static REFRESH_PENDING: AtomicBool = AtomicBool::new(false);
-static CLOSE_FILE_PENDING: AtomicBool = AtomicBool::new(false);
-static FILESYSTEM_READY: AtomicBool = AtomicBool::new(false);
-static FILE_ALLOCATION_READY: AtomicBool = AtomicBool::new(false);
-static FILE_OPEN: AtomicBool = AtomicBool::new(false);
-static ACTIVE_FILE_HANDLE: AtomicU32 = AtomicU32::new(0);
-static NEXT_FILE_OFFSET: AtomicU32 = AtomicU32::new(0);
-
-// Keep the storage driver, LittleFS allocation, mounted filesystem, and
-// active file in separate static objects. The File borrows the mounted
-// Filesystem, but neither object owns the other, so this is not self-referential.
-static mut MTP_STORAGE: MaybeUninit<DharaStorage> = MaybeUninit::uninit();
-static mut MTP_ALLOCATION: MaybeUninit<Allocation<DharaStorage>> = MaybeUninit::uninit();
-static mut MTP_FILESYSTEM: MaybeUninit<Filesystem<'static, DharaStorage>> = MaybeUninit::uninit();
-static mut MTP_FILE_ALLOCATION: MaybeUninit<FileAllocation<DharaStorage>> = MaybeUninit::uninit();
-static mut MTP_FILE: MaybeUninit<File<'static, 'static, DharaStorage>> = MaybeUninit::uninit();
 static OBJECT_COUNT: AtomicU32 = AtomicU32::new(1);
 static mut OBJECTS: [Object; MAX_REAL_FILES] = [EMPTY_OBJECT; MAX_REAL_FILES];
 
@@ -59,167 +40,59 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
     true
 }
 
-/// Return the persistent mounted filesystem. Its backing storage and
-/// allocation are separate statics and remain alive for the entire MTP boot.
-unsafe fn mtp_filesystem() -> &'static Filesystem<'static, DharaStorage> {
-    unsafe { (&*core::ptr::addr_of!(MTP_FILESYSTEM)).assume_init_ref() }
-}
-
-fn ensure_mtp_filesystem() -> bool {
-    if FILESYSTEM_READY.load(Ordering::Acquire) {
-        return true;
-    }
-
-    unsafe {
-        let storage = match DharaStorage::new_mtp() {
-            Ok(storage) => (&mut *core::ptr::addr_of_mut!(MTP_STORAGE)).write(storage),
-            Err(_) => return false,
-        };
-        let allocation = (&mut *core::ptr::addr_of_mut!(MTP_ALLOCATION))
-            .write(Filesystem::<DharaStorage>::allocate());
-        let filesystem = match Filesystem::mount(allocation, storage) {
-            Ok(filesystem) => filesystem,
-            Err(_) => return false,
-        };
-        (&mut *core::ptr::addr_of_mut!(MTP_FILESYSTEM)).write(filesystem);
-    }
-
-    FILESYSTEM_READY.store(true, Ordering::Release);
-    true
-}
-
-fn close_active_file() {
-    if !FILE_OPEN.swap(false, Ordering::AcqRel) {
-        return;
-    }
-
-    // File::close consumes the handle and removes it from LittleFS's internal
-    // open-file list. The file allocation itself remains available for reuse.
-    unsafe {
-        let file = (&*core::ptr::addr_of!(MTP_FILE)).assume_init_read();
-        let _ = file.close();
-    }
-    ACTIVE_FILE_HANDLE.store(0, Ordering::Release);
-    NEXT_FILE_OFFSET.store(0, Ordering::Release);
-}
-
-fn open_or_seek_active_file(handle: u32, offset: u32) -> bool {
-    if FILE_OPEN.load(Ordering::Acquire)
-        && ACTIVE_FILE_HANDLE.load(Ordering::Relaxed) != handle
-    {
-        close_active_file();
-    }
-
-    if !FILE_OPEN.load(Ordering::Acquire) {
-        let count = OBJECT_COUNT.load(Ordering::Acquire) as usize;
-        if handle == 0 || handle as usize > count.saturating_sub(1) {
-            return false;
-        }
-        let objects = unsafe { &*core::ptr::addr_of!(OBJECTS) };
-        let object = &objects[handle as usize - 1];
-        let name = match core::str::from_utf8(&object.name[..object.name_len as usize]) {
-            Ok(name) => name,
-            Err(_) => return false,
-        };
-        let relative_path = match littlefs2::path::PathBuf::try_from(name) {
-            Ok(path) => path,
-            Err(_) => return false,
-        };
-        let full_path = littlefs2::path!("/").join(relative_path.as_path());
-
-        if !ensure_mtp_filesystem() {
-            return false;
-        }
-
-        unsafe {
-            if !FILE_ALLOCATION_READY.load(Ordering::Acquire) {
-                (&mut *core::ptr::addr_of_mut!(MTP_FILE_ALLOCATION))
-                    .write(FileAllocation::<DharaStorage>::new());
-                FILE_ALLOCATION_READY.store(true, Ordering::Release);
-            }
-            let filesystem = mtp_filesystem();
-            let file_allocation =
-                (&mut *core::ptr::addr_of_mut!(MTP_FILE_ALLOCATION)).assume_init_mut();
-            let file = match File::open(filesystem, file_allocation, full_path.as_path()) {
-                Ok(file) => file,
-                Err(_) => return false,
-            };
-            (&mut *core::ptr::addr_of_mut!(MTP_FILE)).write(file);
-        }
-        ACTIVE_FILE_HANDLE.store(handle, Ordering::Release);
-        NEXT_FILE_OFFSET.store(0, Ordering::Release);
-        FILE_OPEN.store(true, Ordering::Release);
-    }
-
-    if NEXT_FILE_OFFSET.load(Ordering::Acquire) != offset {
-        let file = unsafe { (&*core::ptr::addr_of!(MTP_FILE)).assume_init_ref() };
-        if littlefs2::io::Seek::seek(file, littlefs2::io::SeekFrom::Start(offset)).is_err() {
-            close_active_file();
-            return false;
-        }
-        NEXT_FILE_OFFSET.store(offset, Ordering::Release);
-    }
-    true
-}
-
-/// Run from the MTP-mode main loop, after TinyUSB has been serviced.
-/// Mount once and retain the filesystem; process file-close requests here,
-/// never in a USB callback or interrupt.
+/// Run once from the MTP-mode main loop, after TinyUSB has been serviced.
+/// Only regular files in the root directory are exposed.
 pub fn service_background() {
-    if CLOSE_FILE_PENDING.swap(false, Ordering::AcqRel) {
-        close_active_file();
-    }
-
     if !REFRESH_PENDING.swap(false, Ordering::AcqRel) {
         return;
     }
-    if !ensure_mtp_filesystem() {
-        return;
-    }
 
-    let result = unsafe {
-        mtp_filesystem().read_dir_and_then(&littlefs2::path!("/"), |directory| {
-            let mut count = 0usize;
-            let objects = unsafe { &mut *core::ptr::addr_of_mut!(OBJECTS) };
-            for item in directory {
-                let entry = item?;
-                if !entry.file_type().is_file() || count == MAX_REAL_FILES {
-                    continue;
+    let result = Filesystem::<DharaStorage>::mount_and_then(
+        &mut match DharaStorage::new_mtp() {
+            Ok(storage) => storage,
+            Err(_) => return,
+        },
+        |fs| {
+            fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
+                let mut count = 0usize;
+                let objects = unsafe { &mut *core::ptr::addr_of_mut!(OBJECTS) };
+                for item in directory {
+                    let entry = item?;
+                    if !entry.file_type().is_file() || count == MAX_REAL_FILES {
+                        continue;
+                    }
+                    let path = entry.path();
+                    let bytes = path.as_str_ref_with_trailing_nul().as_bytes();
+                    if bytes.len() < 3 || bytes[0] != b'/' || bytes.last() != Some(&0) {
+                        continue;
+                    }
+                    let name = &bytes[1..bytes.len() - 1];
+                    if name.is_empty()
+                        || name.len() > MAX_NAME
+                        || !name.iter().all(|b| b.is_ascii_graphic() || *b == b' ')
+                        || name == FILE_NAME
+                    {
+                        continue;
+                    }
+                    // Windows reads ObjectCompressedSize from GetObjectInfo.
+                    // Cache the real LittleFS length during the background scan;
+                    // USB callbacks only return this cached value.
+                    let size = fs.metadata(path)?.len();
+                    let mut object = EMPTY_OBJECT;
+                    object.name[..name.len()].copy_from_slice(name);
+                    object.name_len = name.len() as u8;
+                    object.size = size as u32;
+                    objects[count] = object;
+                    count += 1;
                 }
-                let path = entry.path();
-                let bytes = path.as_str_ref_with_trailing_nul().as_bytes();
-                if bytes.len() < 3 || bytes[0] != b'/' || bytes.last() != Some(&0) {
-                    continue;
-                }
-                let name = &bytes[1..bytes.len() - 1];
-                if name.is_empty()
-                    || name.len() > MAX_NAME
-                    || !name.iter().all(|b| b.is_ascii_graphic() || *b == b' ')
-                    || name == FILE_NAME
-                {
-                    continue;
-                }
-                let size = mtp_filesystem().metadata(path)?.len();
-                let mut object = EMPTY_OBJECT;
-                object.name[..name.len()].copy_from_slice(name);
-                object.name_len = name.len() as u8;
-                object.size = size as u32;
-                objects[count] = object;
-                count += 1;
-            }
-            Ok(count)
-        })
-    };
+                Ok(count)
+            })
+        },
+    );
 
     if let Ok(real_count) = result {
         OBJECT_COUNT.store((real_count + 1) as u32, Ordering::Release);
     }
-}
-
-/// Called by TinyUSB callbacks only to request deferred cleanup.
-#[unsafe(no_mangle)]
-pub extern "C" fn xcore_mtp_close_file() {
-    CLOSE_FILE_PENDING.store(true, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
@@ -303,20 +176,29 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
         return -1;
     }
 
-    if !open_or_seek_active_file(handle, offset) {
-        return -1;
-    }
+    let name = match core::str::from_utf8(&object.name[..object.name_len as usize]) {
+        Ok(name) => name,
+        Err(_) => return -1,
+    };
+    let relative_path = match littlefs2::path::PathBuf::try_from(name) {
+        Ok(path) => path,
+        Err(_) => return -1,
+    };
+    let full_path = littlefs2::path!("/").join(relative_path.as_path());
     let output = unsafe { core::slice::from_raw_parts_mut(destination, count) };
-    let file = unsafe { (&*core::ptr::addr_of!(MTP_FILE)).assume_init_ref() };
-    match littlefs2::io::Read::read(file, output) {
-        Ok(read) if read == count => {
-            NEXT_FILE_OFFSET.store(offset.saturating_add(read as u32), Ordering::Release);
-            read as i32
-        }
-        _ => {
-            close_active_file();
-            -1
-        }
+
+    let mut storage = match DharaStorage::new_mtp() {
+        Ok(storage) => storage,
+        Err(_) => return -1,
+    };
+    match Filesystem::<DharaStorage>::mount_and_then(&mut storage, |fs| {
+        fs.open_file_and_then(&full_path, |file| {
+            littlefs2::io::Seek::seek(file, littlefs2::io::SeekFrom::Start(offset))?;
+            littlefs2::io::Read::read(file, output)
+        })
+    }) {
+        Ok(read) if read == count => read as i32,
+        _ => -1,
     }
 }
 
