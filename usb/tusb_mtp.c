@@ -9,7 +9,7 @@
 #define MTP_UPLOAD_NAME_MAX 240u
 #define MTP_OBJECT_INFO_FIXED_SIZE 52u
 #define MTP_UPLOAD_NAME_MAX 64u
-#define MTP_UPLOAD_INFO_MAX 256u
+#define MTP_UPLOAD_INFO_MAX 600u
 
 extern bool xcore_mtp_refresh(void);
 extern uint32_t xcore_mtp_object_count(void);
@@ -138,13 +138,14 @@ static int32_t get_object_handles(tud_mtp_cb_data_t *cb_data) {
   const uint32_t count = xcore_mtp_object_count();
   active_handles_count = count;
   mtp_container_info_t *io = &cb_data->io_container;
-  io->header->len = sizeof(mtp_container_header_t) + 4u + count * 4u;
+  io->header->len = sizeof(mtp_container_header_t);
   (void) mtp_container_add_uint32(io, count);
   const uint32_t first_count = tu_min32(count, (io->payload_bytes - 4u) / 4u);
   for (uint32_t i = 0; i < first_count; i++) {
     const uint32_t handle = i + 1u;
     memcpy(io->payload + 4u + i * 4u, &handle, sizeof(handle));
   }
+  io->header->len = sizeof(mtp_container_header_t) + 4u + count * 4u;
   return tud_mtp_data_send(io) ? 0 : MTP_RESP_DEVICE_BUSY;
 }
 
@@ -159,7 +160,7 @@ static int32_t get_object_info(tud_mtp_cb_data_t *cb_data) {
   mtp_object_info_header_t info = {
     .storage_id = MTP_STORAGE_ID,
     .object_format = MTP_OBJ_FORMAT_UNDEFINED,
-    .protection_status = MTP_PROTECTION_STATUS_READ_ONLY,
+    .protection_status = MTP_PROTECTION_STATUS_NO_PROTECTION,
     .object_compressed_size = size,
     .thumb_format = MTP_OBJ_FORMAT_UNDEFINED,
     .thumb_compressed_size = 0,
