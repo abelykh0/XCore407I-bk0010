@@ -277,6 +277,11 @@ fn main() -> ! {
         // MTP and startup-error modes keep USB/video alive but never run
         // emulator, keyboard-to-BK, save-dialog, or file-browser work.
         if !emulator_enabled {
+            // MTP root enumeration is requested by OpenSession and must run
+            // outside TinyUSB callbacks, after this iteration's USB service.
+            if boot_mode == keyboard::BOOT_SELECTION_MTP {
+                xcore407i_blinker::mtp_storage::service_background();
+            }
             while prepare_next_video_batch(&mut video_renderer) {}
             continue;
         }
