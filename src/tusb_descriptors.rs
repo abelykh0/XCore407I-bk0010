@@ -58,7 +58,7 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
 
     // Configuration header: 4 interfaces, bus-powered, 100 mA.
     push_bytes(&mut descriptor, &mut offset, &[
-        9, 0x02, 0x22, 0x01, 4, 1, 0, 0x80, 50,
+        9, 0x02, 0xe0, 0x00, 4, 1, 0, 0x80, 50,
     ]);
 
     // UVC IAD and VideoControl interface.
