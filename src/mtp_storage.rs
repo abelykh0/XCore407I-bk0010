@@ -35,7 +35,14 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
     let mut count = 0usize;
     let mut total = 0u32;
     let mut free = 0u32;
+    if unsafe { UPLOAD_ACTIVE } {
+        xcore_mtp_abort_upload();
+    }
     let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        let temp = &littlefs2::path!("/.mtp-upload.tmp");
+        if fs.exists(temp) {
+            fs.remove(temp)?;
+        }
         total = fs.total_space().min(u32::MAX as usize) as u32;
         free = fs.available_space().unwrap_or(0).min(u32::MAX as usize) as u32;
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
