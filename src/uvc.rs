@@ -7,7 +7,7 @@
 //! ISO IN endpoint at `ENDPOINT_IN`.
 
 use crate::camera::{Nv12DemoImage, HEIGHT, WIDTH};
-use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 pub const CONTROL_INTERFACE: u8 = 0;
 pub const STREAMING_INTERFACE: u8 = 1;
@@ -25,6 +25,18 @@ const _: () = assert!(ISO_BATCH_BYTES <= USB_HS_DMA_BUFFER_LIMIT);
 pub const MAX_PAYLOAD_TRANSFER_SIZE: u32 = ISO_BATCH_BYTES as u32;
 pub const FRAME_RATE_FPS: u32 = 25;
 pub const FRAME_INTERVAL_100NS: u32 = 10_000_000 / FRAME_RATE_FPS;
+
+// MTP mode advertises a much slower camera stream to reduce host-side work.
+static MTP_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_mtp_mode(enabled: bool) {
+    MTP_MODE.store(enabled, Ordering::Release);
+}
+
+#[inline]
+fn active_frame_interval_100ns() -> u32 {
+    if MTP_MODE.load(Ordering::Acquire) { 10_000_000 } else { FRAME_INTERVAL_100NS }
+}
 pub const FRAME_BYTES: u32 = crate::camera::FRAME_BYTES as u32;
 pub const FRAME_BIT_RATE: u32 = FRAME_BYTES * 8 * FRAME_RATE_FPS;
 pub const UVC_VERSION: u16 = 0x0110;
@@ -325,14 +337,15 @@ impl Default for UvcClass {
     }
 }
 
-const fn make_stream_control() -> [u8; PROBE_LENGTH] {
+fn make_stream_control() -> [u8; PROBE_LENGTH] {
     let mut d = [0u8; PROBE_LENGTH];
+    let frame_interval = active_frame_interval_100ns();
     d[2] = 1; // bFormatIndex
     d[3] = 1; // bFrameIndex
-    d[4] = FRAME_INTERVAL_100NS as u8;
-    d[5] = (FRAME_INTERVAL_100NS >> 8) as u8;
-    d[6] = (FRAME_INTERVAL_100NS >> 16) as u8;
-    d[7] = (FRAME_INTERVAL_100NS >> 24) as u8;
+    d[4] = frame_interval as u8;
+    d[5] = (frame_interval >> 8) as u8;
+    d[6] = (frame_interval >> 16) as u8;
+    d[7] = (frame_interval >> 24) as u8;
     d[18] = FRAME_BYTES as u8;
     d[19] = (FRAME_BYTES >> 8) as u8;
     d[20] = (FRAME_BYTES >> 16) as u8;
