@@ -54,7 +54,10 @@ pub fn service() {
             match byte {
                 b'\r' | b'\n' => {
                     write(b"\r\n");
-                    let line = &LINE[..LINE_LEN];
+                    let line = core::slice::from_raw_parts(
+                        core::ptr::addr_of!(LINE).cast::<u8>(),
+                        LINE_LEN,
+                    );
                     if command_is(line, b"HELP") {
                         write(HELP);
                     } else if command_is(line, b"STATUS") {
