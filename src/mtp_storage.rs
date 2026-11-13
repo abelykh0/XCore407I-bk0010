@@ -189,6 +189,27 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
     if result.is_ok() { read_count as i32 } else { -1 }
 }
 
+/// Return the existing handle for a name, or the next handle for a new file.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_mtp_find_object(name: *const u8, name_len: u32) -> u32 {
+    if name.is_null() || name_len == 0 || name_len as usize > MAX_NAME {
+        return 0;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(name, name_len as usize) };
+    if !supported_name(bytes) {
+        return 0;
+    }
+    let count = FILE_COUNT.load(Ordering::Acquire);
+    for index in 0..count {
+        if let Ok(Some(file)) = file_at(index) {
+            if file.name_len == bytes.len() && &file.name[..file.name_len] == bytes {
+                return index + 1;
+            }
+        }
+    }
+    count.saturating_add(1)
+}
+
 /// Begin a streamed upload using a temporary file; an existing destination is
 /// preserved until the completed temporary file is renamed into place.
 #[unsafe(no_mangle)]
