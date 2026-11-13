@@ -333,6 +333,19 @@ pub fn with_mounted_detailed<R>(
     mounted.map_err(|_| FsAccessError::Operation)
 }
 
+/// Mount the existing LittleFS volume using the MTP initializer.
+/// This skips the diagnostic scan of all physical factory bad-block markers.
+pub fn with_mounted_mtp<R>(
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
+) -> Result<R, FsAccessError> {
+    let mut storage = ActiveStorage::new_mtp().map_err(FsAccessError::Init)?;
+    let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
+        Ok(service(fs))
+    })
+    .map_err(|error| FsAccessError::Mount(error.code()))?;
+    mounted.map_err(|_| FsAccessError::Operation)
+}
+
 /// Compatibility wrapper for existing callers that only need success/failure.
 pub fn with_mounted<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
