@@ -244,11 +244,12 @@ fn main() -> ! {
                 let _ = tusb::tud_task_ext(0, false);
                 xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
             }
+            xcore407i_blinker::cdc_console::service();
             while prepare_next_video_batch(&mut video_renderer) {}
         }
     }
 
-    let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
+  let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
     let mut browser_count = 0usize;
     let mut browser_selected = 0usize;
