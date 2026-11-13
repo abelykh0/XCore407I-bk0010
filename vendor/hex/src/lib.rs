@@ -37,8 +37,12 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec, vec::Vec};
 
-use core::prelude::v1::*;
-use core::iter;
+use core::{
+    convert::AsRef,
+    iter::{self, Iterator},
+    option::{Option, Option::{None, Some}},
+    result::{Result, Result::{Err, Ok}},
+};
 
 mod error;
 pub use crate::error::FromHexError;
