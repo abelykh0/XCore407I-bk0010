@@ -12,7 +12,19 @@ use crate::dhara_fs::DharaStorage;
 const STORAGE_TOTAL: u32 = 80 * 1024 * 1024;
 const STORAGE_FREE: u32 = 70 * 1024 * 1024;
 const FILE_NAME: &[u8] = b"readme.txtx";
-const FILE_CONTENT: &[u8] = b"test MTP";
+// A deterministic 16 KiB test payload. Its repeating byte pattern makes
+// chunk boundaries and missing/repeated data easy to detect on the host.
+const fn make_test_file() -> [u8; 16 * 1024] {
+    let mut data = [0u8; 16 * 1024];
+    let mut index = 0usize;
+    while index < data.len() {
+        data[index] = (index % 251) as u8;
+        index += 1;
+    }
+    data
+}
+
+const FILE_CONTENT: [u8; 16 * 1024] = make_test_file();
 const MAX_REAL_FILES: usize = 25;
 const MAX_NAME: usize = 127;
 
