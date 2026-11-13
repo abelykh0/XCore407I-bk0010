@@ -203,6 +203,25 @@ fn main() -> ! {
         NVIC::unmask(interrupt::OTG_HS);
     }
 
+    if boot_mode == keyboard::BOOT_SELECTION_TIMEOUT {
+        // No keyboard report arrived during the selection window. Keep the
+        // camera/status screen alive without entering uninitialized BK code.
+        loop {
+            unsafe {
+                let _ = tusb::tud_task_ext(0, false);
+                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+            }
+            if USB_FS_READY.load(Ordering::Acquire)
+                && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+            {
+                unsafe { tusb::tuh_task_ext(0, false); }
+            } else {
+                USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+            }
+            while prepare_next_video_batch(&mut video_renderer) {}
+        }
+    }
+
     if cdc_enabled {
         // F10 selects a device-only mode. Stop the FS host controller and
         // its scheduler permanently; no keyboard or other host traffic is
@@ -211,6 +230,10 @@ fn main() -> ! {
             NVIC::mask(interrupt::OTG_FS);
             NVIC::unpend(interrupt::OTG_FS);
         }
+        // Reset and gate OTG_FS after masking its IRQ. This makes the
+        // keyboard host electrically inactive for the remainder of CDC mode.
+        device.RCC.ahb2rstr().modify(|_, w| w.otgfsrst().set_bit());
+        device.RCC.ahb2enr().modify(|_, w| w.otgfsen().clear_bit());
         device.TIM3.cr1().write(|w| w.cen().clear_bit());
         device.TIM3.dier().write(|w| w.uie().clear_bit());
         USB_FS_READY.store(false, Ordering::Release);
