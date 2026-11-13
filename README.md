@@ -32,7 +32,7 @@ emulator does not start.
   absent from normal-mode enumeration.
 
 The current MTP view is bounded to 16 root files and supports object reads up
-to 4,084 bytes. It does not modify or format NAND.
+to 80,128 bytes. It does not modify or format NAND.
 
 ## Implementation
 
