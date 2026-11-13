@@ -17,6 +17,9 @@ impl MtpFile {
 static FILE_COUNT: AtomicU32 = AtomicU32::new(0);
 static STORAGE_TOTAL: AtomicU32 = AtomicU32::new(0);
 static STORAGE_FREE: AtomicU32 = AtomicU32::new(0);
+// MTP mode currently exposes the first root-level file only. Keep its
+// metadata in SRAM so object-info and data requests do not rescan LittleFS.
+static mut CACHED_FILE: MtpFile = MtpFile::EMPTY;
 static mut UPLOAD_NAME: [u8; MAX_NAME] = [0; MAX_NAME];
 static mut UPLOAD_NAME_LEN: usize = 0;
 static mut UPLOAD_EXPECTED: u32 = 0;
@@ -34,40 +37,12 @@ fn supported_name(name: &[u8]) -> bool {
         })
 }
 
-fn file_at(index: u32) -> Result<Option<MtpFile>, crate::nand_fs::InitError> {
-    let mut current = 0u32;
-    let mut found = None;
-    crate::nand_fs::with_mounted(|fs| {
-        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| -> littlefs2::io::Result<()> {
-            // Ignore individual directory-read errors here; the enclosing
-            // read_dir_and_then still reports open/close failures.
-            for entry in directory.flatten() {
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-                let path = entry.path().as_str_ref_with_trailing_nul();
-                let bytes = path.as_bytes();
-                if bytes.len() < 3 || bytes[0] != b'/' || bytes[bytes.len() - 1] != 0 {
-                    continue;
-                }
-                let name = &bytes[1..bytes.len() - 1];
-                if !supported_name(name) {
-                    continue;
-                }
-                if current == index {
-                    let mut file = MtpFile::EMPTY;
-                    file.name[..name.len()].copy_from_slice(name);
-                    file.name_len = name.len();
-                    file.size = entry.metadata().len().min(u32::MAX as usize) as u32;
-                    found = Some(file);
-                    break;
-                }
-                current += 1;
-            }
-            Ok(())
-        })
-    })?;
-    Ok(found)
+fn file_at(index: u32) -> Option<MtpFile> {
+    if index != 0 || FILE_COUNT.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    // MTP callbacks and refresh execute serially in TinyUSB task context.
+    Some(unsafe { core::ptr::addr_of!(CACHED_FILE).read() })
 }
 
 /// Refresh root-directory object count and storage statistics.
@@ -76,6 +51,7 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
     let mut count = 0u32;
     let mut total = 0u32;
     let mut free = 0u32;
+    let mut first_file = MtpFile::EMPTY;
     let result = crate::nand_fs::with_mounted(|fs| {
         total = fs.total_space().min(u32::MAX as usize) as u32;
         free = fs.available_space().unwrap_or(0).min(u32::MAX as usize) as u32;
@@ -90,13 +66,21 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
                 let bytes = path.as_bytes();
                 if bytes.len() >= 3 && bytes[0] == b'/' && bytes[bytes.len() - 1] == 0
                     && supported_name(&bytes[1..bytes.len() - 1]) {
-                    count = count.saturating_add(1);
+                    if count == 0 {
+                        let name = &bytes[1..bytes.len() - 1];
+                        first_file.name[..name.len()].copy_from_slice(name);
+                        first_file.name_len = name.len();
+                        first_file.size = entry.metadata().len().min(u32::MAX as usize) as u32;
+                    }
+                    // The current read-only MTP milestone exposes one file.
+                    count = 1;
                 }
             }
             Ok(())
         })
     });
     if result.is_ok() {
+        unsafe { core::ptr::addr_of_mut!(CACHED_FILE).write(first_file); }
         FILE_COUNT.store(count, Ordering::Release);
         STORAGE_TOTAL.store(total, Ordering::Release);
         STORAGE_FREE.store(free, Ordering::Release);
@@ -136,8 +120,8 @@ pub extern "C" fn xcore_mtp_object_info(
         return false;
     }
     let file = match file_at(handle - 1) {
-        Ok(Some(file)) => file,
-        _ => return false,
+        Some(file) => file,
+        None => return false,
     };
     if !size_out.is_null() {
         unsafe { size_out.write(file.size); }
@@ -164,8 +148,8 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
         return -1;
     }
     let file = match file_at(handle - 1) {
-        Ok(Some(file)) => file,
-        _ => return -1,
+        Some(file) => file,
+        None => return -1,
     };
     if offset > file.size {
         return -1;
@@ -204,10 +188,9 @@ pub extern "C" fn xcore_mtp_find_object(name: *const u8, name_len: u32) -> u32 {
     let count = FILE_COUNT.load(Ordering::Acquire);
     for index in 0..count {
         match file_at(index) {
-            Ok(Some(file)) if file.name_len == bytes.len()
+            Some(file) if file.name_len == bytes.len()
                 && &file.name[..file.name_len] == bytes => return index + 1,
-            Ok(_) => {}
-            Err(_) => return 0,
+            Some(_) | None => {}
         }
     }
     count.saturating_add(1)
