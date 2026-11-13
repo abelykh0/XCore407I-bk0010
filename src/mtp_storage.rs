@@ -39,8 +39,9 @@ fn file_at(index: u32) -> Result<Option<MtpFile>, xcore407i_blinker::nand_fs::In
     let mut found = None;
     xcore407i_blinker::nand_fs::with_mounted(|fs| {
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| -> littlefs2::io::Result<()> {
-            for item in directory {
-                let entry = item?;
+            // Ignore individual directory-read errors here; the enclosing
+            // read_dir_and_then still reports open/close failures.
+            for entry in directory.flatten() {
                 if !entry.file_type().is_file() {
                     continue;
                 }
@@ -79,8 +80,9 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
         total = fs.total_space().min(u32::MAX as usize) as u32;
         free = fs.available_space().unwrap_or(0).min(u32::MAX as usize) as u32;
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| -> littlefs2::io::Result<()> {
-            for item in directory {
-                let entry = item?;
+            // Ignore individual directory-read errors here; the enclosing
+            // read_dir_and_then still reports open/close failures.
+            for entry in directory.flatten() {
                 if !entry.file_type().is_file() {
                     continue;
                 }
