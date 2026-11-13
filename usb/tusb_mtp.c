@@ -8,7 +8,6 @@
 #define MTP_STORAGE_ID 0x00010001u
 #define MTP_UPLOAD_NAME_MAX 240u
 #define MTP_OBJECT_INFO_FIXED_SIZE 52u
-#define MTP_UPLOAD_NAME_MAX 64u
 #define MTP_UPLOAD_INFO_MAX 600u
 
 extern bool xcore_mtp_refresh(void);
