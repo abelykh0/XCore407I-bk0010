@@ -285,11 +285,12 @@ pub extern "C" fn xcore_mtp_finish_upload() -> bool {
         }
         fs.rename(&littlefs2::path!("/.mtp-upload.tmp"), &destination)
     });
-    unsafe { UPLOAD_ACTIVE = false; }
     if result.is_ok() {
+        unsafe { UPLOAD_ACTIVE = false; }
         xcore_mtp_refresh();
         true
     } else {
+        xcore_mtp_abort_upload();
         false
     }
 }
