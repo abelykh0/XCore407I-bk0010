@@ -292,6 +292,10 @@ fn main() -> ! {
                 // Read NAND in thread context with USB interrupts enabled. Only
                 // the short endpoint submission is protected from OTG_HS ISR.
                 if unsafe { xcore_mtp_service_read_prepare() } {
+                    // Storage reads run with USB IRQs enabled. Drain any
+                    // deferred EP0/control work that arrived during the read
+                    // before submitting the prepared MTP data container.
+                    unsafe { let _ = tusb::tud_task_ext(0, false); }
                     unsafe { NVIC::mask(interrupt::OTG_HS); }
                     unsafe { xcore_mtp_service_read_submit(); }
                     unsafe { NVIC::unmask(interrupt::OTG_HS); }
