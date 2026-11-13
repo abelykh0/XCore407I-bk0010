@@ -239,13 +239,40 @@ fn main() -> ! {
         USB_FS_READY.store(false, Ordering::Release);
         USB_HOST_TASK_PENDING.store(false, Ordering::Release);
 
-        loop {
-            unsafe {
-                let _ = tusb::tud_task_ext(0, false);
-                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+        // Mount LittleFS exactly once for the lifetime of CDC mode. The
+        // emulator and normal-mode storage paths are never entered here.
+        let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
+        let mount_result: Result<(), xcore407i_blinker::nand_fs::FsAccessError> =
+            xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
+                loop {
+                    unsafe {
+                        let _ = tusb::tud_task_ext(0, false);
+                        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                    }
+                    xcore407i_blinker::cdc_console::service(
+                        Some(fs),
+                        &mut zmodem_state,
+                        TICKS.load(Ordering::Relaxed),
+                    );
+                    while prepare_next_video_batch(&mut video_renderer) {}
+                }
+            });
+
+        // Keep the CDC camera and command console alive if NAND initialization
+        // or the existing LittleFS mount fails; file receive stays disabled.
+        if mount_result.is_err() {
+            loop {
+                unsafe {
+                    let _ = tusb::tud_task_ext(0, false);
+                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                }
+                xcore407i_blinker::cdc_console::service(
+                    None,
+                    &mut zmodem_state,
+                    TICKS.load(Ordering::Relaxed),
+                );
+                while prepare_next_video_batch(&mut video_renderer) {}
             }
-            xcore407i_blinker::cdc_console::service();
-            while prepare_next_video_batch(&mut video_renderer) {}
         }
     }
 
