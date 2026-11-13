@@ -4,8 +4,8 @@
 
 - **Video:** USB UVC, uncompressed NV12, 25 fps.
 - **Audio:** USB Line In.
-- **Input:** USB keyboard connected to the board's host port.
-- **Storage:** Samsung K9F1G08U0E 1-Gbit raw NAND.
+- **Input:** USB keyboard connected to the board's host port; required at startup.
+- **Storage:** Samsung K9F1G08U0E 1-Gbit raw NAND, exposed read-only over MTP in the optional startup mode.
 
 [Video demo](https://www.youtube.com/watch?v=IPjBy6mAeOw)
 
@@ -17,15 +17,34 @@ and onboard Samsung K9F1G08U0E 1-Gbit raw NAND.
 Video is generated and streamed without storing a complete frame in RAM.
 The firmware coordinates USB video, audio, keyboard input, and emulator timing.
 
+## Startup modes
+
+The firmware waits up to 30 seconds for a valid USB boot-keyboard report.
+If no keyboard is detected, UVC displays **KEYBOARD NOT DETECTED** and the
+emulator does not start.
+
+- **Normal mode:** start without holding F10. The existing UVC camera and UAC2
+  audio interfaces are exposed. No MTP interface is present in the USB
+  configuration.
+- **MTP mode:** hold F10 while powering on. The emulator and audio are disabled;
+  the UVC camera shows a generated **PC CONNECT** screen and the device exposes
+  a read-only MTP interface for files in the LittleFS root directory. MTP is
+  absent from normal-mode enumeration.
+
+The current MTP view is bounded to 16 root files and supports object reads up
+to 4,084 bytes. It does not modify or format NAND.
+
 ## Implementation
 
 ### Video
 
 The camera image is rendered as uncompressed NV12 and packetized as UVC 1.1.
-Rows are generated incrementally from the emulator's canvas; a complete video
-frame is never buffered in RAM. Two small SRAM buffers decouple rendering in
-the main loop from high-speed USB isochronous transfers. The stream runs at
-25 fps over TinyUSB's high-speed device port.
+In normal mode, rows are generated incrementally from the emulator's canvas; a
+complete video frame is never buffered in RAM. Two small SRAM buffers decouple
+rendering in the main loop from high-speed USB isochronous transfers. The stream
+runs at 25 fps over TinyUSB's high-speed device port. MTP mode instead generates
+a fixed PC CONNECT frame without reading the emulator canvas; that unused SRAM
+region also provides the MTP object-transfer workspace.
 
 ### Audio
 
@@ -64,8 +83,8 @@ read. The value wraps every 49.7 days. RTC resolution is approximately 3.9 ms.
 
 ## Third-party libraries
 
-- **TinyUSB 0.21.0** — USB device and host stack, including UVC transport and
-  UAC2 audio.
+- **TinyUSB 0.21.0** — USB device and host stack, including UVC transport,
+  UAC2 audio, and the MTP device class.
 - **Dhara** — raw-NAND flash translation layer.
 - **LittleFS 2** (through `littlefs2` / `littlefs2-sys`) — filesystem.
 - **STM32F4 PAC and HAL** (`stm32f4`, `stm32f4xx-hal`) — STM32F407 register
@@ -92,7 +111,7 @@ cargo build --release --target thumbv7em-none-eabihf --features cpu-cycle-diag
 
 ## TODO
 
-- Investigate keyboard startup detection.
+- Expand MTP support beyond the current read-only, root-only view.
 - Improve music playback performance.
 - Complete keyboard support (СУ, АР2).
 - Add file deletion and improve file management.
