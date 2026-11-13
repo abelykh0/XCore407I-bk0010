@@ -181,7 +181,7 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
     let mut read_count = 0usize;
     let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
         fs.open_file_and_then(&full_path, |input| {
-            input.seek(littlefs2::io::SeekFrom::Start(offset as u64))?;
+            input.seek(littlefs2::io::SeekFrom::Start(offset))?;
             read_count = input.read(output)?;
             Ok(())
         })
