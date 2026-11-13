@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
 use crate::bk_audio::BkEmulatorAudio;
-use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS};
+use crate::uvc::{ControlResponse, UvcClass, active_frame_interval_100ns, active_frame_rate_fps};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
@@ -78,6 +78,9 @@ fn initialize_uvc_state() -> bool {
 
 /// Validate and measure the complete UVC function beginning at interface 0.
 fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
+    let expected_frame_interval = active_frame_interval_100ns();
+    let expected_frame_bit_rate =
+        crate::camera::FRAME_BYTES as u32 * 8 * active_frame_rate_fps();
     if descriptors.len() < 9
         || descriptors[0] != 9
         || descriptors[1] != USB_DESC_INTERFACE
@@ -274,15 +277,15 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                         descriptors[offset + 21], descriptors[offset + 22],
                         descriptors[offset + 23], descriptors[offset + 24],
                     ]);
-                    if min_bitrate != FRAME_BIT_RATE
-                        || max_bitrate != FRAME_BIT_RATE
+                    if min_bitrate != expected_frame_bit_rate
+                        || max_bitrate != expected_frame_bit_rate
                         || frame_bytes != crate::camera::FRAME_BYTES as u32
-                        || interval != FRAME_INTERVAL_100NS
+                        || interval != expected_frame_interval
                         || descriptors[offset + 25] != 1
                         || u32::from_le_bytes([
                             descriptors[offset + 26], descriptors[offset + 27],
                             descriptors[offset + 28], descriptors[offset + 29],
-                        ]) != FRAME_INTERVAL_100NS
+                        ]) != expected_frame_interval
                     {
                         return None;
                     }
