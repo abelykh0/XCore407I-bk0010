@@ -341,8 +341,8 @@ pub fn with_mounted_detailed<R>(
 pub fn mtp_storage_stats() -> Result<(u32, u32), FsAccessError> {
     let mut storage = ActiveStorage::new_mtp().map_err(FsAccessError::Init)?;
     let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
-        let free = fs.available_space()?;
-        Ok((fs.total_space() as u32, free as u32))
+        let stats = fs.available_space().map(|free| (fs.total_space() as u32, free as u32));
+        Ok(stats)
     })
     .map_err(|error| FsAccessError::Mount(error.code()))?;
     mounted.map_err(|_| FsAccessError::Operation)
