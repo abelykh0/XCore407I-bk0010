@@ -291,7 +291,9 @@ fn main() -> ! {
                     unsafe { NVIC::unmask(interrupt::OTG_HS); }
                 }
             }
-            while prepare_next_video_batch(&mut video_renderer) {}
+            // Produce at most one video batch per pass so MTP work and
+            // TinyUSB servicing get another turn before the next render batch.
+            let _ = prepare_next_video_batch(&mut video_renderer);
             continue;
         }
 
