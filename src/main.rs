@@ -199,6 +199,10 @@ fn main() -> ! {
         NVIC::unpend(interrupt::OTG_HS);
     }
 
+    xcore407i_blinker::tusb_descriptors::set_mtp_mode(
+        boot_mode == keyboard::BOOT_SELECTION_MTP,
+    );
+
     let hs_device_init = tusb::tusb_rhport_init_t {
         role: tusb::tusb_role_t::TUSB_ROLE_DEVICE,
         speed: tusb::tusb_speed_t::TUSB_SPEED_HIGH,
