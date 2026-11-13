@@ -1,5 +1,5 @@
-//! MTP storage backend. NAND/LittleFS enumeration is completed before the
-//! OTG_HS device is connected to the host, so it cannot starve MTP servicing.
+//! MTP storage backend. The initial MTP session uses a cached synthetic object
+//! list; NAND/LittleFS enumeration is intentionally disabled during discovery.
 
 use core::mem::MaybeUninit;
 use core::ptr::{addr_of, addr_of_mut};
@@ -35,7 +35,6 @@ static mut OPEN_FILE: MaybeUninit<MtpFile> = MaybeUninit::uninit();
 static FILESYSTEM_STATE: AtomicU8 = AtomicU8::new(0);
 static FILE_OPEN: AtomicBool = AtomicBool::new(false);
 static CLOSE_FILE_REQUESTED: AtomicBool = AtomicBool::new(false);
-static REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE_HANDLE: AtomicU32 = AtomicU32::new(0);
 static NEXT_FILE_OFFSET: AtomicU32 = AtomicU32::new(0);
 
@@ -124,64 +123,25 @@ fn close_active_file() {
     let _ = unsafe { file.close() };
 }
 
-/// Keep startup identical to the known-good in-memory backend. Real-file
-/// enumeration is requested later by OpenSession, after USB is servicing IRQs.
+/// Keep startup identical to the known-good in-memory backend. Do not touch
+/// NAND/LittleFS while Windows is discovering the MTP device.
 pub fn prepare_storage() {
     OBJECT_COUNT.store(1, Ordering::Release);
 }
 
-/// OpenSession requests a root refresh. The actual NAND/LittleFS work is
-/// deferred to service_background(), never performed in a TinyUSB callback.
+/// Keep OpenSession fast. Root enumeration will be reintroduced separately
+/// once it can run incrementally without starving TinyUSB task servicing.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_refresh() -> bool {
-    REFRESH_REQUESTED.store(true, Ordering::Release);
     true
 }
 
-/// Drain deferred close and refresh requests from MTP main-loop context.
+/// Drain only deferred file-close requests. No NAND or LittleFS work is done
+/// during initial MTP discovery in this diagnostic step.
 pub fn service_background() {
     if CLOSE_FILE_REQUESTED.swap(false, Ordering::AcqRel) {
         close_active_file();
     }
-
-    if !REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
-        return;
-    }
-
-    // Publish only the synthetic object while rebuilding the real-file table.
-    // The object count is updated after enumeration has completed.
-    OBJECT_COUNT.store(1, Ordering::Release);
-    let mut real_count = 0usize;
-    let result = crate::nand_fs::enumerate_root_files(
-        MAX_REAL_FILES,
-        true,
-        |name| name != FILE_NAME,
-        |path, size| {
-            if path.len() < 3 || path.last() != Some(&0) {
-                return;
-            }
-            let name = &path[1..path.len() - 1];
-            if name.len() > MAX_NAME || real_count >= MAX_REAL_FILES {
-                return;
-            }
-
-            let objects = unsafe { &mut *addr_of_mut!(OBJECTS) };
-            let object = &mut objects[real_count];
-            object.name[..name.len()].copy_from_slice(name);
-            object.name_len = name.len() as u8;
-            object.size = size.unwrap_or(0);
-            real_count += 1;
-        },
-    );
-
-    // Publish the completed table in one step. On error, keep only the
-    // synthetic test object available.
-    let object_count = if result.is_ok() {
-        real_count as u32 + 1
-    } else {
-        1
-    };
-    OBJECT_COUNT.store(object_count, Ordering::Release);
 }
 
 #[unsafe(no_mangle)]
