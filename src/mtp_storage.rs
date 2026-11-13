@@ -226,13 +226,13 @@ pub extern "C" fn xcore_mtp_begin_upload(name: *const u8, name_len: u32, expecte
     }
 
     let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
-        if expected_size as usize > fs.total_space()
-            || expected_size as usize > fs.available_space().unwrap_or(0) {
-            return Err(littlefs2::io::Error::IO);
-        }
         let temp = &littlefs2::path!("/.mtp-upload.tmp");
         if fs.exists(temp) {
             fs.remove(temp)?;
+        }
+        if expected_size as usize > fs.total_space()
+            || expected_size as usize > fs.available_space().unwrap_or(0) {
+            return Err(littlefs2::io::Error::IO);
         }
         fs.create_file_and_then(temp, |_| Ok(()))
     });
