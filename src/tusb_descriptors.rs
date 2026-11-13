@@ -85,11 +85,11 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
     push_u16(&mut descriptor, &mut offset, WIDTH as u16);
     push_u16(&mut descriptor, &mut offset, HEIGHT as u16);
     push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8 * active_frame_rate_fps());
-    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
+    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8 * active_frame_rate_fps());
     push_u32(&mut descriptor, &mut offset, FRAME_BYTES);
-    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
+    push_u32(&mut descriptor, &mut offset, active_frame_interval_100ns());
     push_u8(&mut descriptor, &mut offset, 1);
-    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
+    push_u32(&mut descriptor, &mut offset, active_frame_interval_100ns());
 
     // UVC color matching, alternate setting 1, and 3 x 768-byte HS ISO EP1 IN.
     let uvc_w_max_packet =
