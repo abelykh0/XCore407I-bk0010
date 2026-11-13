@@ -52,8 +52,12 @@
 #define CFG_TUD_AUDIO 1
 #define CFG_TUD_CDC 1
 #define CFG_TUD_CDC_NOTIFY 1
-#define CFG_TUD_CDC_TX_BUFSIZE 128
-#define CFG_TUD_CDC_RX_BUFSIZE 128
+// CDC runs at high speed: bulk packets are 512 bytes. Keep both the
+// endpoint DMA buffers and TinyUSB stream FIFOs large enough for one packet.
+#define CFG_TUD_CDC_TX_EPSIZE 512
+#define CFG_TUD_CDC_RX_EPSIZE 512
+#define CFG_TUD_CDC_TX_BUFSIZE 512
+#define CFG_TUD_CDC_RX_BUFSIZE 512
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT 0
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 10
