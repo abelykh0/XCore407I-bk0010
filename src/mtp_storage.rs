@@ -5,15 +5,25 @@
 //! tested independently of the storage stack.
 
 
-const STORAGE_TOTAL: u32 = 80 * 1024 * 1024;
-const STORAGE_FREE: u32 = 70 * 1024 * 1024;
+use core::sync::atomic::{AtomicU32, Ordering};
+
+static STORAGE_TOTAL: AtomicU32 = AtomicU32::new(80 * 1024 * 1024);
+static STORAGE_FREE: AtomicU32 = AtomicU32::new(70 * 1024 * 1024);
 const FILE_NAME: &[u8] = b"readme.txtx";
 const FILE_CONTENT: &[u8] = b"test MTP";
 
-/// Initialize the fixed in-memory test volume. No storage I/O is performed.
+/// Refresh real LittleFS capacity/free-space statistics for the MTP session.
+/// The test object remains in memory; no files are created or modified.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_refresh() -> bool {
-    true
+    match crate::nand_fs::mtp_storage_stats() {
+        Ok((total, free)) => {
+            STORAGE_TOTAL.store(total, Ordering::Release);
+            STORAGE_FREE.store(free, Ordering::Release);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -24,10 +34,10 @@ pub extern "C" fn xcore_mtp_object_count() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_storage_stats(total: *mut u32, free: *mut u32) {
     if !total.is_null() {
-        unsafe { total.write(STORAGE_TOTAL); }
+        unsafe { total.write(STORAGE_TOTAL.load(Ordering::Acquire)); }
     }
     if !free.is_null() {
-        unsafe { free.write(STORAGE_FREE); }
+        unsafe { free.write(STORAGE_FREE.load(Ordering::Acquire)); }
     }
 }
 
