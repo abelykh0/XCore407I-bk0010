@@ -34,10 +34,10 @@ fn supported_name(name: &[u8]) -> bool {
         })
 }
 
-fn file_at(index: u32) -> Result<Option<MtpFile>, xcore407i_blinker::nand_fs::InitError> {
+fn file_at(index: u32) -> Result<Option<MtpFile>, crate::nand_fs::InitError> {
     let mut current = 0u32;
     let mut found = None;
-    xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    crate::nand_fs::with_mounted(|fs| {
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| -> littlefs2::io::Result<()> {
             // Ignore individual directory-read errors here; the enclosing
             // read_dir_and_then still reports open/close failures.
@@ -76,7 +76,7 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
     let mut count = 0u32;
     let mut total = 0u32;
     let mut free = 0u32;
-    let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    let result = crate::nand_fs::with_mounted(|fs| {
         total = fs.total_space().min(u32::MAX as usize) as u32;
         free = fs.available_space().unwrap_or(0).min(u32::MAX as usize) as u32;
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| -> littlefs2::io::Result<()> {
@@ -181,7 +181,7 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
     let full_path = littlefs2::path!("/").join(relative.as_path());
     let output = unsafe { core::slice::from_raw_parts_mut(destination, capacity as usize) };
     let mut read_count = 0usize;
-    let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    let result = crate::nand_fs::with_mounted(|fs| {
         fs.open_file_and_then(&full_path, |input| {
             input.seek(littlefs2::io::SeekFrom::Start(offset))?;
             read_count = input.read(output)?;
@@ -228,7 +228,7 @@ pub extern "C" fn xcore_mtp_begin_upload(name: *const u8, name_len: u32, expecte
         xcore_mtp_abort_upload();
     }
 
-    let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    let result = crate::nand_fs::with_mounted(|fs| {
         let temp = &littlefs2::path!("/.mtp-upload.tmp");
         if fs.exists(temp) {
             fs.remove(temp)?;
@@ -266,7 +266,7 @@ pub extern "C" fn xcore_mtp_write_upload_chunk(offset: u32, data: *const u8, len
         return false;
     }
     let input = unsafe { core::slice::from_raw_parts(data, len as usize) };
-    xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    crate::nand_fs::with_mounted(|fs| {
         fs.open_file_with_options_and_then(
             |options| options.write(true),
             &littlefs2::path!("/.mtp-upload.tmp"),
@@ -302,7 +302,7 @@ pub extern "C" fn xcore_mtp_finish_upload() -> bool {
         Err(_) => return false,
     };
     let destination = littlefs2::path!("/").join(relative.as_path());
-    let result = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    let result = crate::nand_fs::with_mounted(|fs| {
         let metadata = fs.metadata(&littlefs2::path!("/.mtp-upload.tmp"))?;
         if metadata.len() != expected as usize {
             return Err(littlefs2::io::Error::IO);
@@ -323,7 +323,7 @@ pub extern "C" fn xcore_mtp_finish_upload() -> bool {
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_abort_upload() {
     if unsafe { UPLOAD_ACTIVE } {
-        let _ = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+        let _ = crate::nand_fs::with_mounted(|fs| {
             let temp = &littlefs2::path!("/.mtp-upload.tmp");
             if fs.exists(temp) { fs.remove(temp) } else { Ok(()) }
         });
