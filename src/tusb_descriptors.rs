@@ -10,7 +10,7 @@ use crate::uvc::{
     ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
 };
 
-const CONFIGURATION_DESCRIPTOR_LEN: usize = 233;
+const CONFIGURATION_DESCRIPTOR_LEN: usize = 230;
 
 const fn push_u8(
     descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
@@ -59,7 +59,7 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
 
     // Configuration header: 4 interfaces, bus-powered, 100 mA.
     push_bytes(&mut descriptor, &mut offset, &[
-        9, 0x02, 0xe9, 0x00, 4, 1, 0, 0x80, 50,
+        9, 0x02, 0xe6, 0x00, 4, 1, 0, 0x80, 50,
     ]);
 
     // UVC IAD and VideoControl interface.
