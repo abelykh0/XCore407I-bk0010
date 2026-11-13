@@ -32,12 +32,16 @@ pub fn set_cdc_mode(enabled: bool) {
 }
 
 #[inline]
-fn active_frame_interval_100ns() -> u32 {
+pub fn active_frame_interval_100ns() -> u32 {
     if CDC_MODE.load(Ordering::Acquire) {
         10_000_000
     } else {
         FRAME_INTERVAL_100NS
     }
+}
+
+pub fn active_frame_rate_fps() -> u32 {
+    if CDC_MODE.load(Ordering::Acquire) { 1 } else { FRAME_RATE_FPS }
 }
 
 pub const FRAME_BYTES: u32 = crate::camera::FRAME_BYTES as u32;
