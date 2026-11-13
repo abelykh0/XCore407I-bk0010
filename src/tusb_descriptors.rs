@@ -5,8 +5,8 @@
 
 use crate::camera::{HEIGHT, WIDTH};
 use crate::uvc::{
-    FRAME_BIT_RATE, FRAME_BYTES, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME,
-    MAX_PACKET_SIZE,
+    active_frame_interval_100ns, active_frame_rate_fps, FRAME_BIT_RATE, FRAME_BYTES,
+    ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
 };
 
 const CONFIGURATION_DESCRIPTOR_LEN: usize = 224;
@@ -150,7 +150,7 @@ static DEVICE_QUALIFIER_DESCRIPTOR: [u8; 10] = [
     10, 0x06, 0x10, 0x02, 0xef, 0x02, 0x01, 64, 1, 0,
 ];
 
-static CONFIGURATION_DESCRIPTOR: [u8; CONFIGURATION_DESCRIPTOR_LEN] =
+static mut CONFIGURATION_DESCRIPTOR: [u8; CONFIGURATION_DESCRIPTOR_LEN] =
     build_configuration_descriptor();
 
 #[unsafe(no_mangle)]
@@ -160,11 +160,38 @@ pub extern "C" fn tud_descriptor_device_cb() -> *const u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
-    if index == 0 {
-        CONFIGURATION_DESCRIPTOR.as_ptr()
-    } else {
-        core::ptr::null()
+    if index != 0 {
+        return core::ptr::null();
     }
+
+    // The same composite descriptor serves both startup modes. Update the
+    // frame interval and bitrate before TinyUSB exposes it to the host.
+    let interval = active_frame_interval_100ns();
+    let bitrate = FRAME_BYTES * 8 * active_frame_rate_fps();
+    let descriptor = core::ptr::addr_of_mut!(CONFIGURATION_DESCRIPTOR).cast::<u8>();
+    unsafe {
+        for (offset, value) in [
+            (115usize, bitrate as u8),
+            (116, (bitrate >> 8) as u8),
+            (117, (bitrate >> 16) as u8),
+            (118, (bitrate >> 24) as u8),
+            (119, bitrate as u8),
+            (120, (bitrate >> 8) as u8),
+            (121, (bitrate >> 16) as u8),
+            (122, (bitrate >> 24) as u8),
+            (127, interval as u8),
+            (128, (interval >> 8) as u8),
+            (129, (interval >> 16) as u8),
+            (130, (interval >> 24) as u8),
+            (132, interval as u8),
+            (133, (interval >> 8) as u8),
+            (134, (interval >> 16) as u8),
+            (135, (interval >> 24) as u8),
+        ] {
+            descriptor.add(offset).write(value);
+        }
+    }
+    descriptor
 }
 
 #[unsafe(no_mangle)]
