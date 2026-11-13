@@ -1,8 +1,7 @@
 //! ZMODEM receive integration for the CDC-only boot mode.
 //!
 //! The protocol engine is the no_std, heapless state machine from zmodem2.
-//! Incoming file data is appended to LittleFS in bounded chunks; no complete
-//! file is buffered in RAM.
+//! Incoming file data is appended to LittleFS in bounded chunks.
 
 use core::ffi::c_void;
 
@@ -47,9 +46,6 @@ impl State {
     pub fn active(&self) -> bool {
         self.receiver.is_some()
     }
-    if !finished {
-        state.receiver = Some(receiver);
-    }
 }
 
 impl Default for State {
@@ -58,13 +54,17 @@ impl Default for State {
     }
 }
 
+pub fn cancel(state: &mut State) {
+    state.receiver = None;
+    state.path_len = 0;
+    state.wire_len = 0;
+    state.wire_pos = 0;
+}
+
 fn make_path(name: &[u8], path: &mut [u8; NAME_CAPACITY + 2]) -> Option<usize> {
     if name.is_empty() || name.len() > NAME_CAPACITY || name == b"." || name == b".." {
         return None;
     }
-
-    // Accept a single portable root-level filename only. Reject path
-    // separators, control bytes, drive prefixes and traversal.
     if !name.iter().all(|byte| {
         byte.is_ascii_alphanumeric()
             || matches!(*byte, b'.' | b'_' | b'-' | b'+' | b' ' | b'(' | b')')
@@ -144,8 +144,7 @@ pub fn service(
 
     // Bound work per iteration so UVC buffer production keeps running.
     for _ in 0..8 {
-        let action = receiver.poll();
-        match action {
+        match receiver.poll() {
             Action::WriteWire(bytes) => {
                 let count = unsafe {
                     tusb::tud_cdc_n_write(
@@ -165,8 +164,9 @@ pub fn service(
                 }
             }
             Action::WriteFile(bytes) => {
-                let path = &state.path[..state.path_len];
-                if state.path_len == 0 || !append_file(fs, path, bytes) {
+                if state.path_len == 0
+                    || !append_file(fs, &state.path[..state.path_len], bytes)
+                {
                     state.transfer_failed = true;
                     let _ = receiver.abort();
                     break;
@@ -206,7 +206,9 @@ pub fn service(
             Action::Event(Event::SessionCompleted) => {
                 finished = true;
                 if state.transfer_failed {
-                    super::cdc_console::write_status(b"\r\nZMODEM stopped: storage/protocol error\r\n> ");
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM stopped: storage/protocol error\r\n> ",
+                    );
                 } else {
                     super::cdc_console::write_status(b"\r\nZMODEM upload complete\r\n> ");
                 }
@@ -235,9 +237,7 @@ pub fn service(
                 if state.wire_pos < state.wire_len {
                     let input = &state.wire[state.wire_pos..state.wire_len];
                     match receiver.submit_wire(input) {
-                        Ok(consumed) if consumed != 0 => {
-                            state.wire_pos += consumed;
-                        }
+                        Ok(consumed) if consumed != 0 => state.wire_pos += consumed,
                         Ok(_) => break,
                         Err(_) => {
                             state.transfer_failed = true;
@@ -257,5 +257,9 @@ pub fn service(
             }
             _ => break,
         }
+    }
+
+    if !finished {
+        state.receiver = Some(receiver);
     }
 }
