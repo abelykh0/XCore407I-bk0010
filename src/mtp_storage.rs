@@ -74,9 +74,14 @@ pub fn service_background() {
                     {
                         continue;
                     }
+                    // Windows reads ObjectCompressedSize from GetObjectInfo.
+                    // Cache the real LittleFS length during the background scan;
+                    // USB callbacks only return this cached value.
+                    let size = fs.metadata(path)?.len();
                     let mut object = EMPTY_OBJECT;
                     object.name[..name.len()].copy_from_slice(name);
                     object.name_len = name.len() as u8;
+                    object.size = size as u32;
                     objects[count] = object;
                     count += 1;
                 }
