@@ -22,7 +22,6 @@ extern bool xcore_mtp_begin_upload(const uint8_t *name, uint32_t name_len, uint3
 extern bool xcore_mtp_write_upload_chunk(uint32_t offset, const uint8_t *data, uint32_t len);
 extern bool xcore_mtp_finish_upload(void);
 extern void xcore_mtp_abort_upload(void);
-extern void xcore_mtp_close_file(void);
 
 typedef MTP_STORAGE_INFO_STRUCT(6, 5) xcore_mtp_storage_info_t;
 
@@ -106,7 +105,6 @@ static int32_t open_close_session(tud_mtp_cb_data_t *cb_data) {
     return MTP_RESP_SESSION_NOT_OPEN;
   }
   session_open = false;
-  xcore_mtp_close_file();
   return MTP_RESP_OK;
 }
 
@@ -471,7 +469,6 @@ void xcore_tud_mtp_reset_session(void) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
-  xcore_mtp_close_file();
 }
 
 bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
@@ -484,7 +481,6 @@ bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
-  xcore_mtp_close_file();
   return true;
 }
 
@@ -499,7 +495,6 @@ bool tud_mtp_request_device_reset_cb(tud_mtp_request_cb_data_t *cb_data) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
-  xcore_mtp_close_file();
   return true;
 }
 
@@ -628,9 +623,6 @@ int32_t tud_mtp_data_complete_cb(tud_mtp_cb_data_t *cb_data) {
 
 int32_t tud_mtp_response_complete_cb(tud_mtp_cb_data_t *cb_data) {
   (void) cb_data;
-  if (active_object_handle != 0) {
-    xcore_mtp_close_file();
-  }
   active_object_handle = 0;
   active_object_offset = 0;
   active_object_length = 0;
