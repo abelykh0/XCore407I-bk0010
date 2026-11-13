@@ -84,12 +84,14 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
     // UVC frame descriptor: dimensions, bitrates, frame size and interval.
     push_u16(&mut descriptor, &mut offset, WIDTH as u16);
     push_u16(&mut descriptor, &mut offset, HEIGHT as u16);
-    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8 * active_frame_rate_fps());
-    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8 * active_frame_rate_fps());
+    // Match the MTP branch's 1-FPS UVC descriptor. The callback below
+    // rewrites these fields from the selected mode before enumeration.
+    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8);
+    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8);
     push_u32(&mut descriptor, &mut offset, FRAME_BYTES);
-    push_u32(&mut descriptor, &mut offset, active_frame_interval_100ns());
+    push_u32(&mut descriptor, &mut offset, 10_000_000);
     push_u8(&mut descriptor, &mut offset, 1);
-    push_u32(&mut descriptor, &mut offset, active_frame_interval_100ns());
+    push_u32(&mut descriptor, &mut offset, 10_000_000);
 
     // UVC color matching, alternate setting 1, and 3 x 768-byte HS ISO EP1 IN.
     let uvc_w_max_packet =
