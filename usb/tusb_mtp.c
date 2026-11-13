@@ -6,9 +6,7 @@
 #include <string.h>
 
 #define MTP_STORAGE_ID 0x00010001u
-#define MTP_MAX_OBJECTS 16u
-#define MTP_READ_LIMIT 80128u
-#define MTP_WORKSPACE_READ_OFFSET 1024u
+#define MTP_UPLOAD_NAME_MAX 240u
 #define MTP_OBJECT_INFO_FIXED_SIZE 52u
 #define MTP_UPLOAD_NAME_MAX 64u
 #define MTP_UPLOAD_INFO_MAX 256u
@@ -18,9 +16,8 @@ extern uint32_t xcore_mtp_object_count(void);
 extern void xcore_mtp_storage_stats(uint32_t *total, uint32_t *free);
 extern bool xcore_mtp_object_info(uint32_t handle, uint16_t *name,
                                   uint32_t max_name_units, uint32_t *size);
-extern int32_t xcore_mtp_load_object(uint32_t handle, uint8_t *destination,
-                                     uint32_t capacity);
-extern uint8_t *xcore_mtp_workspace(void);
+extern int32_t xcore_mtp_read_object_chunk(uint32_t handle, uint32_t offset,
+                                            uint8_t *destination, uint32_t capacity);
 extern bool xcore_mtp_begin_upload(const uint8_t *name, uint32_t name_len, uint32_t expected_size);
 extern bool xcore_mtp_write_upload_chunk(uint32_t offset, const uint8_t *data, uint32_t len);
 extern bool xcore_mtp_finish_upload(void);
@@ -55,11 +52,8 @@ static uint32_t upload_info_len;
 static uint32_t upload_expected_size;
 static bool upload_info_valid;
 static bool upload_data_active;
+static uint32_t active_handles_count;
 static uint32_t send_object_info_params[3];
-
-static uint8_t *mtp_read_buffer(void) {
-  return xcore_mtp_workspace() + MTP_WORKSPACE_READ_OFFSET;
-}
 
 static int32_t send_data(tud_mtp_cb_data_t *cb_data) {
   return tud_mtp_data_send(&cb_data->io_container) ? 0 : MTP_RESP_DEVICE_BUSY;
@@ -115,7 +109,7 @@ static int32_t get_storage_info(tud_mtp_cb_data_t *cb_data) {
   xcore_mtp_storage_stats(&total, &free);
   storage_info.max_capacity_in_bytes = total;
   storage_info.free_space_in_bytes = free;
-  storage_info.free_space_in_objects = MTP_MAX_OBJECTS - xcore_mtp_object_count();
+  storage_info.free_space_in_objects = 0xFFFFFFFFu;
   mtp_container_add_raw(&cb_data->io_container, &storage_info, sizeof(storage_info));
   return send_data(cb_data);
 }
@@ -141,18 +135,22 @@ static int32_t get_object_handles(tud_mtp_cb_data_t *cb_data) {
     return MTP_RESP_INVALID_PARENT_OBJECT;
   }
 
-  uint32_t handles[MTP_MAX_OBJECTS];
   const uint32_t count = xcore_mtp_object_count();
-  for (uint32_t i = 0; i < count; i++) {
-    handles[i] = i + 1;
+  active_handles_count = count;
+  mtp_container_info_t *io = &cb_data->io_container;
+  io->header->len = sizeof(mtp_container_header_t) + 4u + count * 4u;
+  (void) mtp_container_add_uint32(io, count);
+  const uint32_t first_count = tu_min32(count, (io->payload_bytes - 4u) / 4u);
+  for (uint32_t i = 0; i < first_count; i++) {
+    const uint32_t handle = i + 1u;
+    memcpy(io->payload + 4u + i * 4u, &handle, sizeof(handle));
   }
-  (void) mtp_container_add_auint32(&cb_data->io_container, count, handles);
-  return send_data(cb_data);
+  return tud_mtp_data_send(io) ? 0 : MTP_RESP_DEVICE_BUSY;
 }
 
 static int32_t get_object_info(tud_mtp_cb_data_t *cb_data) {
   const uint32_t handle = cb_data->command_container->params[0];
-  uint16_t name[65] = { 0 };
+  uint16_t name[MTP_UPLOAD_NAME_MAX + 1u] = { 0 };
   uint32_t size = 0;
   if (!xcore_mtp_object_info(handle, name, TU_ARRAY_SIZE(name), &size)) {
     return MTP_RESP_INVALID_OBJECT_HANDLE;
@@ -196,15 +194,6 @@ static int32_t start_object_data(tud_mtp_cb_data_t *cb_data, bool partial) {
   if (!xcore_mtp_object_info(handle, NULL, 0, &size)) {
     return MTP_RESP_INVALID_OBJECT_HANDLE;
   }
-  if (size > MTP_READ_LIMIT) {
-    return MTP_RESP_OBJECT_TOO_LARGE;
-  }
-
-  const int32_t loaded = xcore_mtp_load_object(handle, mtp_read_buffer(), MTP_READ_LIMIT);
-  if (loaded < 0 || (uint32_t) loaded != size) {
-    return MTP_RESP_GENERAL_ERROR;
-  }
-
   uint32_t offset = 0;
   uint32_t length = size;
   if (partial) {
@@ -225,7 +214,8 @@ static int32_t start_object_data(tud_mtp_cb_data_t *cb_data, bool partial) {
   io->header->len = sizeof(mtp_container_header_t) + length;
   const uint32_t first = tu_min32(length, io->payload_bytes);
   if (first != 0) {
-    memcpy(io->payload, mtp_read_buffer() + offset, first);
+    const int32_t read = xcore_mtp_read_object_chunk(handle, offset, io->payload, first);
+    if (read < 0 || (uint32_t)read != first) return MTP_RESP_GENERAL_ERROR;
   }
   return tud_mtp_data_send(io) ? 0 : MTP_RESP_DEVICE_BUSY;
 }
@@ -252,7 +242,31 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
       response = get_num_objects(cb_data);
       break;
     case MTP_OP_GET_OBJECT_HANDLES:
-      response = session_open ? get_object_handles(cb_data) : MTP_RESP_SESSION_NOT_OPEN;
+      if (cb_data->phase == MTP_PHASE_COMMAND) {
+        response = session_open ? get_object_handles(cb_data) : MTP_RESP_SESSION_NOT_OPEN;
+      } else {
+        const uint32_t data_offset = cb_data->total_xferred_bytes - sizeof(mtp_container_header_t);
+        if (data_offset >= 4u + active_handles_count * 4u) {
+          response = 0;
+        } else {
+          const uint32_t first_handle_offset = data_offset <= 4u ? 0u : (data_offset - 4u) / 4u;
+          const uint32_t bytes_already = data_offset <= 4u ? 4u - data_offset : 0u;
+          uint8_t *out = cb_data->io_container.payload;
+          uint32_t capacity = cb_data->io_container.payload_bytes;
+          if (bytes_already != 0u) {
+            memset(out, 0, bytes_already);
+            out += bytes_already;
+            capacity -= bytes_already;
+          }
+          const uint32_t count = tu_min32(
+              active_handles_count - first_handle_offset, capacity / 4u);
+          for (uint32_t i = 0; i < count; i++) {
+            const uint32_t handle = first_handle_offset + i + 1u;
+            memcpy(out + i * 4u, &handle, sizeof(handle));
+          }
+          response = tud_mtp_data_send(&cb_data->io_container) ? 0 : -1;
+        }
+      }
       break;
     case MTP_OP_GET_OBJECT_INFO:
       response = session_open ? get_object_info(cb_data) : MTP_RESP_SESSION_NOT_OPEN;
@@ -267,9 +281,11 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
         } else {
           const uint32_t count = tu_min32(
               active_object_length - sent, cb_data->io_container.payload_bytes);
-          memcpy(cb_data->io_container.payload,
-                 mtp_read_buffer() + active_object_offset + sent, count);
-          response = tud_mtp_data_send(&cb_data->io_container) ? 0 : -1;
+          const int32_t read = xcore_mtp_read_object_chunk(
+              active_object_handle, active_object_offset + sent,
+              cb_data->io_container.payload, count);
+          response = (read >= 0 && (uint32_t)read == count &&
+                      tud_mtp_data_send(&cb_data->io_container)) ? 0 : -1;
         }
       }
       break;
@@ -283,9 +299,11 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
         } else {
           const uint32_t count = tu_min32(
               active_object_length - sent, cb_data->io_container.payload_bytes);
-          memcpy(cb_data->io_container.payload,
-                 mtp_read_buffer() + active_object_offset + sent, count);
-          response = tud_mtp_data_send(&cb_data->io_container) ? 0 : -1;
+          const int32_t read = xcore_mtp_read_object_chunk(
+              active_object_handle, active_object_offset + sent,
+              cb_data->io_container.payload, count);
+          response = (read >= 0 && (uint32_t)read == count &&
+                      tud_mtp_data_send(&cb_data->io_container)) ? 0 : -1;
         }
       }
       break;
