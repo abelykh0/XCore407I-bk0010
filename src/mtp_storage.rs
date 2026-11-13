@@ -1,8 +1,11 @@
 //! MTP storage backend. NAND/LittleFS enumeration is completed before the
 //! OTG_HS device is connected to the host, so it cannot starve MTP servicing.
 
-use core::sync::atomic::{AtomicU32, Ordering};
-use littlefs2::fs::Filesystem;
+use core::mem::MaybeUninit;
+use core::ptr::{addr_of, addr_of_mut};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use littlefs2::fs::{File, FileAllocation, Filesystem};
+use littlefs2::io::{Read, Seek, SeekFrom};
 
 use crate::dhara_fs::DharaStorage;
 
@@ -12,6 +15,28 @@ const FILE_NAME: &[u8] = b"readme.txtx";
 const FILE_CONTENT: &[u8] = b"test MTP";
 const MAX_REAL_FILES: usize = 25;
 const MAX_NAME: usize = 127;
+
+// littlefs2 retains pointers to its Allocation and Storage for the lifetime
+// of the mounted filesystem. These objects therefore live at fixed addresses
+// for the entire MTP device lifetime and are never moved after initialization.
+type MtpFilesystem = Filesystem<'static, DharaStorage>;
+type MtpFile = File<'static, 'static, DharaStorage>;
+
+static mut NAND_STORAGE: MaybeUninit<DharaStorage> = MaybeUninit::uninit();
+static mut FS_ALLOCATION: MaybeUninit<littlefs2::fs::Allocation<DharaStorage>> =
+    MaybeUninit::uninit();
+static mut FILESYSTEM: MaybeUninit<MtpFilesystem> = MaybeUninit::uninit();
+static mut FILE_ALLOCATION: MaybeUninit<FileAllocation<DharaStorage>> =
+    MaybeUninit::uninit();
+static mut OPEN_FILE: MaybeUninit<MtpFile> = MaybeUninit::uninit();
+
+// 0 = not initialized, 1 = mounted, 2 = initialization failed.
+// Initialization and all filesystem operations run only in the MTP main loop.
+static FILESYSTEM_STATE: AtomicU8 = AtomicU8::new(0);
+static FILE_OPEN: AtomicBool = AtomicBool::new(false);
+static CLOSE_FILE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static ACTIVE_HANDLE: AtomicU32 = AtomicU32::new(0);
+static NEXT_FILE_OFFSET: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy)]
 struct Object {
@@ -29,10 +54,79 @@ const EMPTY_OBJECT: Object = Object {
 static OBJECT_COUNT: AtomicU32 = AtomicU32::new(1);
 static mut OBJECTS: [Object; MAX_REAL_FILES] = [EMPTY_OBJECT; MAX_REAL_FILES];
 
-/// Build the MTP object table with the same root-file enumerator used by F2.
+/// Mount LittleFS once and keep its storage and allocation at stable addresses.
+/// The explicit 'static references are valid because these statics are never
+/// moved, reinitialized, or accessed outside this single-threaded MTP backend.
+fn ensure_filesystem() -> bool {
+    match FILESYSTEM_STATE.load(Ordering::Acquire) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
+
+    let storage = match DharaStorage::new_mtp() {
+        Ok(storage) => storage,
+        Err(_) => {
+            FILESYSTEM_STATE.store(2, Ordering::Release);
+            return false;
+        }
+    };
+
+    unsafe {
+        let storage_ptr = addr_of_mut!(NAND_STORAGE).cast::<DharaStorage>();
+        storage_ptr.write(storage);
+
+        let allocation_ptr =
+            addr_of_mut!(FS_ALLOCATION).cast::<littlefs2::fs::Allocation<DharaStorage>>();
+        allocation_ptr.write(Filesystem::<DharaStorage>::allocate());
+
+        // SAFETY: both backing objects are static, initialized above, and are
+        // never moved or mutably accessed except through this Filesystem.
+        let storage_ref: &'static mut DharaStorage = &mut *storage_ptr;
+        let allocation_ref: &'static mut littlefs2::fs::Allocation<DharaStorage> =
+            &mut *allocation_ptr;
+
+        match Filesystem::mount(allocation_ref, storage_ref) {
+            Ok(filesystem) => {
+                addr_of_mut!(FILESYSTEM)
+                    .cast::<MtpFilesystem>()
+                    .write(filesystem);
+                FILESYSTEM_STATE.store(1, Ordering::Release);
+                true
+            }
+            Err(_) => {
+                FILESYSTEM_STATE.store(2, Ordering::Release);
+                false
+            }
+        }
+    }
+}
+
+/// Close the current file exactly once. Called only from MTP main-loop context,
+/// never from a USB callback or interrupt.
+fn close_active_file() {
+    if !FILE_OPEN.swap(false, Ordering::AcqRel) {
+        return;
+    }
+
+    ACTIVE_HANDLE.store(0, Ordering::Release);
+    NEXT_FILE_OFFSET.store(0, Ordering::Release);
+
+    // SAFETY: FILE_OPEN was atomically cleared above, so this is the unique
+    // move of the initialized File out of its static slot. File::close consumes
+    // it and removes its node from littlefs's internal open-file list.
+    let file: MtpFile = unsafe {
+        addr_of!(OPEN_FILE)
+            .cast::<MtpFile>()
+            .read()
+    };
+    let _ = unsafe { file.close() };
+}
+
+/// Build the MTP object list with the same root-file enumerator used by F2.
 /// MTP includes every regular root file and also records its size.
 pub fn prepare_storage() {
-    let objects = unsafe { &mut *core::ptr::addr_of_mut!(OBJECTS) };
+    let objects = unsafe { &mut *addr_of_mut!(OBJECTS) };
     let mut count = 0usize;
     let result = crate::nand_fs::enumerate_root_files(
         MAX_REAL_FILES,
@@ -53,6 +147,10 @@ pub fn prepare_storage() {
     } else {
         OBJECT_COUNT.store(1, Ordering::Release);
     }
+
+    // Warm the persistent mount before OTG_HS is connected. If mounting fails,
+    // the device can still enumerate and expose the synthetic diagnostic file.
+    let _ = ensure_filesystem();
 }
 
 /// OpenSession refresh is intentionally a no-op: the object table was prepared
@@ -62,8 +160,18 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
     true
 }
 
-/// No storage work is scheduled after USB device initialization.
-pub fn service_background() {}
+/// Drain deferred file-close requests raised by MTP completion/cancel/reset
+/// callbacks. No LittleFS operation is performed in those USB callbacks.
+pub fn service_background() {
+    if CLOSE_FILE_REQUESTED.swap(false, Ordering::AcqRel) {
+        close_active_file();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_mtp_end_object_read() {
+    CLOSE_FILE_REQUESTED.store(true, Ordering::Release);
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_object_count() -> u32 {
@@ -88,7 +196,7 @@ pub extern "C" fn xcore_mtp_object_info(
     let (name, size): (&[u8], u32) = if handle == count as u32 {
         (FILE_NAME, FILE_CONTENT.len() as u32)
     } else if handle >= 1 && (handle as usize) <= count.saturating_sub(1) {
-        let objects = unsafe { &*core::ptr::addr_of!(OBJECTS) };
+        let objects = unsafe { &*addr_of!(OBJECTS) };
         let object = &objects[handle as usize - 1];
         (&object.name[..object.name_len as usize], object.size)
     } else {
@@ -106,7 +214,8 @@ pub extern "C" fn xcore_mtp_object_info(
     true
 }
 
-/// Read one bounded chunk from either a real root file or the synthetic test object.
+/// Read a bounded chunk. A real file is opened and positioned only for the
+/// first chunk, then read sequentially until the MTP transfer completes.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_read_object_chunk(
     handle: u32, offset: u32, destination: *mut u8, capacity: u32,
@@ -132,43 +241,78 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
     if handle == 0 || handle >= object_count || handle as usize > MAX_REAL_FILES {
         return -1;
     }
-    let objects = unsafe { &*core::ptr::addr_of!(OBJECTS) };
+    let objects = unsafe { &*addr_of!(OBJECTS) };
     let object = &objects[handle as usize - 1];
     let size = object.size as usize;
-    if offset as usize > size {
-        return -1;
+    if offset as usize > size || destination.is_null() {
+        return if offset as usize == size { 0 } else { -1 };
     }
     let count = (size - offset as usize).min(capacity as usize);
     if count == 0 {
         return 0;
     }
-    if destination.is_null() {
+    if !ensure_filesystem() {
         return -1;
     }
 
-    let name = match core::str::from_utf8(&object.name[..object.name_len as usize]) {
-        Ok(name) => name,
-        Err(_) => return -1,
-    };
-    let relative_path = match littlefs2::path::PathBuf::try_from(name) {
-        Ok(path) => path,
-        Err(_) => return -1,
-    };
-    let full_path = littlefs2::path!("/").join(relative_path.as_path());
-    let output = unsafe { core::slice::from_raw_parts_mut(destination, count) };
+    if FILE_OPEN.load(Ordering::Acquire) {
+        if ACTIVE_HANDLE.load(Ordering::Acquire) != handle
+            || NEXT_FILE_OFFSET.load(Ordering::Acquire) != offset
+        {
+            close_active_file();
+            return -1;
+        }
+    } else {
+        let name = match core::str::from_utf8(&object.name[..object.name_len as usize]) {
+            Ok(name) => name,
+            Err(_) => return -1,
+        };
+        let relative_path = match littlefs2::path::PathBuf::try_from(name) {
+            Ok(path) => path,
+            Err(_) => return -1,
+        };
+        let full_path = littlefs2::path!("/").join(relative_path.as_path());
 
-    let mut storage = match DharaStorage::new_mtp() {
-        Ok(storage) => storage,
-        Err(_) => return -1,
-    };
-    match Filesystem::<DharaStorage>::mount_and_then(&mut storage, |fs| {
-        fs.open_file_and_then(&full_path, |file| {
-            littlefs2::io::Seek::seek(file, littlefs2::io::SeekFrom::Start(offset))?;
-            littlefs2::io::Read::read(file, output)
-        })
-    }) {
-        Ok(read) if read == count => read as i32,
-        _ => -1,
+        // SAFETY: the mounted filesystem is static and remains alive for the
+        // device lifetime. The file allocation is static and is not reused
+        // until the previous File has been explicitly closed.
+        let filesystem: &'static MtpFilesystem =
+            unsafe { &*addr_of!(FILESYSTEM).cast::<MtpFilesystem>() };
+        let allocation_ptr =
+            addr_of_mut!(FILE_ALLOCATION).cast::<FileAllocation<DharaStorage>>();
+        unsafe { allocation_ptr.write(FileAllocation::new()); }
+        let allocation: &'static mut FileAllocation<DharaStorage> =
+            unsafe { &mut *allocation_ptr };
+
+        let file = match unsafe { File::open(filesystem, allocation, full_path.as_path()) } {
+            Ok(file) => file,
+            Err(_) => return -1,
+        };
+        if file.seek(SeekFrom::Start(offset as u64)).is_err() {
+            let _ = unsafe { file.close() };
+            return -1;
+        }
+
+        unsafe {
+            addr_of_mut!(OPEN_FILE).cast::<MtpFile>().write(file);
+        }
+        ACTIVE_HANDLE.store(handle, Ordering::Release);
+        NEXT_FILE_OFFSET.store(offset, Ordering::Release);
+        FILE_OPEN.store(true, Ordering::Release);
+    }
+
+    let output = unsafe { core::slice::from_raw_parts_mut(destination, count) };
+    // SAFETY: FILE_OPEN guarantees that OPEN_FILE contains the one live File.
+    let file = unsafe { &*addr_of!(OPEN_FILE).cast::<MtpFile>() };
+    match file.read(output) {
+        Ok(read) if read == count => {
+            NEXT_FILE_OFFSET.store(offset + read as u32, Ordering::Release);
+            read as i32
+        }
+        _ => {
+            close_active_file();
+            -1
+        }
     }
 }
 
@@ -178,7 +322,7 @@ pub extern "C" fn xcore_mtp_find_object(name: *const u8, name_len: u32) -> u32 {
     let bytes = unsafe { core::slice::from_raw_parts(name, name_len as usize) };
     let count = OBJECT_COUNT.load(Ordering::Acquire) as usize;
     if bytes == FILE_NAME { return count as u32; }
-    let objects = unsafe { &*core::ptr::addr_of!(OBJECTS) };
+    let objects = unsafe { &*addr_of!(OBJECTS) };
     for index in 0..count.saturating_sub(1).min(MAX_REAL_FILES) {
         let object = &objects[index];
         if bytes == &object.name[..object.name_len as usize] {
