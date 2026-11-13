@@ -187,6 +187,13 @@ fn main() -> ! {
     }
     while prepare_next_video_batch(&mut video_renderer) {}
 
+    // Prepare the MTP object table before connecting the OTG_HS device.
+    // NAND/LittleFS may take time, but the host cannot begin MTP discovery
+    // until TinyUSB initializes the device and enables the connection.
+    if boot_mode == keyboard::BOOT_SELECTION_MTP {
+        xcore407i_blinker::mtp_storage::prepare_storage();
+    }
+
     // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
     // independently initialized on rhport 0.
     device.RCC.ahb1enr().modify(|_, w| {
