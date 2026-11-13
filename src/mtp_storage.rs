@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use littlefs2::io::prelude::{Read, Seek, Write};
 
-const MAX_NAME: usize = 240;
+const MAX_NAME: usize = 220;
 
 #[derive(Clone, Copy)]
 struct MtpFile {
