@@ -105,6 +105,7 @@ static int32_t open_close_session(tud_mtp_cb_data_t *cb_data) {
     return MTP_RESP_SESSION_NOT_OPEN;
   }
   session_open = false;
+  xcore_mtp_close_file();
   return MTP_RESP_OK;
 }
 
@@ -469,6 +470,7 @@ void xcore_tud_mtp_reset_session(void) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
+  xcore_mtp_close_file();
 }
 
 bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
@@ -481,6 +483,7 @@ bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
+  xcore_mtp_close_file();
   return true;
 }
 
@@ -495,6 +498,7 @@ bool tud_mtp_request_device_reset_cb(tud_mtp_request_cb_data_t *cb_data) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
+  xcore_mtp_close_file();
   return true;
 }
 
