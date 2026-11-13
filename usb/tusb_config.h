@@ -51,6 +51,7 @@
 // The 24 kHz stream normally sends three mono 16-bit samples (6 bytes) per HS microframe.
 #define CFG_TUD_AUDIO 0
 #define CFG_TUD_CDC 1
+#define CFG_TUD_CDC_NOTIFY 1
 #define CFG_TUD_CDC_TX_BUFSIZE 128
 #define CFG_TUD_CDC_RX_BUFSIZE 128
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
