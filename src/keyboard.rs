@@ -187,7 +187,9 @@ pub extern "C" fn tuh_hid_report_received_cb(
                 // Do not forward the boot-selection report. In particular, F10
                 // must not become an emulator key when normal mode is selected.
                 unsafe {
-                    PREVIOUS_KEYS.copy_from_slice(&bytes[2..8]);
+                    let mut keys = [0u8; 6];
+                    keys.copy_from_slice(&bytes[2..8]);
+                    PREVIOUS_KEYS = keys;
                     PREVIOUS_MODIFIERS = bytes[0];
                 }
             }
@@ -199,7 +201,9 @@ pub extern "C" fn tuh_hid_report_received_cb(
             // Ignore all keyboard input in MTP/error startup modes and while
             // the emulator is still being initialized.
             unsafe {
-                PREVIOUS_KEYS.copy_from_slice(&bytes[2..8]);
+                let mut keys = [0u8; 6];
+                keys.copy_from_slice(&bytes[2..8]);
+                PREVIOUS_KEYS = keys;
                 PREVIOUS_MODIFIERS = bytes[0];
             }
         }
