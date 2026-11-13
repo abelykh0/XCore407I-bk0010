@@ -148,9 +148,9 @@ pub fn prepare_storage() {
         OBJECT_COUNT.store(1, Ordering::Release);
     }
 
-    // Warm the persistent mount before OTG_HS is connected. If mounting fails,
-    // the device can still enumerate and expose the synthetic diagnostic file.
-    let _ = ensure_filesystem();
+    // Do not mount LittleFS here: prepare_storage() runs before USB
+    // initialization, and a NAND mount must never delay MTP enumeration.
+    // The persistent mount is initialized lazily on the first GetObject read.
 }
 
 /// OpenSession refresh is intentionally a no-op: the object table was prepared
