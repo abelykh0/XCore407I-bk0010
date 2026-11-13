@@ -5,7 +5,7 @@
 - **Video:** USB UVC, uncompressed NV12, 25 fps.
 - **Audio:** USB Line In.
 - **Input:** USB keyboard connected to the board's host port; required at startup.
-- **Storage:** Samsung K9F1G08U0E 1-Gbit raw NAND, exposed read-only over MTP in the optional startup mode.
+- **Storage:** Samsung K9F1G08U0E 1-Gbit raw NAND, accessible for file upload and readback over MTP in the optional startup mode.
 
 [Video demo](https://www.youtube.com/watch?v=IPjBy6mAeOw)
 
@@ -28,11 +28,14 @@ emulator does not start.
   configuration.
 - **MTP mode:** hold F10 while powering on. The emulator and audio are disabled;
   the UVC camera shows a generated **PC CONNECT** screen and the device exposes
-  a read-only MTP interface for files in the LittleFS root directory. MTP is
+  a read/write MTP interface for files in the LittleFS root directory. MTP is
   absent from normal-mode enumeration.
 
-The current MTP view is bounded to 16 root files and supports object reads up
-to 80,128 bytes. It does not modify or format NAND.
+MTP uploads are streamed in USB-sized chunks directly into a temporary file on
+the existing LittleFS volume. The destination file is replaced only after the
+transfer completes successfully. Object reads are streamed from NAND as well;
+there is no fixed 16-file table or 80,128-byte RAM staging limit. Available NAND
+space is the practical storage limit. MTP does not format or reinitialize NAND.
 
 ## Implementation
 
@@ -43,8 +46,8 @@ In normal mode, rows are generated incrementally from the emulator's canvas; a
 complete video frame is never buffered in RAM. Two small SRAM buffers decouple
 rendering in the main loop from high-speed USB isochronous transfers. The stream
 runs at 25 fps over TinyUSB's high-speed device port. MTP mode instead generates
-a fixed PC CONNECT frame without reading the emulator canvas; that unused SRAM
-region also provides the MTP object-transfer workspace.
+a fixed PC CONNECT frame without reading the emulator canvas. MTP object data
+is read from and written to LittleFS in bounded chunks.
 
 ### Audio
 
@@ -111,7 +114,7 @@ cargo build --release --target thumbv7em-none-eabihf --features cpu-cycle-diag
 
 ## TODO
 
-- Expand MTP support beyond the current read-only, root-only view.
+- Add MTP directory and file-management operations.
 - Improve music playback performance.
 - Complete keyboard support (СУ, АР2).
 - Add file deletion and improve file management.
