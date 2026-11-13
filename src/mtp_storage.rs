@@ -7,23 +7,8 @@ const STORAGE_TOTAL: u32 = 80 * 1024 * 1024;
 const STORAGE_FREE: u32 = 70 * 1024 * 1024;
 const FILE_NAME: &[u8] = b"readme.txtx";
 const FILE_CONTENT: &[u8] = b"test MTP";
-const MAX_REAL_FILES: usize = 25;
-
-#[derive(Clone, Copy)]
-struct Object {
-    name: [u8; 127],
-    name_len: u8,
-    size: u32,
-}
-
-const EMPTY_OBJECT: Object = Object {
-    name: [0; 127],
-    name_len: 0,
-    size: 0,
-};
 
 static OBJECT_COUNT: AtomicU32 = AtomicU32::new(1);
-static mut OBJECTS: [Object; MAX_REAL_FILES] = [EMPTY_OBJECT; MAX_REAL_FILES];
 
 /// Request a refresh. The diagnostic build intentionally exposes only the
 /// synthetic object so NAND/LittleFS scanning cannot delay TinyUSB task work.
