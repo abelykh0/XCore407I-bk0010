@@ -37,7 +37,7 @@ pub fn prepare_storage() {
     let result = crate::nand_fs::enumerate_root_files(
         MAX_REAL_FILES,
         true,
-        |name| name != FILE_NAME,
+        |name| name.len() <= MAX_NAME && name != FILE_NAME,
         |path, size| {
             let name = &path[1..path.len() - 1];
             let object = &mut objects[count];
