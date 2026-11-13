@@ -329,6 +329,18 @@ impl DharaStorage {
     }
 
     pub fn new() -> Result<Self, crate::nand_fs::InitError> {
+        Self::new_with_bad_block_scan(true)
+    }
+
+    /// MTP only needs a valid resumed Dhara map; the factory-marker count is
+    /// diagnostic data and scanning all 1,024 blocks would delay the host.
+    pub fn new_mtp() -> Result<Self, crate::nand_fs::InitError> {
+        Self::new_with_bad_block_scan(false)
+    }
+
+    fn new_with_bad_block_scan(
+        scan_bad_blocks: bool,
+    ) -> Result<Self, crate::nand_fs::InitError> {
         if STORAGE_READY.load(Ordering::Acquire) {
             return Ok(Self {
                 factory_bad_blocks: FACTORY_BAD_BLOCKS.load(Ordering::Relaxed),
@@ -383,7 +395,7 @@ impl DharaStorage {
         if !resumed {
             let _ = dhara_error;
             return Err(crate::nand_fs::InitError::DharaNoJournal);
-        } else {
+        } else if scan_bad_blocks {
             for block in 0..PHYSICAL_BLOCKS {
                 match block_is_bad(block) {
                     Ok(true) => bad_blocks = bad_blocks.saturating_add(1),
