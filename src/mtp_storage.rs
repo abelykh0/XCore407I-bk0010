@@ -152,7 +152,7 @@ fn open_or_seek_active_file(handle: u32, offset: u32) -> bool {
 
     if NEXT_FILE_OFFSET.load(Ordering::Acquire) != offset {
         let file = unsafe { (&*core::ptr::addr_of!(MTP_FILE)).assume_init_ref() };
-        if littlefs2::io::Seek::seek(file, littlefs2::io::SeekFrom::Start(offset as u64)).is_err() {
+        if littlefs2::io::Seek::seek(file, littlefs2::io::SeekFrom::Start(offset)).is_err() {
             close_active_file();
             return false;
         }
