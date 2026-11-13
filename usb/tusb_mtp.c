@@ -467,6 +467,11 @@ static bool parse_upload_object_info(void) {
   send_object_info_params[0] = MTP_STORAGE_ID;
   send_object_info_params[1] = 0;
   send_object_info_params[2] = xcore_mtp_find_object(filename, filename_len);
+  if (send_object_info_params[2] == 0) {
+    xcore_mtp_abort_upload();
+    upload_info_valid = false;
+    return false;
+  }
   return true;
 }
 
