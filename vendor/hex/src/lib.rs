@@ -37,6 +37,7 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec, vec::Vec};
 
+use core::prelude::v1::*;
 use core::iter;
 
 mod error;
