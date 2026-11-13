@@ -344,7 +344,7 @@ impl Default for UvcClass {
     }
 }
 
-const fn make_stream_control() -> [u8; PROBE_LENGTH] {
+fn make_stream_control() -> [u8; PROBE_LENGTH] {
     let mut d = [0u8; PROBE_LENGTH];
     d[2] = 1; // bFormatIndex
     d[3] = 1; // bFrameIndex
