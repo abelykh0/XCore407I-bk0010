@@ -311,6 +311,7 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
           object_read_offset = active_object_offset + sent;
           object_read_count = count;
           object_read_failed = false;
+          object_read_ready = false;
           __asm volatile ("" ::: "memory");
           object_read_pending = true;
           response = 0;
@@ -475,6 +476,7 @@ bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
   active_object_length = 0;
   object_read_pending = false;
   object_read_failed = false;
+  object_read_ready = false;
   return true;
 }
 
