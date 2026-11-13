@@ -52,6 +52,8 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
                 }
                 let name = &bytes[1..bytes.len() - 1];
                 if name.is_empty()
+                    || name == b"."
+                    || name == b".."
                     || name.len() > MAX_NAME
                     || !name.iter().all(|byte| {
                         byte.is_ascii_alphanumeric()
