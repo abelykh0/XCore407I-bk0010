@@ -5,6 +5,7 @@ mod board;
 mod file_browser;
 mod keyboard;
 mod keyboard_map;
+mod mtp_storage;
 mod usb_host;
 
 use core::ptr;
@@ -166,8 +167,9 @@ fn main() -> ! {
             clear_demo_canvas(0x10);
         }
         keyboard::BOOT_SELECTION_MTP => {
-            clear_demo_canvas(0x10);
-            show_usb_status(b"PC CONNECT");
+            // The canvas SRAM is reserved as the MTP transfer workspace in
+            // this mode; the UVC renderer generates its status frame directly.
+            let _ = mtp_storage::xcore_mtp_refresh();
         }
         keyboard::BOOT_SELECTION_TIMEOUT => {
             clear_demo_canvas(0x10);
@@ -180,6 +182,9 @@ fn main() -> ! {
     // consume prepared batches from the OTG_HS device interrupt.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
+    if boot_mode == keyboard::BOOT_SELECTION_MTP {
+        video_renderer.set_pc_connect_screen();
+    }
     while prepare_next_video_batch(&mut video_renderer) {}
 
     // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
