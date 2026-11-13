@@ -18,6 +18,7 @@ extern bool xcore_mtp_object_info(uint32_t handle, uint16_t *name,
                                   uint32_t max_name_units, uint32_t *size);
 extern int32_t xcore_mtp_read_object_chunk(uint32_t handle, uint32_t offset,
                                             uint8_t *destination, uint32_t capacity);
+extern uint32_t xcore_mtp_find_object(const uint8_t *name, uint32_t name_len);
 extern bool xcore_mtp_begin_upload(const uint8_t *name, uint32_t name_len, uint32_t expected_size);
 extern bool xcore_mtp_write_upload_chunk(uint32_t offset, const uint8_t *data, uint32_t len);
 extern bool xcore_mtp_finish_upload(void);
@@ -428,7 +429,7 @@ static bool parse_upload_object_info(void) {
   memcpy(&storage_id, upload_info + 0, sizeof(storage_id));
   memcpy(&object_format, upload_info + 4, sizeof(object_format));
   memcpy(&object_size, upload_info + 8, sizeof(object_size));
-  memcpy(&parent, upload_info + 42, sizeof(parent));
+  memcpy(&parent, upload_info + 38, sizeof(parent));
   if (storage_id != MTP_STORAGE_ID || parent != 0 || object_format == MTP_OBJ_FORMAT_ASSOCIATION) {
     return false;
   }
@@ -466,7 +467,7 @@ static bool parse_upload_object_info(void) {
   upload_info_valid = true;
   send_object_info_params[0] = MTP_STORAGE_ID;
   send_object_info_params[1] = 0;
-  send_object_info_params[2] = xcore_mtp_object_count() + 1u;
+  send_object_info_params[2] = xcore_mtp_find_object(filename, filename_len);
   return true;
 }
 
