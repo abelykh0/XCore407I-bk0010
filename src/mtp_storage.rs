@@ -201,10 +201,11 @@ pub extern "C" fn xcore_mtp_find_object(name: *const u8, name_len: u32) -> u32 {
     }
     let count = FILE_COUNT.load(Ordering::Acquire);
     for index in 0..count {
-        if let Ok(Some(file)) = file_at(index) {
-            if file.name_len == bytes.len() && &file.name[..file.name_len] == bytes {
-                return index + 1;
-            }
+        match file_at(index) {
+            Ok(Some(file)) if file.name_len == bytes.len()
+                && &file.name[..file.name_len] == bytes => return index + 1,
+            Ok(_) => {}
+            Err(_) => return 0,
         }
     }
     count.saturating_add(1)
