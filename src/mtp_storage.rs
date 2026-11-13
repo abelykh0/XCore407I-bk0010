@@ -4,8 +4,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use littlefs2::fs::Filesystem;
 
-use crate::camera::show_usb_status;
-
 use crate::dhara_fs::DharaStorage;
 
 const STORAGE_TOTAL: u32 = 80 * 1024 * 1024;
@@ -159,34 +157,18 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
     let full_path = littlefs2::path!("/").join(relative_path.as_path());
     let output = unsafe { core::slice::from_raw_parts_mut(destination, count) };
 
-    // MTP-only diagnostic: the camera preview shows the last storage stage
-    // reached, making a blocking NAND/LittleFS operation distinguishable.
-    show_usb_status(b"MTP READ: NAND");
     let mut storage = match DharaStorage::new_mtp() {
         Ok(storage) => storage,
-        Err(_) => {
-            show_usb_status(b"MTP NAND FAILED");
-            return -1;
-        }
+        Err(_) => return -1,
     };
-    show_usb_status(b"MTP READ: MOUNT");
     match Filesystem::<DharaStorage>::mount_and_then(&mut storage, |fs| {
-        show_usb_status(b"MTP READ: OPEN");
         fs.open_file_and_then(&full_path, |file| {
-            show_usb_status(b"MTP READ: SEEK");
             littlefs2::io::Seek::seek(file, littlefs2::io::SeekFrom::Start(offset))?;
-            show_usb_status(b"MTP READ: READ");
             littlefs2::io::Read::read(file, output)
         })
     }) {
-        Ok(read) if read == count => {
-            show_usb_status(b"MTP READ: DONE");
-            read as i32
-        }
-        _ => {
-            show_usb_status(b"MTP READ FAILED");
-            -1
-        }
+        Ok(read) if read == count => read as i32,
+        _ => -1,
     }
 }
 
