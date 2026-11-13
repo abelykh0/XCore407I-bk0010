@@ -333,6 +333,21 @@ pub fn with_mounted_detailed<R>(
     mounted.map_err(|_| FsAccessError::Operation)
 }
 
+/// Read the real LittleFS capacity and free space for MTP.
+///
+/// Uses the MTP-specific Dhara initializer, which skips the full factory
+/// bad-block diagnostic scan. This mounts the existing volume read-only;
+/// it does not format the volume or create/modify files.
+pub fn mtp_storage_stats() -> Result<(u32, u32), FsAccessError> {
+    let mut storage = ActiveStorage::new_mtp().map_err(FsAccessError::Init)?;
+    let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
+        let free = fs.available_space()?;
+        Ok((fs.total_space() as u32, free as u32))
+    })
+    .map_err(|error| FsAccessError::Mount(error.code()))?;
+    mounted.map_err(|_| FsAccessError::Operation)
+}
+
 /// Compatibility wrapper for existing callers that only need success/failure.
 pub fn with_mounted<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
