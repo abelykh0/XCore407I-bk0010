@@ -28,7 +28,7 @@ static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
 // Startup mode is latched from the first valid boot-keyboard report.
 pub(crate) const BOOT_SELECTION_WAITING: u8 = 0;
 pub(crate) const BOOT_SELECTION_NORMAL: u8 = 1;
-pub(crate) const BOOT_SELECTION_MTP: u8 = 2;
+pub(crate) const BOOT_SELECTION_CDC: u8 = 2;
 pub(crate) const BOOT_SELECTION_TIMEOUT: u8 = 3;
 static BOOT_SELECTION: AtomicU8 = AtomicU8::new(BOOT_SELECTION_WAITING);
 static EMULATOR_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
