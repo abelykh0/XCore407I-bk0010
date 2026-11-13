@@ -169,7 +169,8 @@ fn main() -> ! {
         keyboard::BOOT_SELECTION_MTP => {
             // The canvas SRAM is reserved as the MTP transfer workspace in
             // this mode; the UVC renderer generates its status frame directly.
-            let _ = mtp_storage::xcore_mtp_refresh();
+            // TEMPORARY ENUMERATION ISOLATION: skip the pre-USB LittleFS scan.
+            // Restore MTP storage refresh after the MTP-mode USB startup issue is isolated.
         }
         keyboard::BOOT_SELECTION_TIMEOUT => {
             clear_demo_canvas(0x10);
