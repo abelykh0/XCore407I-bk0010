@@ -22,6 +22,7 @@ extern bool xcore_mtp_begin_upload(const uint8_t *name, uint32_t name_len, uint3
 extern bool xcore_mtp_write_upload_chunk(uint32_t offset, const uint8_t *data, uint32_t len);
 extern bool xcore_mtp_finish_upload(void);
 extern void xcore_mtp_abort_upload(void);
+extern void xcore_mtp_close_file(void);
 
 typedef MTP_STORAGE_INFO_STRUCT(6, 5) xcore_mtp_storage_info_t;
 
