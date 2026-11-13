@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 const MAX_OBJECTS: usize = 16;
 const MAX_NAME: usize = 64;
-const MTP_READ_LIMIT: usize = 4_084;
+const MTP_READ_LIMIT: usize = xcore407i_blinker::camera::CANVAS_MAIN_BYTES - 1_024;
 
 #[derive(Clone, Copy)]
 struct MtpFile {
