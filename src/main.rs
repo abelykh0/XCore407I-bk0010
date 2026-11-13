@@ -218,12 +218,6 @@ fn main() -> ! {
         NVIC::unmask(interrupt::OTG_HS);
     }
 
-    // Build the MTP object listing only after USB servicing is live. The
-    // OTG_HS interrupt remains enabled while LittleFS scans the NAND.
-    if boot_mode == keyboard::BOOT_SELECTION_MTP {
-        let _ = xcore407i_blinker::mtp_storage::xcore_mtp_refresh();
-    }
-
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
     let mut browser_count = 0usize;
