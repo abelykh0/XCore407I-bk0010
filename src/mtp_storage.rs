@@ -269,7 +269,7 @@ pub extern "C" fn xcore_mtp_write_upload_chunk(offset: u32, data: *const u8, len
             |options| options.write(true),
             &littlefs2::path!("/.mtp-upload.tmp"),
             |file| {
-                file.seek(littlefs2::io::SeekFrom::Start(offset as u64))?;
+                file.seek(littlefs2::io::SeekFrom::Start(offset))?;
                 file.write_all(input)?;
                 file.flush()
             },
