@@ -119,7 +119,9 @@ pub const CANVAS_MAIN_BYTES: usize = CANVAS_BYTES - CANVAS_TAIL_BYTES;
 /// renderer never reads the canvas while this pointer is in use.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_workspace() -> *mut u8 {
-    core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>()
+    // Access the mutable static only to form a raw pointer; callers must ensure
+    // exclusive access while the MTP workspace is active.
+    unsafe { core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>() }
 }
 
 #[repr(C, align(4))]
