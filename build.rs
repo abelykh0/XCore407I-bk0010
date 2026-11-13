@@ -143,6 +143,10 @@ fn main() {
         // must remain declared. Make it opaque rather than blocklisting it;
         // this preserves the Rust type name while avoiding its invalid layout.
         .opaque_type("video_probe_and_commit_control_t__bindgen_ty_1__bindgen_ty_1")
+        // CDC's telephone call-state descriptor has the same packed/align
+        // bindgen conflict through its anonymous 32-bit bitfield struct.
+        // The application does not inspect this descriptor type.
+        .opaque_type("cdc_desc_func_telephone_call_state_reporting_capabilities_t")
         .clang_args(&[
             "-target",
             &target,
