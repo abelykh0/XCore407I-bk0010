@@ -10,10 +10,10 @@ use crate::uvc::{
     ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
 };
 
-const CONFIGURATION_DESCRIPTOR_LEN: usize = 230;
+const CDC_CONFIGURATION_DESCRIPTOR_LEN: usize = 230;
 
-const fn push_u8(
-    descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
+const fn push_u8<const N: usize>(
+    descriptor: &mut [u8; N],
     offset: &mut usize,
     value: u8,
 ) {
@@ -21,7 +21,7 @@ const fn push_u8(
     *offset += 1;
 }
 
-const fn push_u16(
+const fn push_u16<const N: usize>(
     descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
     offset: &mut usize,
     value: u16,
@@ -30,7 +30,7 @@ const fn push_u16(
     push_u8(descriptor, offset, (value >> 8) as u8);
 }
 
-const fn push_u32(
+const fn push_u32<const N: usize>(
     descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
     offset: &mut usize,
     value: u32,
@@ -41,7 +41,7 @@ const fn push_u32(
     push_u8(descriptor, offset, (value >> 24) as u8);
 }
 
-const fn push_bytes(
+const fn push_bytes<const N: usize>(
     descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
     offset: &mut usize,
     bytes: &[u8],
@@ -53,8 +53,8 @@ const fn push_bytes(
     }
 }
 
-const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] {
-    let mut descriptor = [0u8; CONFIGURATION_DESCRIPTOR_LEN];
+const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPTOR_LEN] {
+    let mut descriptor = [0u8; CDC_CONFIGURATION_DESCRIPTOR_LEN];
     let mut offset = 0usize;
 
     // Configuration header: 4 interfaces, bus-powered, 100 mA.
@@ -118,11 +118,90 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
         7, 0x05, 0x83, 0x02, 0x00, 0x02, 0,
     ]);
 
-    if offset != CONFIGURATION_DESCRIPTOR_LEN {
+    if offset != CDC_CONFIGURATION_DESCRIPTOR_LEN {
         panic!("TinyUSB configuration descriptor length mismatch");
     }
     descriptor
 }
+
+const NORMAL_CONFIGURATION_DESCRIPTOR_LEN: usize = 290;
+
+const fn build_normal_configuration_descriptor() -> [u8; NORMAL_CONFIGURATION_DESCRIPTOR_LEN] {
+    let mut descriptor = [0u8; NORMAL_CONFIGURATION_DESCRIPTOR_LEN];
+    let mut offset = 0usize;
+
+    // Configuration header: 4 interfaces, bus-powered, 100 mA.
+    push_bytes(&mut descriptor, &mut offset, &[
+        9, 0x02, 0x22, 0x01, 4, 1, 0, 0x80, 50,
+    ]);
+
+    // UVC IAD and VideoControl interface.
+    push_bytes(&mut descriptor, &mut offset, &[
+        8, 0x0b, 0, 2, 0x0e, 0x03, 0, 4,
+        9, 0x04, 0, 0, 0, 0x0e, 0x01, 0, 0,
+        13, 0x24, 0x01, 0x10, 0x01, 30, 0, 0, 0x6c, 0xdc, 0x02, 1, 1,
+        8, 0x24, 0x02, 1, 0, 2, 0, 0,
+        9, 0x24, 0x03, 2, 1, 1, 0, 1, 0,
+    ]);
+
+    // UVC VideoStreaming alternate setting 0 and class-specific descriptors.
+    push_bytes(&mut descriptor, &mut offset, &[
+        9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
+        14, 0x24, 0x01, 1, 77, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
+        27, 0x24, 0x04, 1, 1,
+        0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
+        12, 1, 0, 0, 0, 0,
+        30, 0x24, 0x05, 1, 0,
+    ]);
+
+    // UVC frame descriptor: dimensions, bitrates, frame size and interval.
+    push_u16(&mut descriptor, &mut offset, WIDTH as u16);
+    push_u16(&mut descriptor, &mut offset, HEIGHT as u16);
+    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
+    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
+    push_u32(&mut descriptor, &mut offset, FRAME_BYTES);
+    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
+    push_u8(&mut descriptor, &mut offset, 1);
+    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
+
+    // UVC color matching, alternate setting 1, and 3 x 768-byte HS ISO EP1 IN.
+    let uvc_w_max_packet =
+        MAX_PACKET_SIZE | (((ISO_PACKETS_PER_MICROFRAME - 1) as u16) << 11);
+    push_bytes(&mut descriptor, &mut offset, &[
+        6, 0x24, 0x0d, 1, 1, 4,
+        9, 0x04, 1, 1, 1, 0x0e, 0x02, 0, 4,
+        7, 0x05, 0x81, 0x05,
+    ]);
+    push_u16(&mut descriptor, &mut offset, uvc_w_max_packet);
+    push_u8(&mut descriptor, &mut offset, 1);
+
+    // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
+    // The fixed sample rate is reported by the Clock Source GET_CUR/GET_RANGE callback,
+    // which reads the shared AUDIO_KHZ constant from the Rust application.
+    push_bytes(&mut descriptor, &mut offset, &[
+        8, 0x0b, 2, 2, 1, 1, 0x20, 0,
+        9, 0x04, 2, 0, 0, 1, 1, 0x20, 0,
+        9, 0x24, 1, 0, 2, 7, 60, 0, 0,
+        8, 0x24, 0x0a, 1, 1, 5, 0, 0,
+        17, 0x24, 0x02, 2, 0x03, 0x06, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        14, 0x24, 0x06, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        12, 0x24, 0x03, 4, 0x01, 0x01, 0, 3, 1, 0, 0, 0,
+        9, 0x04, 3, 0, 0, 1, 2, 0x20, 0,
+        9, 0x04, 3, 1, 1, 1, 2, 0x20, 0,
+        16, 0x24, 1, 4, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0,
+        6, 0x24, 2, 1, 2, 16,
+        7, 0x05, 0x82, 0x05, 10, 0, 1,
+        8, 0x25, 1, 0, 0, 0, 0, 0,
+    ]);
+
+    if offset != NORMAL_CONFIGURATION_DESCRIPTOR_LEN {
+        panic!("TinyUSB configuration descriptor length mismatch");
+    }
+    descriptor
+}
+
+static NORMAL_CONFIGURATION_DESCRIPTOR: [u8; NORMAL_CONFIGURATION_DESCRIPTOR_LEN] =
+    build_normal_configuration_descriptor();
 
 static DEVICE_DESCRIPTOR: [u8; 18] = [
     18, 0x01, 0x10, 0x02, 0xef, 0x02, 0x01, 64,
@@ -152,8 +231,8 @@ static DEVICE_QUALIFIER_DESCRIPTOR: [u8; 10] = [
     10, 0x06, 0x10, 0x02, 0xef, 0x02, 0x01, 64, 1, 0,
 ];
 
-static mut CONFIGURATION_DESCRIPTOR: [u8; CONFIGURATION_DESCRIPTOR_LEN] =
-    build_configuration_descriptor();
+static mut CDC_CONFIGURATION_DESCRIPTOR: [u8; CDC_CONFIGURATION_DESCRIPTOR_LEN] =
+    build_cdc_configuration_descriptor();
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_cb() -> *const u8 {
@@ -166,11 +245,16 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
         return core::ptr::null();
     }
 
-    // The same composite descriptor serves both startup modes. Update the
-    // frame interval and bitrate before TinyUSB exposes it to the host.
+    // Preserve the original UVC+UAC2 descriptor byte-for-byte in normal mode.
+    // CDC mode uses its separate UVC+CDC configuration.
+    if !crate::uvc::cdc_mode_enabled() {
+        return NORMAL_CONFIGURATION_DESCRIPTOR.as_ptr();
+    }
+
+    // Update only the CDC-mode UVC frame interval and bitrate before enumeration.
     let interval = active_frame_interval_100ns();
     let bitrate = FRAME_BYTES * 8 * active_frame_rate_fps();
-    let descriptor = core::ptr::addr_of_mut!(CONFIGURATION_DESCRIPTOR).cast::<u8>();
+    let descriptor = core::ptr::addr_of_mut!(CDC_CONFIGURATION_DESCRIPTOR).cast::<u8>();
     unsafe {
         for (offset, value) in [
             (121usize, bitrate as u8),
