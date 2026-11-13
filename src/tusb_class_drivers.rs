@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
 use crate::bk_audio::BkEmulatorAudio;
-use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS};
+use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS, FRAME_RATE_FPS};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
@@ -274,15 +274,29 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                         descriptors[offset + 21], descriptors[offset + 22],
                         descriptors[offset + 23], descriptors[offset + 24],
                     ]);
-                    if min_bitrate != FRAME_BIT_RATE
-                        || max_bitrate != FRAME_BIT_RATE
+                    // The composite descriptor advertises 1 FPS in MTP
+                    // mode and retains the original 25 FPS in normal mode.
+                    // Validate against the selected mode rather than rejecting
+                    // the intentionally slower MTP descriptor.
+                    let expected_interval = if crate::tusb_descriptors::is_mtp_mode() {
+                        10_000_000
+                    } else {
+                        FRAME_INTERVAL_100NS
+                    };
+                    let expected_bitrate = if crate::tusb_descriptors::is_mtp_mode() {
+                        FRAME_BIT_RATE / FRAME_RATE_FPS
+                    } else {
+                        FRAME_BIT_RATE
+                    };
+                    if min_bitrate != expected_bitrate
+                        || max_bitrate != expected_bitrate
                         || frame_bytes != crate::camera::FRAME_BYTES as u32
-                        || interval != FRAME_INTERVAL_100NS
+                        || interval != expected_interval
                         || descriptors[offset + 25] != 1
                         || u32::from_le_bytes([
                             descriptors[offset + 26], descriptors[offset + 27],
                             descriptors[offset + 28], descriptors[offset + 29],
-                        ]) != FRAME_INTERVAL_100NS
+                        ]) != expected_interval
                     {
                         return None;
                     }
