@@ -2,7 +2,7 @@
 //! OTG_HS device is connected to the host, so it cannot starve MTP servicing.
 
 use core::sync::atomic::{AtomicU32, Ordering};
-use littlefs2::{fs::Filesystem, io::Result as LfsResult};
+use littlefs2::fs::Filesystem;
 
 use crate::dhara_fs::DharaStorage;
 
