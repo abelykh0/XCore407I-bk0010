@@ -17,7 +17,7 @@ const HELP: &[u8] = b"\r\nCommands:\r\n  HELP     Show this help\r\n  STATUS   S
 const STATUS: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n> ";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
-pub(crate) unsafe fn write_status(bytes: &[u8]) {
+pub(crate) fn write_status(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
