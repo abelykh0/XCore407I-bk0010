@@ -1,5 +1,5 @@
-//! MTP storage backend. The initial MTP session uses a cached synthetic object
-//! list; NAND/LittleFS enumeration is intentionally disabled during discovery.
+//! MTP storage backend. USB discovery starts with a cached synthetic object;
+//! real root files are enumerated after OpenSession using the persistent mount.
 
 use core::mem::MaybeUninit;
 use core::ptr::{addr_of, addr_of_mut};
@@ -47,6 +47,7 @@ static mut OPEN_FILE: MaybeUninit<MtpFile> = MaybeUninit::uninit();
 static FILESYSTEM_STATE: AtomicU8 = AtomicU8::new(0);
 static FILE_OPEN: AtomicBool = AtomicBool::new(false);
 static CLOSE_FILE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE_HANDLE: AtomicU32 = AtomicU32::new(0);
 static NEXT_FILE_OFFSET: AtomicU32 = AtomicU32::new(0);
 
@@ -141,18 +142,78 @@ pub fn prepare_storage() {
     OBJECT_COUNT.store(1, Ordering::Release);
 }
 
-/// Keep OpenSession fast. Root enumeration will be reintroduced separately
-/// once it can run incrementally without starving TinyUSB task servicing.
+/// OpenSession requests a root refresh. Mounting and directory access are
+/// deferred to the MTP main loop, never performed in a TinyUSB callback.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_refresh() -> bool {
+    REFRESH_REQUESTED.store(true, Ordering::Release);
     true
 }
 
-/// Drain only deferred file-close requests. No NAND or LittleFS work is done
-/// during initial MTP discovery in this diagnostic step.
+/// Drain deferred close and root-refresh requests from MTP main-loop context.
+/// Reuse the persistent MTP filesystem: do not construct a second DharaStorage
+/// or run the normal-mode NAND initialization path for directory enumeration.
 pub fn service_background() {
     if CLOSE_FILE_REQUESTED.swap(false, Ordering::AcqRel) {
         close_active_file();
+    }
+
+    if !REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+
+    // Keep the synthetic object available if mounting or enumeration fails.
+    OBJECT_COUNT.store(1, Ordering::Release);
+    if !ensure_filesystem() {
+        return;
+    }
+
+    // SAFETY: the filesystem is initialized once at a stable static address.
+    // All filesystem operations are serialized in this MTP main-loop context.
+    let filesystem: &'static MtpFilesystem =
+        unsafe { &*addr_of!(FILESYSTEM).cast::<MtpFilesystem>() };
+    let mut real_count = 0usize;
+
+    let result = filesystem.read_dir_and_then(&littlefs2::path!("/"), |directory| {
+        for item in directory {
+            let entry = item?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+            let path_bytes = path.as_str_ref_with_trailing_nul().as_bytes();
+            if path_bytes.len() < 3
+                || path_bytes[0] != b'/'
+                || path_bytes.last() != Some(&0)
+                || !path_bytes[..path_bytes.len() - 1]
+                    .iter()
+                    .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+            {
+                continue;
+            }
+
+            let name = &path_bytes[1..path_bytes.len() - 1];
+            if name == FILE_NAME || name.len() > MAX_NAME || real_count >= MAX_REAL_FILES {
+                continue;
+            }
+
+            let size = filesystem.metadata(path)?.len() as u32;
+            // The count remains at one until the whole directory is read, so
+            // TinyUSB can never observe a partially populated object table.
+            let objects = unsafe { &mut *addr_of_mut!(OBJECTS) };
+            let object = &mut objects[real_count];
+            object.name[..name.len()].copy_from_slice(name);
+            object.name_len = name.len() as u8;
+            object.size = size;
+            real_count += 1;
+        }
+        Ok(())
+    });
+
+    if result.is_ok() {
+        // Handles 1..real_count are real files; the synthetic test file is last.
+        OBJECT_COUNT.store(real_count as u32 + 1, Ordering::Release);
     }
 }
 
