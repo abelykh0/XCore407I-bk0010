@@ -359,17 +359,29 @@ pub extern "C" fn xcore_mtp_read_object_chunk(
     }
 
     let output = unsafe { core::slice::from_raw_parts_mut(destination, count) };
+    // Read until the requested range is filled. Read implementations may
+    // legally return fewer bytes than the supplied buffer before EOF.
     // SAFETY: FILE_OPEN guarantees that OPEN_FILE contains the one live File.
-    let file = unsafe { &*addr_of!(OPEN_FILE).cast::<MtpFile>() };
-    match file.read(output) {
-        Ok(read) if read == count => {
-            NEXT_FILE_OFFSET.store(offset + read as u32, Ordering::Release);
-            read as i32
+    let read_result = {
+        let file = unsafe { &*addr_of!(OPEN_FILE).cast::<MtpFile>() };
+        let mut total_read = 0usize;
+        while total_read < count {
+            match file.read(&mut output[total_read..]) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => total_read += read,
+            }
         }
-        _ => {
-            close_active_file();
-            -1
-        }
+        total_read
+    };
+
+    if read_result == count {
+        NEXT_FILE_OFFSET.store(offset + read_result as u32, Ordering::Release);
+        read_result as i32
+    } else {
+        // A zero-length read before the requested file range is complete is
+        // premature EOF; an I/O error is handled the same way.
+        close_active_file();
+        -1
     }
 }
 
