@@ -24,7 +24,8 @@ const UVC_STREAMING_INTERFACE: u8 = 1;
 const UVC_STREAM_ENDPOINT: u8 = 0x81;
 const UVC_MAX_PACKET_SIZE: u16 = 768;
 const UVC_TRANSACTIONS_PER_MICROFRAME: u8 = 3;
-const UVC_VS_TOTAL_LENGTH: u16 = 83;
+const UVC_VS_TOTAL_LENGTH_NORMAL: u16 = 77;
+const UVC_VS_TOTAL_LENGTH_CDC: u16 = 83;
 const UVC_NV12_GUID: [u8; 16] = [
     0x4e, 0x56, 0x31, 0x32, 0x00, 0x00, 0x10, 0x00,
     0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
@@ -227,7 +228,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                     if length != 14
                         || vs_header_seen
                         || descriptors[offset + 3] != 1
-                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != UVC_VS_TOTAL_LENGTH
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != if crate::uvc::cdc_mode_enabled() { UVC_VS_TOTAL_LENGTH_CDC } else { UVC_VS_TOTAL_LENGTH_NORMAL }
                         || descriptors[offset + 6] != UVC_STREAM_ENDPOINT
                         || descriptors[offset + 8] != 2
                         || descriptors[offset + 12] != 1
