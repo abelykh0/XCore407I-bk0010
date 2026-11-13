@@ -55,7 +55,7 @@ unsafe extern "C" {
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
     fn xcore_mtp_service_read_prepare() -> bool;
-    fn xcore_mtp_service_read_submit();
+    fn xcore_mtp_service_read_submit() -> bool;
 }
 
 #[entry]
@@ -289,16 +289,35 @@ fn main() -> ! {
             // outside TinyUSB callbacks, after this iteration's USB service.
             if boot_mode == keyboard::BOOT_SELECTION_MTP {
                 xcore407i_blinker::mtp_storage::service_background();
-                // Read NAND in thread context with USB interrupts enabled. Only
-                // the short endpoint submission is protected from OTG_HS ISR.
-                if unsafe { xcore_mtp_service_read_prepare() } {
-                    // Storage reads run with USB IRQs enabled. Drain any
-                    // deferred EP0/control work that arrived during the read
-                    // before submitting the prepared MTP data container.
-                    unsafe { let _ = tusb::tud_task_ext(0, false); }
-                    unsafe { NVIC::mask(interrupt::OTG_HS); }
-                    unsafe { xcore_mtp_service_read_submit(); }
-                    unsafe { NVIC::unmask(interrupt::OTG_HS); }
+                // Slow only the synthetic test file's intermediate chunks so
+                // a USB analyzer can capture each transfer. USB interrupts and
+                // TinyUSB task servicing continue normally during the delay.
+                const SYNTHETIC_CHUNK_DELAY_MS: u32 = 2_500;
+                static mut SYNTHETIC_CHUNK_DELAY_UNTIL: u32 = 0;
+                static mut SYNTHETIC_CHUNK_DELAY_ACTIVE: bool = false;
+                let now = TICKS.load(Ordering::Relaxed);
+                let delay_active = unsafe { SYNTHETIC_CHUNK_DELAY_ACTIVE };
+                let delay_until = unsafe { SYNTHETIC_CHUNK_DELAY_UNTIL };
+                if !delay_active || now.wrapping_sub(delay_until) as i32 >= 0 {
+                    unsafe { SYNTHETIC_CHUNK_DELAY_ACTIVE = false; }
+                    // Read NAND in thread context with USB interrupts enabled. Only
+                    // the short endpoint submission is protected from OTG_HS ISR.
+                    if unsafe { xcore_mtp_service_read_prepare() } {
+                        // Storage reads run with USB IRQs enabled. Drain any
+                        // deferred EP0/control work that arrived during the read
+                        // before submitting the prepared MTP data container.
+                        unsafe { let _ = tusb::tud_task_ext(0, false); }
+                        unsafe { NVIC::mask(interrupt::OTG_HS); }
+                        let delay_next = unsafe { xcore_mtp_service_read_submit() };
+                        unsafe { NVIC::unmask(interrupt::OTG_HS); }
+                        if delay_next {
+                            unsafe {
+                                SYNTHETIC_CHUNK_DELAY_UNTIL =
+                                    TICKS.load(Ordering::Relaxed).wrapping_add(SYNTHETIC_CHUNK_DELAY_MS);
+                                SYNTHETIC_CHUNK_DELAY_ACTIVE = true;
+                            }
+                        }
+                    }
                 }
             }
             // Produce at most one video batch per pass so MTP work and
