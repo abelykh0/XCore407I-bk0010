@@ -8,6 +8,7 @@
 
 use core::ffi::c_int;
 use core::slice;
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use littlefs2::{
     consts::{U2048, U32},
@@ -48,6 +49,13 @@ unsafe extern "C" {
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
     [0; PAGE_SIZE + SPARE_SIZE];
 static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
+
+// The Dhara map and NAND controller state live in static C/Rust storage.
+// Keep the successfully resumed map alive across successive LittleFS mounts;
+// rebuilding it for every MTP data packet needlessly rescans the NAND journal
+// and all factory bad-block markers.
+static STORAGE_READY: AtomicBool = AtomicBool::new(false);
+static FACTORY_BAD_BLOCKS: AtomicU16 = AtomicU16::new(0);
 
 fn valid_nand(nand: *const DharaNand) -> bool {
     if nand.is_null() {
@@ -254,6 +262,9 @@ impl DharaStorage {
     /// Destructively provision a blank logical Dhara volume on raw NAND.
     /// The caller must obtain explicit confirmation before invoking this.
     pub fn initialize_new_volume() -> Result<Self, crate::nand_fs::InitError> {
+        // Provisioning resets the global Dhara map, so invalidate the cached
+        // mount state before touching the NAND.
+        STORAGE_READY.store(false, Ordering::Release);
         nand_fs::configure_fsmc();
         nand_fs::command(0xFF);
         if !nand_fs::wait_ready_status() {
@@ -318,6 +329,12 @@ impl DharaStorage {
     }
 
     pub fn new() -> Result<Self, crate::nand_fs::InitError> {
+        if STORAGE_READY.load(Ordering::Acquire) {
+            return Ok(Self {
+                factory_bad_blocks: FACTORY_BAD_BLOCKS.load(Ordering::Relaxed),
+            });
+        }
+
         nand_fs::configure_fsmc();
         nand_fs::command(0xFF);
         if !nand_fs::wait_ready_status() {
@@ -383,8 +400,10 @@ impl DharaStorage {
             return Err(crate::nand_fs::InitError::DharaCapacity);
         }
 
-        let mut storage = Self { factory_bad_blocks: bad_blocks };
+        FACTORY_BAD_BLOCKS.store(bad_blocks, Ordering::Relaxed);
+        STORAGE_READY.store(true, Ordering::Release);
 
+        let storage = Self { factory_bad_blocks: bad_blocks };
         Ok(storage)
     }
 
