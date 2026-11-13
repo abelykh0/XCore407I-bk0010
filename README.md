@@ -21,7 +21,7 @@ The firmware coordinates USB video, audio, keyboard input, and emulator timing.
 
 ### Video
 
-The camera image is rendered as uncompressed NV12 and packetized as UVC 1.1.
+The camera image is rendered as uncompressed NV12.
 Rows are generated incrementally from the emulator's canvas; a complete video
 frame is never buffered in RAM. Two small SRAM buffers decouple rendering in
 the main loop from high-speed USB isochronous transfers. The stream runs at
