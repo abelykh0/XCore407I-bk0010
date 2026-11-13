@@ -252,9 +252,13 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
   return tud_audio_n_write(func_id, packet, length) == length;
 }
 
-// Stop capture on bus reset, disconnect, or configuration teardown.
+// Reset class-specific state on bus reset, disconnect, or configuration teardown.
 void tud_umount_cb(void) {
   xcore_tud_audio_stop();
+#if CFG_TUD_MTP
+  extern void xcore_tud_mtp_reset_session(void);
+  xcore_tud_mtp_reset_session();
+#endif
 }
 #endif
 
