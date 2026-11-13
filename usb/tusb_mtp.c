@@ -408,9 +408,12 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
 
 // Called from the MTP-mode main loop. NAND/LittleFS access therefore never
 // runs in the TinyUSB endpoint callback or OTG_HS interrupt.
-void xcore_mtp_service_read_prepare(void) {
-  if (!object_read_pending || object_read_ready) {
-    return;
+bool xcore_mtp_service_read_prepare(void) {
+  if (!object_read_pending) {
+    return false;
+  }
+  if (object_read_ready) {
+    return true;
   }
   __asm volatile ("" ::: "memory");
 
@@ -421,11 +424,12 @@ void xcore_mtp_service_read_prepare(void) {
   // Cancel or Device Reset can arrive while LittleFS is being read.
   __asm volatile ("" ::: "memory");
   if (!object_read_pending) {
-    return;
+    return false;
   }
 
   object_read_failed = read < 0 || (uint32_t)read != object_read_count;
   object_read_ready = true;
+  return true;
 }
 
 void xcore_mtp_service_read_submit(void) {
