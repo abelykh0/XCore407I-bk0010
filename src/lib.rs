@@ -4,6 +4,7 @@
 pub mod bk_screen;
 pub mod camera;
 pub mod nand_fs;
+pub mod mtp_storage;
 pub mod dhara_fs;
 pub mod libc_shims;
 mod copy_words;
