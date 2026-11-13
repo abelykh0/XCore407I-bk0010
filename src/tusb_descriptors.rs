@@ -10,7 +10,7 @@ use crate::uvc::{
     ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
 };
 
-const CDC_CONFIGURATION_DESCRIPTOR_LEN: usize = 230;
+const CDC_N: usize = 230;
 
 const fn push_u8<const N: usize>(
     descriptor: &mut [u8; N],
@@ -42,7 +42,7 @@ const fn push_u32<const N: usize>(
 }
 
 const fn push_bytes<const N: usize>(
-    descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
+    descriptor: &mut [u8; N],
     offset: &mut usize,
     bytes: &[u8],
 ) {
