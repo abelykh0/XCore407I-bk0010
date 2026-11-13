@@ -17,6 +17,7 @@ extern bool xcore_mtp_object_info(uint32_t handle, uint16_t *name,
                                   uint32_t max_name_units, uint32_t *size);
 extern int32_t xcore_mtp_read_object_chunk(uint32_t handle, uint32_t offset,
                                             uint8_t *destination, uint32_t capacity);
+extern void xcore_mtp_end_object_read(void);
 extern uint32_t xcore_mtp_find_object(const uint8_t *name, uint32_t name_len);
 extern bool xcore_mtp_begin_upload(const uint8_t *name, uint32_t name_len, uint32_t expected_size);
 extern bool xcore_mtp_write_upload_chunk(uint32_t offset, const uint8_t *data, uint32_t len);
@@ -469,6 +470,7 @@ void xcore_tud_mtp_reset_session(void) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
+  xcore_mtp_end_object_read();
 }
 
 bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
@@ -481,6 +483,7 @@ bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
+  xcore_mtp_end_object_read();
   return true;
 }
 
@@ -495,6 +498,7 @@ bool tud_mtp_request_device_reset_cb(tud_mtp_request_cb_data_t *cb_data) {
   object_read_pending = false;
   object_read_failed = false;
   object_read_ready = false;
+  xcore_mtp_end_object_read();
   return true;
 }
 
@@ -612,6 +616,9 @@ int32_t tud_mtp_data_complete_cb(tud_mtp_cb_data_t *cb_data) {
     response->header->code = success ? MTP_RESP_OK : MTP_RESP_GENERAL_ERROR;
     if (!success) xcore_mtp_abort_upload();
   } else {
+    if (operation == MTP_OP_GET_OBJECT || operation == MTP_OP_GET_PARTIAL_OBJECT) {
+      xcore_mtp_end_object_read();
+    }
     response->header->len = sizeof(mtp_container_header_t);
     if (active_partial_object) {
       (void) mtp_container_add_uint32(response, active_object_length);
