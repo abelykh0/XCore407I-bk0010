@@ -46,11 +46,11 @@
 #define CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE 2304
 
 // TinyUSB's built-in MTP class is enabled for the F10-selected MTP
-// configuration only. Its 512-byte transfer buffer keeps the transport
-// footprint small; object contents are staged in the unused camera canvas
-// SRAM region in MTP mode.
+// configuration only. Use a 4 KiB bulk-transfer staging buffer, matching
+// the proven chunked GetObject path. The first transfer carries the 12-byte
+// MTP header plus 4084 payload bytes; later transfers carry up to 4096 bytes.
 #define CFG_TUD_MTP 1
-#define CFG_TUD_MTP_EP_BUFSIZE 512
+#define CFG_TUD_MTP_EP_BUFSIZE 4096
 #define CFG_TUD_MTP_EP_CONTROL_BUFSIZE 16
 #define CFG_TUD_MTP_DEVICEINFO_EXTENSIONS "microsoft.com: 1.0; "
 #define CFG_TUD_MTP_DEVICEINFO_SUPPORTED_OPERATIONS \
