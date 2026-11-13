@@ -5,7 +5,6 @@ mod board;
 mod file_browser;
 mod keyboard;
 mod keyboard_map;
-mod mtp_storage;
 mod usb_host;
 
 use core::ptr;
