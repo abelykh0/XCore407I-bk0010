@@ -1,9 +1,11 @@
 //! TinyUSB device descriptors matching the existing usb-device class layout.
 //!
-//! These bytes preserve the prior UVC/UAC2 interface numbering, IADs,
-//! endpoint addresses, high-bandwidth UVC transactions, and packet sizes.
+//! Normal mode exposes the existing UVC/UAC2 composite device. F10-selected
+//! MTP mode exposes UVC plus Still Image/MTP, with no audio interface.
 
 use crate::camera::{HEIGHT, WIDTH};
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::uvc::{
     FRAME_BIT_RATE, FRAME_BYTES, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME,
     MAX_PACKET_SIZE,
@@ -52,13 +54,13 @@ const fn push_bytes(
     }
 }
 
-const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] {
+const fn build_configuration_descriptor(mtp_mode: bool) -> [u8; CONFIGURATION_DESCRIPTOR_LEN] {
     let mut descriptor = [0u8; CONFIGURATION_DESCRIPTOR_LEN];
     let mut offset = 0usize;
 
-    // Configuration header: 4 interfaces, bus-powered, 100 mA.
+    // Configuration header; interface count and total length are finalized below.
     push_bytes(&mut descriptor, &mut offset, &[
-        9, 0x02, 0x22, 0x01, 4, 1, 0, 0x80, 50,
+        9, 0x02, 0, 0, 0, 1, 0, 0x80, 50,
     ]);
 
     // UVC IAD and VideoControl interface.
@@ -101,26 +103,40 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
     push_u16(&mut descriptor, &mut offset, uvc_w_max_packet);
     push_u8(&mut descriptor, &mut offset, 1);
 
-    // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
-    // The fixed sample rate is reported by the Clock Source GET_CUR/GET_RANGE callback,
-    // which reads the shared AUDIO_KHZ constant from the Rust application.
-    push_bytes(&mut descriptor, &mut offset, &[
-        8, 0x0b, 2, 2, 1, 1, 0x20, 0,
-        9, 0x04, 2, 0, 0, 1, 1, 0x20, 0,
-        9, 0x24, 1, 0, 2, 7, 60, 0, 0,
-        8, 0x24, 0x0a, 1, 1, 5, 0, 0,
-        17, 0x24, 0x02, 2, 0x03, 0x06, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
-        14, 0x24, 0x06, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        12, 0x24, 0x03, 4, 0x01, 0x01, 0, 3, 1, 0, 0, 0,
-        9, 0x04, 3, 0, 0, 1, 2, 0x20, 0,
-        9, 0x04, 3, 1, 1, 1, 2, 0x20, 0,
-        16, 0x24, 1, 4, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0,
-        6, 0x24, 2, 1, 2, 16,
-        7, 0x05, 0x82, 0x05, 10, 0, 1,
-        8, 0x25, 1, 0, 0, 0, 0, 0,
-    ]);
+    if mtp_mode {
+        // Still Image / MTP interface 2. Endpoint 4 IN is the event pipe;
+        // endpoint 3 OUT/IN carry bulk data. All addresses are distinct from
+        // UVC endpoint 1 and the normal-mode UAC2 endpoint 2.
+        push_bytes(&mut descriptor, &mut offset, &[
+            9, 0x04, 2, 0, 3, 0x06, 0x01, 0x01, 5,
+            7, 0x05, 0x84, 0x03, 64, 0, 4,
+            7, 0x05, 0x03, 0x02, 0, 2, 0,
+            7, 0x05, 0x83, 0x02, 0, 2, 0,
+        ]);
+    } else {
+        // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
+        // The fixed sample rate is reported by the Clock Source GET_CUR/GET_RANGE callback.
+        push_bytes(&mut descriptor, &mut offset, &[
+            8, 0x0b, 2, 2, 1, 1, 0x20, 0,
+            9, 0x04, 2, 0, 0, 1, 1, 0x20, 0,
+            9, 0x24, 1, 0, 2, 7, 60, 0, 0,
+            8, 0x24, 0x0a, 1, 1, 5, 0, 0,
+            17, 0x24, 0x02, 2, 0x03, 0x06, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+            14, 0x24, 0x06, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            12, 0x24, 0x03, 4, 0x01, 0x01, 0, 3, 1, 0, 0, 0, 0,
+            9, 0x04, 3, 0, 0, 1, 2, 0x20, 0,
+            9, 0x04, 3, 1, 1, 1, 2, 0x20, 0,
+            16, 0x24, 1, 4, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0,
+            6, 0x24, 2, 1, 2, 16,
+            7, 0x05, 0x82, 0x05, 10, 0, 1,
+            8, 0x25, 1, 0, 0, 0, 0, 0,
+        ]);
+    }
 
-    if offset != CONFIGURATION_DESCRIPTOR_LEN {
+    descriptor[2] = offset as u8;
+    descriptor[3] = (offset >> 8) as u8;
+    descriptor[4] = if mtp_mode { 3 } else { 4 };
+    if !mtp_mode && offset != CONFIGURATION_DESCRIPTOR_LEN {
         panic!("TinyUSB configuration descriptor length mismatch");
     }
     descriptor
@@ -142,6 +158,14 @@ static CAMERA_INTERFACE_STRING: [u16; 22] = [
     b'c' as u16, b'a' as u16, b'm' as u16, b'e' as u16, b'r' as u16, b'a' as u16,
 ];
 
+static MTP_INTERFACE_STRING: [u16; 16] = [
+    0x0320,
+    b'X' as u16, b'C' as u16, b'o' as u16, b'r' as u16,
+    b'e' as u16, b'4' as u16, b'0' as u16, b'7' as u16,
+    b'I' as u16, b' ' as u16, b'M' as u16, b'T' as u16,
+    b'P' as u16, 0, 0,
+];
+
 // usb-device's BosWriter emits a BOS header plus a USB 2.0 Extension
 // capability with bmAttributes = 0.
 static BOS_DESCRIPTOR: [u8; 12] = [
@@ -154,8 +178,15 @@ static DEVICE_QUALIFIER_DESCRIPTOR: [u8; 10] = [
     10, 0x06, 0x10, 0x02, 0xef, 0x02, 0x01, 64, 1, 0,
 ];
 
-static CONFIGURATION_DESCRIPTOR: [u8; CONFIGURATION_DESCRIPTOR_LEN] =
-    build_configuration_descriptor();
+static NORMAL_CONFIGURATION_DESCRIPTOR: [u8; CONFIGURATION_DESCRIPTOR_LEN] =
+    build_configuration_descriptor(false);
+static MTP_CONFIGURATION_DESCRIPTOR: [u8; CONFIGURATION_DESCRIPTOR_LEN] =
+    build_configuration_descriptor(true);
+static MTP_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_mtp_mode(enabled: bool) {
+    MTP_MODE.store(enabled, Ordering::Release);
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_cb() -> *const u8 {
@@ -165,7 +196,11 @@ pub extern "C" fn tud_descriptor_device_cb() -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
     if index == 0 {
-        CONFIGURATION_DESCRIPTOR.as_ptr()
+        if MTP_MODE.load(Ordering::Acquire) {
+            MTP_CONFIGURATION_DESCRIPTOR.as_ptr()
+        } else {
+            NORMAL_CONFIGURATION_DESCRIPTOR.as_ptr()
+        }
     } else {
         core::ptr::null()
     }
@@ -186,6 +221,7 @@ pub extern "C" fn tud_descriptor_string_cb(index: u8, _lang_id: u16) -> *const u
     match index {
         0 => EMPTY_LANGUAGE_DESCRIPTOR.as_ptr(),
         4 => CAMERA_INTERFACE_STRING.as_ptr(),
+        5 => MTP_INTERFACE_STRING.as_ptr(),
         _ => core::ptr::null(),
     }
 }
