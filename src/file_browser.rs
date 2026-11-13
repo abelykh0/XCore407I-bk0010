@@ -56,51 +56,29 @@ unsafe extern "C" {
     static mut RamBuffer: [u8; 0x4000];
 }
 
-/// Read up to 25 regular files from the LittleFS root directory.
-/// Paths are retained as NUL-terminated ASCII strings for the later load.
+/// Read up to 25 .bin files using the shared LittleFS root enumerator.
+/// Paths remain NUL-terminated for the later load operation.
 pub(crate) fn list_root_files(
     paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
     path_lengths: &mut [u16; MAX_BROWSER_FILES],
 ) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
-    xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
-        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
-            let mut count = 0usize;
-            for item in directory {
-                let entry = item?;
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-
-                let full_path = entry.path();
-                let path_bytes = full_path.as_str_ref_with_trailing_nul().as_bytes();
-                if path_bytes.len() < 3
-                    || path_bytes.len() > MAX_BROWSER_PATH
-                    || !path_bytes[..path_bytes.len() - 1]
-                        .iter()
-                        .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
-                {
-                    continue;
-                }
-
-                // Only expose .bin files in the browser (case-insensitive).
-                // The stored path is NUL-terminated and begins with '/'.
-                let filename = &path_bytes[1..path_bytes.len() - 1];
-                if filename.len() < 4
-                    || !filename[filename.len() - 4..].eq_ignore_ascii_case(b".bin")
-                {
-                    continue;
-                }
-
-                paths[count][..path_bytes.len()].copy_from_slice(path_bytes);
-                path_lengths[count] = path_bytes.len() as u16;
-                count += 1;
-                if count == MAX_BROWSER_FILES {
-                    break;
+    path_lengths.fill(0);
+    xcore407i_blinker::nand_fs::enumerate_root_files(
+        MAX_BROWSER_FILES,
+        false,
+        |name| {
+            name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(b".bin")
+        },
+        |path_bytes, _size| {
+            let index = path_lengths.iter().position(|length| *length == 0);
+            if let Some(index) = index {
+                if path_bytes.len() <= MAX_BROWSER_PATH {
+                    paths[index][..path_bytes.len()].copy_from_slice(path_bytes);
+                    path_lengths[index] = path_bytes.len() as u16;
                 }
             }
-            Ok(count)
-        })
-    })
+        },
+    )
 }
 
 pub(crate) fn draw_file_browser(
