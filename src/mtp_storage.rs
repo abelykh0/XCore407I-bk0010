@@ -77,17 +77,11 @@ pub extern "C" fn xcore_mtp_refresh() -> bool {
                     continue;
                 }
 
-                let Ok(metadata) = fs.metadata(&full_path) else {
-                    continue;
-                };
-                if !metadata.is_file() {
-                    continue;
-                }
-
                 let object = &mut objects[count];
                 object.name[..filename.len()].copy_from_slice(filename);
                 object.name_len = filename.len() as u16;
-                object.size = metadata.len().min(u32::MAX as usize) as u32;
+                // Object sizes are intentionally deferred to the next step.
+                object.size = 0;
                 object.synthetic = false;
                 count += 1;
             }
