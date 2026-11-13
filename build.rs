@@ -49,6 +49,7 @@ fn main() {
     println!("cargo:rerun-if-changed=csrc/bk");
     println!("cargo:rerun-if-changed=usb/tusb_config.h");
     println!("cargo:rerun-if-changed=usb/tusb_class_drivers.c");
+    println!("cargo:rerun-if-changed=usb/tusb_mtp.c");
     println!("cargo:rerun-if-changed=usb/tusb_class_drivers.h");
     println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
     println!("cargo:rerun-if-changed=vendor/dhara");
@@ -111,7 +112,7 @@ fn main() {
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
         .include("usb")
-        .file("usb/tusb_class_drivers.c")
+        .files(["usb/tusb_class_drivers.c", "usb/tusb_mtp.c"])
         .include(format!("{tinyusb_root}/src"))
         .include(&cmsis_device)
         .include(cmsis_core)
