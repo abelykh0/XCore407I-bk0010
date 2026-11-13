@@ -69,17 +69,8 @@ fn main() -> ! {
     #[cfg(feature = "cpu-cycle-diag")]
     enable_cycle_counter(&mut core);
 
-    // BK emulator initialization
-    unsafe {
-         bk_platform_init(
-             xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
-             xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
-             xcore407i_blinker::rom::BASIC_ROM.len() as u32,
-         );
-    }
-
-    // initialize_demo_canvas();
-    clear_demo_canvas(0x10);
+    // Emulator initialization is deferred until the first boot-keyboard
+    // report selects normal mode. CDC mode never initializes BK or storage UI.
 
     configure_board_pins(
         &mut device.RCC,
@@ -119,11 +110,67 @@ fn main() -> ! {
         );
     }
 
+    // Start host-task scheduling before waiting for the boot keyboard.
+    configure_usb_host_task_timer(&device.RCC, &device.TIM3, &mut core.NVIC);
+
+    const KEYBOARD_DETECT_TIMEOUT_MS: u32 = 30_000;
+    let keyboard_wait_started = TICKS.load(Ordering::Relaxed);
+    while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
+        if !USB_FS_READY.load(Ordering::Acquire) {
+            let now = TICKS.load(Ordering::Relaxed);
+            let retry_at = USB_FS_RETRY_AT.load(Ordering::Acquire);
+            if now.wrapping_sub(retry_at) as i32 >= 0 {
+                if !try_init_usb_fs_host(&device.RCC, &mut core.NVIC) {
+                    USB_FS_RETRY_AT.store(
+                        now.wrapping_add(USB_FS_RETRY_INTERVAL_MS),
+                        Ordering::Release,
+                    );
+                }
+            }
+        }
+
+        if USB_FS_READY.load(Ordering::Acquire)
+            && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+        {
+            unsafe { tusb::tuh_task_ext(0, false); }
+        } else {
+            USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        }
+
+        let now = TICKS.load(Ordering::Relaxed);
+        if now.wrapping_sub(keyboard_wait_started) >= KEYBOARD_DETECT_TIMEOUT_MS {
+            keyboard::set_boot_timeout();
+            break;
+        }
+        cortex_m::asm::wfi();
+    }
+
+    let boot_mode = keyboard::boot_selection();
+    let cdc_enabled = boot_mode == keyboard::BOOT_SELECTION_CDC;
+    let emulator_enabled = boot_mode == keyboard::BOOT_SELECTION_NORMAL;
+
+    if emulator_enabled {
+        unsafe {
+            bk_platform_init(
+                xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
+                xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
+                xcore407i_blinker::rom::BASIC_ROM.len() as u32,
+            );
+        }
+        keyboard::enable_emulator_input();
+        clear_demo_canvas(0x10);
+    } else if boot_mode == keyboard::BOOT_SELECTION_TIMEOUT {
+        clear_demo_canvas(0x10);
+        show_usb_status(b"KEYBOARD NOT DETECTED");
+    }
+
     // The main loop owns the renderer; TinyUSB UVC completion callbacks
     // consume prepared batches from the OTG_HS device interrupt.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
-    video_renderer.set_pc_connect_screen();
+    if cdc_enabled {
+        video_renderer.set_pc_connect_screen();
+    }
     while prepare_next_video_batch(&mut video_renderer) {}
 
     // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
@@ -137,6 +184,8 @@ fn main() -> ! {
         core.NVIC.set_priority(interrupt::OTG_HS, 0);
         NVIC::unpend(interrupt::OTG_HS);
     }
+
+    xcore407i_blinker::uvc::set_cdc_mode(cdc_enabled);
 
     let hs_device_init = tusb::tusb_rhport_init_t {
         role: tusb::tusb_role_t::TUSB_ROLE_DEVICE,
@@ -154,13 +203,27 @@ fn main() -> ! {
         NVIC::unmask(interrupt::OTG_HS);
     }
 
-    // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
-    // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
-    configure_usb_host_task_timer(
-        &device.RCC,
-        &device.TIM3,
-        &mut core.NVIC,
-    );
+    if cdc_enabled {
+        // F10 selects a device-only mode. Stop the FS host controller and
+        // its scheduler permanently; no keyboard or other host traffic is
+        // serviced after this point. OTG_HS remains the UVC+CDC device.
+        unsafe {
+            NVIC::mask(interrupt::OTG_FS);
+            NVIC::unpend(interrupt::OTG_FS);
+        }
+        device.TIM3.cr1().write(|w| w.cen().clear_bit());
+        device.TIM3.dier().write(|w| w.uie().clear_bit());
+        USB_FS_READY.store(false, Ordering::Release);
+        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+
+        loop {
+            unsafe {
+                let _ = tusb::tud_task_ext(0, false);
+                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+            }
+            while prepare_next_video_batch(&mut video_renderer) {}
+        }
+    }
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
