@@ -7,9 +7,11 @@ use crate::camera::{HEIGHT, WIDTH};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::uvc::{
-    FRAME_BIT_RATE, FRAME_BYTES, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME,
+    FRAME_BYTES, FRAME_INTERVAL_100NS, FRAME_RATE_FPS, ISO_PACKETS_PER_MICROFRAME,
     MAX_PACKET_SIZE,
 };
+
+const MTP_FRAME_INTERVAL_100NS: u32 = 10_000_000;
 
 const CONFIGURATION_DESCRIPTOR_LEN: usize = 290;
 
@@ -82,15 +84,19 @@ const fn build_configuration_descriptor(mtp_mode: bool) -> [u8; CONFIGURATION_DE
         30, 0x24, 0x05, 1, 0,
     ]);
 
+    // MTP mode advertises one frame per second; normal mode remains 25 FPS.
+    let frame_interval = if mtp_mode { MTP_FRAME_INTERVAL_100NS } else { FRAME_INTERVAL_100NS };
+    let frame_bit_rate = FRAME_BYTES * 8 * if mtp_mode { 1 } else { FRAME_RATE_FPS };
+
     // UVC frame descriptor: dimensions, bitrates, frame size and interval.
     push_u16(&mut descriptor, &mut offset, WIDTH as u16);
     push_u16(&mut descriptor, &mut offset, HEIGHT as u16);
-    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
-    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
+    push_u32(&mut descriptor, &mut offset, frame_bit_rate);
+    push_u32(&mut descriptor, &mut offset, frame_bit_rate);
     push_u32(&mut descriptor, &mut offset, FRAME_BYTES);
-    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
+    push_u32(&mut descriptor, &mut offset, frame_interval);
     push_u8(&mut descriptor, &mut offset, 1);
-    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
+    push_u32(&mut descriptor, &mut offset, frame_interval);
 
     // UVC color matching, alternate setting 1, and 3 x 768-byte HS ISO EP1 IN.
     let uvc_w_max_packet =
@@ -186,6 +192,7 @@ static MTP_MODE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_mtp_mode(enabled: bool) {
     MTP_MODE.store(enabled, Ordering::Release);
+    crate::uvc::set_mtp_mode(enabled);
 }
 
 #[unsafe(no_mangle)]
