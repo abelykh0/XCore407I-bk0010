@@ -320,6 +320,14 @@ static int32_t dispatch_operation(tud_mtp_cb_data_t *cb_data) {
   return response;
 }
 
+void xcore_tud_mtp_reset_session(void) {
+  session_open = false;
+  active_object_handle = 0;
+  active_object_offset = 0;
+  active_object_length = 0;
+  active_partial_object = false;
+}
+
 bool tud_mtp_request_cancel_cb(tud_mtp_request_cb_data_t *cb_data) {
   (void) cb_data;
   active_object_handle = 0;
