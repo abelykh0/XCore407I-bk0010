@@ -35,6 +35,7 @@ static mut OPEN_FILE: MaybeUninit<MtpFile> = MaybeUninit::uninit();
 static FILESYSTEM_STATE: AtomicU8 = AtomicU8::new(0);
 static FILE_OPEN: AtomicBool = AtomicBool::new(false);
 static CLOSE_FILE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ACTIVE_HANDLE: AtomicU32 = AtomicU32::new(0);
 static NEXT_FILE_OFFSET: AtomicU32 = AtomicU32::new(0);
 
@@ -123,26 +124,69 @@ fn close_active_file() {
     let _ = unsafe { file.close() };
 }
 
-/// Build the MTP object list with the same root-file enumerator used by F2.
-/// MTP includes every regular root file and also records its size.
+/// Keep startup identical to the known-good in-memory backend. Real-file
+/// enumeration is requested later by OpenSession, after USB is servicing IRQs.
 pub fn prepare_storage() {
-    // Keep startup identical to the known-good in-memory MTP test backend.
-    // NAND enumeration is disabled here until USB discovery is stable.
     OBJECT_COUNT.store(1, Ordering::Release);
 }
 
-/// OpenSession refresh is intentionally a no-op: the object table was prepared
-/// before the device was connected, and rescanning here would block MTP.
+/// OpenSession requests a root refresh. The actual NAND/LittleFS work is
+/// deferred to service_background(), never performed in a TinyUSB callback.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_mtp_refresh() -> bool {
+    REFRESH_REQUESTED.store(true, Ordering::Release);
     true
 }
 
-/// Drain deferred file-close requests raised by MTP completion/cancel/reset
-/// callbacks. No LittleFS operation is performed in those USB callbacks.
+/// Drain deferred close and refresh requests from MTP main-loop context.
 pub fn service_background() {
     if CLOSE_FILE_REQUESTED.swap(false, Ordering::AcqRel) {
         close_active_file();
+    }
+
+    if !REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+
+    // Publish only the synthetic object while rebuilding the real-file table.
+    // The object count is updated after enumeration has completed.
+    OBJECT_COUNT.store(1, Ordering::Release);
+    let result = crate::nand_fs::enumerate_root_files(
+        MAX_REAL_FILES,
+        true,
+        |name| name != FILE_NAME,
+        |path, size| {
+            if path.len() < 3 || path.last() != Some(&0) {
+                return;
+            }
+            let name = &path[1..path.len() - 1];
+            if name.len() > MAX_NAME {
+                return;
+            }
+
+            // The enumerator is capped at MAX_REAL_FILES, and this callback
+            // runs synchronously before the completed count is published.
+            let objects = unsafe { &mut *addr_of_mut!(OBJECTS) };
+            let index = OBJECT_COUNT.load(Ordering::Relaxed) as usize - 1;
+            if index >= MAX_REAL_FILES {
+                return;
+            }
+            let object = &mut objects[index];
+            object.name[..name.len()].copy_from_slice(name);
+            object.name_len = name.len() as u8;
+            object.size = size.unwrap_or(0);
+            OBJECT_COUNT.store((index + 2) as u32, Ordering::Relaxed);
+        },
+    );
+
+    // On an enumeration error, leave the synthetic test object available.
+    if result.is_err() {
+        OBJECT_COUNT.store(1, Ordering::Release);
+    } else {
+        // The callback count includes only real files; add the synthetic
+        // object as the final handle.
+        let real_count = OBJECT_COUNT.load(Ordering::Relaxed);
+        OBJECT_COUNT.store(real_count, Ordering::Release);
     }
 }
 
