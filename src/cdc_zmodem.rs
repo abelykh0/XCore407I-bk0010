@@ -47,6 +47,9 @@ impl State {
     pub fn active(&self) -> bool {
         self.receiver.is_some()
     }
+    if !finished {
+        state.receiver = Some(receiver);
+    }
 }
 
 impl Default for State {
@@ -134,9 +137,10 @@ pub fn service(
     state: &mut State,
     now_ms: u32,
 ) {
-    let Some(receiver) = state.receiver.as_mut() else {
+    let Some(mut receiver) = state.receiver.take() else {
         return;
     };
+    let mut finished = false;
 
     // Bound work per iteration so UVC buffer production keeps running.
     for _ in 0..8 {
@@ -200,7 +204,7 @@ pub fn service(
                 state.path_len = 0;
             }
             Action::Event(Event::SessionCompleted) => {
-                state.receiver = None;
+                finished = true;
                 if state.transfer_failed {
                     super::cdc_console::write_status(b"\r\nZMODEM stopped: storage/protocol error\r\n> ");
                 } else {
@@ -209,7 +213,7 @@ pub fn service(
                 break;
             }
             Action::Event(Event::Aborted) => {
-                state.receiver = None;
+                finished = true;
                 super::cdc_console::write_status(b"\r\nZMODEM aborted\r\n> ");
                 break;
             }
