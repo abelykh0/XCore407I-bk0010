@@ -24,7 +24,7 @@ const UVC_STREAMING_INTERFACE: u8 = 1;
 const UVC_STREAM_ENDPOINT: u8 = 0x81;
 const UVC_MAX_PACKET_SIZE: u16 = 768;
 const UVC_TRANSACTIONS_PER_MICROFRAME: u8 = 3;
-const UVC_VS_TOTAL_LENGTH: u16 = 77;
+const UVC_VS_TOTAL_LENGTH: u16 = 83;
 const UVC_NV12_GUID: [u8; 16] = [
     0x4e, 0x56, 0x31, 0x32, 0x00, 0x00, 0x10, 0x00,
     0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
