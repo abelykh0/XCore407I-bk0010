@@ -209,18 +209,19 @@ fn main() -> ! {
         panic!("TinyUSB OTG_HS device initialization failed");
     }
 
-    // Initialize the MTP file listing only after the device controller has
-    // been initialized, so LittleFS scanning cannot interfere with USB setup.
-    if boot_mode == keyboard::BOOT_SELECTION_MTP {
-        let _ = xcore407i_blinker::mtp_storage::xcore_mtp_refresh();
-    }
-
-    // Service the DWC2 device controller from its real OTG_HS interrupt.
-    // TIM2 polling is no longer used for USB device servicing.
+    // Service the DWC2 device controller immediately after initialization.
+    // In particular, do not perform NAND/LittleFS work before enabling the
+    // IRQ: the host may already be issuing the first EP0 descriptor request.
     unsafe {
         core.NVIC.set_priority(interrupt::OTG_HS, 0);
         NVIC::unpend(interrupt::OTG_HS);
         NVIC::unmask(interrupt::OTG_HS);
+    }
+
+    // Build the MTP object listing only after USB servicing is live. The
+    // OTG_HS interrupt remains enabled while LittleFS scans the NAND.
+    if boot_mode == keyboard::BOOT_SELECTION_MTP {
+        let _ = xcore407i_blinker::mtp_storage::xcore_mtp_refresh();
     }
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
