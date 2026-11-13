@@ -9,7 +9,7 @@ use crate::uvc::{
     MAX_PACKET_SIZE,
 };
 
-const CONFIGURATION_DESCRIPTOR_LEN: usize = 290;
+const CONFIGURATION_DESCRIPTOR_LEN: usize = 224;
 
 const fn push_u8(
     descriptor: &mut [u8; CONFIGURATION_DESCRIPTOR_LEN],
@@ -101,23 +101,19 @@ const fn build_configuration_descriptor() -> [u8; CONFIGURATION_DESCRIPTOR_LEN] 
     push_u16(&mut descriptor, &mut offset, uvc_w_max_packet);
     push_u8(&mut descriptor, &mut offset, 1);
 
-    // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
-    // The fixed sample rate is reported by the Clock Source GET_CUR/GET_RANGE callback,
-    // which reads the shared AUDIO_KHZ constant from the Rust application.
+    // CDC ACM function: interfaces 2 (control) and 3 (data).
+    // EP4 IN notification; EP3 OUT/IN bulk. HS bulk endpoints use 512-byte MPS.
     push_bytes(&mut descriptor, &mut offset, &[
-        8, 0x0b, 2, 2, 1, 1, 0x20, 0,
-        9, 0x04, 2, 0, 0, 1, 1, 0x20, 0,
-        9, 0x24, 1, 0, 2, 7, 60, 0, 0,
-        8, 0x24, 0x0a, 1, 1, 5, 0, 0,
-        17, 0x24, 0x02, 2, 0x03, 0x06, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
-        14, 0x24, 0x06, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        12, 0x24, 0x03, 4, 0x01, 0x01, 0, 3, 1, 0, 0, 0,
-        9, 0x04, 3, 0, 0, 1, 2, 0x20, 0,
-        9, 0x04, 3, 1, 1, 1, 2, 0x20, 0,
-        16, 0x24, 1, 4, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0,
-        6, 0x24, 2, 1, 2, 16,
-        7, 0x05, 0x82, 0x05, 10, 0, 1,
-        8, 0x25, 1, 0, 0, 0, 0, 0,
+        8, 0x0b, 2, 2, 0x02, 0x02, 0x01, 0,
+        9, 0x04, 2, 0, 1, 0x02, 0x02, 0x01, 0,
+        5, 0x24, 0x00, 0x10, 0x01,
+        5, 0x24, 0x01, 0x00, 3,
+        4, 0x24, 0x02, 0x02,
+        5, 0x24, 0x06, 2, 3,
+        7, 0x05, 0x84, 0x03, 8, 0, 16,
+        9, 0x04, 3, 0, 2, 0x0a, 0, 0, 0,
+        7, 0x05, 0x03, 0x02, 0x00, 0x02, 0,
+        7, 0x05, 0x83, 0x02, 0x00, 0x02, 0,
     ]);
 
     if offset != CONFIGURATION_DESCRIPTOR_LEN {
