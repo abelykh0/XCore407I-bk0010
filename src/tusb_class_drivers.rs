@@ -236,6 +236,16 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                     }
                     vs_header_seen = true;
                 }
+                // Still-image frame descriptor with no alternate still sizes.
+                3 => {
+                    if length != 6
+                        || descriptors[offset + 3] != UVC_STREAM_ENDPOINT
+                        || descriptors[offset + 4] != 0
+                        || descriptors[offset + 5] != 0
+                    {
+                        return None;
+                    }
+                }
                 // Uncompressed format descriptor: exactly one NV12 format.
                 4 => {
                     if length != 27
