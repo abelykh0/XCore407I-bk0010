@@ -289,10 +289,10 @@ fn main() -> ! {
             // outside TinyUSB callbacks, after this iteration's USB service.
             if boot_mode == keyboard::BOOT_SELECTION_MTP {
                 xcore407i_blinker::mtp_storage::service_background();
-                // Slow only the synthetic test file's intermediate chunks so
-                // a USB analyzer can capture each transfer. USB interrupts and
-                // TinyUSB task servicing continue normally during the delay.
-                const SYNTHETIC_CHUNK_DELAY_MS: u32 = 2_500;
+                // Add a short gap between synthetic test-file chunks for USB capture.
+                // Seconds-long gaps stall Windows' active MTP data transaction.
+                // USB interrupts and TinyUSB task servicing continue normally.
+                const SYNTHETIC_CHUNK_DELAY_MS: u32 = 3;
                 static mut SYNTHETIC_CHUNK_DELAY_UNTIL: u32 = 0;
                 static mut SYNTHETIC_CHUNK_DELAY_ACTIVE: bool = false;
                 let now = TICKS.load(Ordering::Relaxed);
