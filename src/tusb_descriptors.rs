@@ -10,7 +10,7 @@ use crate::uvc::{
     ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
 };
 
-const CDC_CONFIGURATION_DESCRIPTOR_LEN: usize = 230;
+const CDC_CONFIGURATION_DESCRIPTOR_LEN: usize = 224;
 
 const fn push_u8<const N: usize>(
     descriptor: &mut [u8; N],
@@ -59,7 +59,7 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
 
     // Configuration header: 4 interfaces, bus-powered, 100 mA.
     push_bytes(&mut descriptor, &mut offset, &[
-        9, 0x02, 0xe6, 0x00, 4, 1, 0, 0x80, 50,
+        9, 0x02, 0xe0, 0x00, 4, 1, 0, 0x80, 50,
     ]);
 
     // UVC IAD and VideoControl interface.
@@ -74,18 +74,17 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
     // UVC VideoStreaming alternate setting 0 and class-specific descriptors.
     push_bytes(&mut descriptor, &mut offset, &[
         9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
-        14, 0x24, 0x01, 1, 83, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
+        14, 0x24, 0x01, 1, 77, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
         27, 0x24, 0x04, 1, 1,
         0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
         12, 1, 0, 0, 0, 0,
-        6, 0x24, 0x03, 0x81, 0, 0,
         30, 0x24, 0x05, 1, 0,
     ]);
 
     // UVC frame descriptor: dimensions, bitrates, frame size and interval.
     push_u16(&mut descriptor, &mut offset, WIDTH as u16);
     push_u16(&mut descriptor, &mut offset, HEIGHT as u16);
-    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
+    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8 * active_frame_rate_fps());
     push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
     push_u32(&mut descriptor, &mut offset, FRAME_BYTES);
     push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
