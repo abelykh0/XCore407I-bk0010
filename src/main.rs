@@ -123,6 +123,7 @@ fn main() -> ! {
     // consume prepared batches from the OTG_HS device interrupt.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
+    video_renderer.set_pc_connect_screen();
     while prepare_next_video_batch(&mut video_renderer) {}
 
     // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
@@ -198,7 +199,6 @@ fn main() -> ! {
         unsafe {
             let _ = tusb::tud_task_ext(0, false);
             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
