@@ -67,7 +67,9 @@ pub(crate) fn list_root_files(
         MAX_BROWSER_FILES,
         false,
         |name| {
-            name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(b".bin")
+            name.len() + 2 <= MAX_BROWSER_PATH
+                && name.len() >= 4
+                && name[name.len() - 4..].eq_ignore_ascii_case(b".bin")
         },
         |path_bytes, _size| {
             let index = path_lengths.iter().position(|length| *length == 0);
