@@ -29,51 +29,29 @@ const EMPTY_OBJECT: Object = Object {
 static OBJECT_COUNT: AtomicU32 = AtomicU32::new(1);
 static mut OBJECTS: [Object; MAX_REAL_FILES] = [EMPTY_OBJECT; MAX_REAL_FILES];
 
-/// Called once in MTP boot mode before TinyUSB OTG_HS device initialization.
-/// A failed mount/scan leaves the synthetic test object available.
+/// Build the MTP object table with the same root-file enumerator used by F2.
+/// MTP includes every regular root file and also records its size.
 pub fn prepare_storage() {
-    let mut storage = match DharaStorage::new_mtp() {
-        Ok(storage) => storage,
-        Err(_) => return,
-    };
+    let objects = unsafe { &mut *core::ptr::addr_of_mut!(OBJECTS) };
+    let mut count = 0usize;
+    let result = crate::nand_fs::enumerate_root_files(
+        MAX_REAL_FILES,
+        true,
+        |name| name != FILE_NAME,
+        |path, size| {
+            let name = &path[1..path.len() - 1];
+            let object = &mut objects[count];
+            object.name[..name.len()].copy_from_slice(name);
+            object.name_len = name.len() as u8;
+            object.size = size.unwrap_or(0);
+            count += 1;
+        },
+    );
 
-    let result = Filesystem::<DharaStorage>::mount_and_then(&mut storage, |fs| {
-        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
-            let mut count = 0usize;
-            let objects = unsafe { &mut *core::ptr::addr_of_mut!(OBJECTS) };
-            for item in directory {
-                let entry = item?;
-                if !entry.file_type().is_file() || count == MAX_REAL_FILES {
-                    continue;
-                }
-
-                let path = entry.path();
-                let bytes = path.as_str_ref_with_trailing_nul().as_bytes();
-                if bytes.len() < 3 || bytes[0] != b'/' || bytes.last() != Some(&0) {
-                    continue;
-                }
-                let name = &bytes[1..bytes.len() - 1];
-                if name.is_empty()
-                    || name.len() > MAX_NAME
-                    || !name.iter().all(|b| b.is_ascii_graphic() || *b == b' ')
-                    || name == FILE_NAME
-                {
-                    continue;
-                }
-
-                let mut object = EMPTY_OBJECT;
-                object.name[..name.len()].copy_from_slice(name);
-                object.name_len = name.len() as u8;
-                object.size = fs.metadata(path)?.len() as u32;
-                objects[count] = object;
-                count += 1;
-            }
-            Ok(count)
-        })
-    });
-
-    if let Ok(real_count) = result {
-        OBJECT_COUNT.store((real_count + 1) as u32, Ordering::Release);
+    if result.is_ok() {
+        OBJECT_COUNT.store((count + 1) as u32, Ordering::Release);
+    } else {
+        OBJECT_COUNT.store(1, Ordering::Release);
     }
 }
 
