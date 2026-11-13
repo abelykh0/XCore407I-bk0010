@@ -220,6 +220,12 @@ pub extern "C" fn xcore_mtp_object_info(
 pub extern "C" fn xcore_mtp_read_object_chunk(
     handle: u32, offset: u32, destination: *mut u8, capacity: u32,
 ) -> i32 {
+    // A completion/cancel callback may have queued closure immediately before
+    // another command is dispatched in the same TinyUSB task pass.
+    if CLOSE_FILE_REQUESTED.swap(false, Ordering::AcqRel) {
+        close_active_file();
+    }
+
     let object_count = OBJECT_COUNT.load(Ordering::Acquire);
     if handle == object_count {
         if offset as usize > FILE_CONTENT.len() {
