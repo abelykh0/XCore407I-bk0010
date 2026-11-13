@@ -49,7 +49,10 @@
 // settings, endpoint activation, and its internal software FIFO.
 // Keep the 10-byte endpoint/FIFO capacity from the 32 kHz sizing experiment.
 // The 24 kHz stream normally sends three mono 16-bit samples (6 bytes) per HS microframe.
-#define CFG_TUD_AUDIO 1
+#define CFG_TUD_AUDIO 0
+#define CFG_TUD_CDC 1
+#define CFG_TUD_CDC_TX_BUFSIZE 128
+#define CFG_TUD_CDC_RX_BUFSIZE 128
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT 0
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 10
