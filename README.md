@@ -1,6 +1,6 @@
 # БК-0010 Emulator
 
-БК-0010 emulator for the Waveshare XCore407I board (STM32F407IGT6, 168 MHz).
+[БК-0010](https://en.wikipedia.org/wiki/Elektronika_BK) emulator for the Waveshare [XCore407I](https://www.waveshare.com/wiki/XCore407I) board (STM32F407IGT6, 168 MHz).
 
 - **Video:** USB UVC, uncompressed NV12, 25 fps.
 - **Audio:** USB Line In.
