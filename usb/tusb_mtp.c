@@ -7,7 +7,7 @@
 
 #define MTP_STORAGE_ID 0x00010001u
 #define MTP_MAX_OBJECTS 16u
-#define MTP_READ_LIMIT 4084u
+#define MTP_READ_LIMIT 80128u
 #define MTP_WORKSPACE_READ_OFFSET 1024u
 
 extern bool xcore_mtp_refresh(void);
