@@ -1,8 +1,7 @@
-//! Deterministic MTP transport test backend.
+//! MTP storage backend with real capacity statistics and one in-memory test object.
 //!
-//! This module intentionally does not mount or access NAND, Dhara, or LittleFS.
-//! It exposes one in-memory test object so USB/MTP protocol behavior can be
-//! tested independently of the storage stack.
+//! Capacity/free-space are refreshed from the existing LittleFS volume when
+//! an MTP session opens. File enumeration and reads remain in-memory test data.
 
 
 use core::sync::atomic::{AtomicU32, Ordering};
