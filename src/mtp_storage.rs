@@ -126,31 +126,9 @@ fn close_active_file() {
 /// Build the MTP object list with the same root-file enumerator used by F2.
 /// MTP includes every regular root file and also records its size.
 pub fn prepare_storage() {
-    let objects = unsafe { &mut *addr_of_mut!(OBJECTS) };
-    let mut count = 0usize;
-    let result = crate::nand_fs::enumerate_root_files(
-        MAX_REAL_FILES,
-        true,
-        |name| name.len() <= MAX_NAME && name != FILE_NAME,
-        |path, size| {
-            let name = &path[1..path.len() - 1];
-            let object = &mut objects[count];
-            object.name[..name.len()].copy_from_slice(name);
-            object.name_len = name.len() as u8;
-            object.size = size.unwrap_or(0);
-            count += 1;
-        },
-    );
-
-    if result.is_ok() {
-        OBJECT_COUNT.store((count + 1) as u32, Ordering::Release);
-    } else {
-        OBJECT_COUNT.store(1, Ordering::Release);
-    }
-
-    // Do not mount LittleFS here: prepare_storage() runs before USB
-    // initialization, and a NAND mount must never delay MTP enumeration.
-    // The persistent mount is initialized lazily on the first GetObject read.
+    // Keep startup identical to the known-good in-memory MTP test backend.
+    // NAND enumeration is disabled here until USB discovery is stable.
+    OBJECT_COUNT.store(1, Ordering::Release);
 }
 
 /// OpenSession refresh is intentionally a no-op: the object table was prepared
