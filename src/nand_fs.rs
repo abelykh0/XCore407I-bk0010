@@ -10,7 +10,7 @@
 //! single-bit data errors and reject uncorrectable ECC syndromes.
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -32,6 +32,13 @@ const FSMC_PCR_ECCEN: u32 = 1 << 6;
 const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
+
+// Explicitly scoped raw-data diagnostic mode; normal operation keeps ECC enabled.
+static RAW_NAND_TEST_MODE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_raw_nand_test_mode(enabled: bool) {
+    RAW_NAND_TEST_MODE.store(enabled, Ordering::SeqCst);
+}
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
 pub(crate) const RB_MASK: u32 = 1 << 6;
@@ -351,9 +358,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     // K9F1G08U0E tADL minimum is 100 ns.
     cortex_m::asm::delay(1_000);
 
-    let mut ecc = [0u8; ECC_OOB_BYTES];
+    let raw_mode = RAW_NAND_TEST_MODE.load(Ordering::SeqCst);
+    let mut ecc = [0xFFu8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let _ = ecc_begin_chunk();
+        if !raw_mode { let _ = ecc_begin_chunk(); }
         for &byte in chunk { write_data(byte); }
         // The FSMC buffers NAND writes. Capturing ECC before FEMPT is set can
         // store a code for an incomplete chunk and cause false corrections.
@@ -362,8 +370,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             record_nand_device_failure(6, page, status);
             return false;
         }
-        let (chunk_ecc, _) = ecc_end_chunk();
-        encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
+        if !raw_mode {
+            let (chunk_ecc, _) = ecc_end_chunk();
+            encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
+        }
     }
 
     // Continue the same sequential page-program operation into the spare area.
@@ -371,7 +381,8 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     write_data(0xFF);
     write_data(0xFF);
     for &byte in &ecc { write_data(byte); }
-    for &byte in &ECC_TAG { write_data(byte); }
+    let tag = if raw_mode { [0xFF; 2] } else { ECC_TAG };
+    for &byte in &tag { write_data(byte); }
 
     command(0x10);
     if !wait_ready_rb() {
@@ -474,6 +485,11 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         record_nand_read_failure(1, page);
         record_nand_device_failure(1, page, 0);
         return false;
+    }
+
+    if RAW_NAND_TEST_MODE.load(Ordering::SeqCst) {
+        for byte in out.iter_mut() { *byte = read_data(); }
+        return true;
     }
 
     let mut calculated = [0u8; ECC_OOB_BYTES];
