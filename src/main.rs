@@ -116,7 +116,7 @@ fn main() -> ! {
     // Do not leave the PC-facing USB device uninitialized for tens of seconds
     // if the optional boot keyboard is absent. A healthy FS host should report
     // the boot keyboard well before this fallback interval.
-    const KEYBOARD_DETECT_TIMEOUT_MS: u32 = 3_000;
+    const KEYBOARD_DETECT_TIMEOUT_MS: u32 = 10_000;
     let keyboard_wait_started = TICKS.load(Ordering::Relaxed);
     while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
         if !USB_FS_READY.load(Ordering::Acquire) {
@@ -164,7 +164,7 @@ fn main() -> ! {
         clear_demo_canvas(0x10);
     } else if boot_mode == keyboard::BOOT_SELECTION_TIMEOUT {
         clear_demo_canvas(0x10);
-        show_usb_status(b"BOOT KEYBOARD TIMEOUT (3s)");
+        show_usb_status(b"BOOT KEYBOARD TIMEOUT (10s)");
         let host_status = USB_FS_STATUS.load(Ordering::Acquire);
         let detail: &[u8] = match host_status {
             0 => b"FS HOST: NOT STARTED",
