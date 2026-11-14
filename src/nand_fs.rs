@@ -53,6 +53,22 @@ static NAND_READ_FAILURE_DETAIL: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_PAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_STORED_ECC: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_CALCULATED_ECC: AtomicU32 = AtomicU32::new(0);
+static ECC_READ_COUNTS: [AtomicU32; 4] = [
+    AtomicU32::new(0), AtomicU32::new(0),
+    AtomicU32::new(0), AtomicU32::new(0),
+];
+// Last completed ECC page read: page, tag class (1=valid, 2=legacy),
+// chunk, syndrome, stored/calculated ECC, corrected byte and bit values.
+static ECC_LAST_PAGE: AtomicU32 = AtomicU32::new(0);
+static ECC_LAST_TAG: AtomicU32 = AtomicU32::new(0);
+static ECC_LAST_CHUNK: AtomicU32 = AtomicU32::new(0);
+static ECC_LAST_SYNDROME: AtomicU32 = AtomicU32::new(0);
+static ECC_LAST_STORED: AtomicU32 = AtomicU32::new(0);
+static ECC_LAST_CALCULATED: AtomicU32 = AtomicU32::new(0);
+static ECC_LAST_BYTE: AtomicU32 = AtomicU32::new(u32::MAX);
+static ECC_LAST_BEFORE: AtomicU32 = AtomicU32::new(0);
+static ECC_LAST_AFTER: AtomicU32 = AtomicU32::new(0);
+
 
 // First raw NAND command failure during a storage operation.
 // Stages: 1=page-read timeout, 2=block-erase timeout, 3=block-erase
@@ -103,7 +119,36 @@ pub(crate) fn clear_nand_read_diagnostic() {
     NAND_READ_FAILURE_PAGE.store(0, Ordering::Release);
     NAND_READ_FAILURE_STORED_ECC.store(0, Ordering::Release);
     NAND_READ_FAILURE_CALCULATED_ECC.store(0, Ordering::Release);
+    for count in &ECC_READ_COUNTS { count.store(0, Ordering::Release); }
+    ECC_LAST_PAGE.store(0, Ordering::Release);
+    ECC_LAST_TAG.store(0, Ordering::Release);
+    ECC_LAST_CHUNK.store(0, Ordering::Release);
+    ECC_LAST_SYNDROME.store(0, Ordering::Release);
+    ECC_LAST_STORED.store(0, Ordering::Release);
+    ECC_LAST_CALCULATED.store(0, Ordering::Release);
+    ECC_LAST_BYTE.store(u32::MAX, Ordering::Release);
+    ECC_LAST_BEFORE.store(0, Ordering::Release);
+    ECC_LAST_AFTER.store(0, Ordering::Release);
     clear_nand_device_diagnostic();
+}
+
+
+pub(crate) fn ecc_read_diagnostic() -> [u32; 13] {
+    [
+        ECC_READ_COUNTS[0].load(Ordering::Acquire),
+        ECC_READ_COUNTS[1].load(Ordering::Acquire),
+        ECC_READ_COUNTS[2].load(Ordering::Acquire),
+        ECC_READ_COUNTS[3].load(Ordering::Acquire),
+        ECC_LAST_PAGE.load(Ordering::Acquire),
+        ECC_LAST_TAG.load(Ordering::Acquire),
+        ECC_LAST_CHUNK.load(Ordering::Acquire),
+        ECC_LAST_SYNDROME.load(Ordering::Acquire),
+        ECC_LAST_STORED.load(Ordering::Acquire),
+        ECC_LAST_CALCULATED.load(Ordering::Acquire),
+        ECC_LAST_BYTE.load(Ordering::Acquire),
+        ECC_LAST_BEFORE.load(Ordering::Acquire),
+        ECC_LAST_AFTER.load(Ordering::Acquire),
+    ]
 }
 
 pub(crate) fn nand_read_diagnostic() -> (u32, u32, u32, u32, u32) {
@@ -375,7 +420,10 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     }
 
     let tag = &stored[ECC_OOB_BYTES..];
+    ECC_LAST_PAGE.store(page, Ordering::Relaxed);
     if tag == [0xFF, 0xFF] {
+        ECC_READ_COUNTS[1].fetch_add(1, Ordering::Relaxed);
+        ECC_LAST_TAG.store(2, Ordering::Release);
         return true;
     }
     if tag != ECC_TAG {
@@ -383,6 +431,8 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return false;
     }
 
+    ECC_READ_COUNTS[0].fetch_add(1, Ordering::Relaxed);
+    ECC_LAST_TAG.store(1, Ordering::Release);
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
         let offset = chunk_index * ECC_BYTES_PER_CHUNK;
         let stored_ecc = u32::from_le_bytes([
@@ -397,9 +447,44 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             calculated[offset + 2],
             0,
         ]);
+        let syndrome = (stored_ecc ^ calculated_ecc) & 0x00FF_FFFF;
+        ECC_LAST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
+        ECC_LAST_SYNDROME.store(syndrome, Ordering::Relaxed);
+        ECC_LAST_STORED.store(stored_ecc, Ordering::Relaxed);
+        ECC_LAST_CALCULATED.store(calculated_ecc, Ordering::Relaxed);
+        ECC_LAST_BYTE.store(u32::MAX, Ordering::Relaxed);
+        if syndrome != 0 {
+            ECC_READ_COUNTS[2].fetch_add(1, Ordering::Relaxed);
+            if syndrome.count_ones() == 1 {
+                ECC_READ_COUNTS[3].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        // Capture the actual correction, if any, without changing the decoder.
+        let mut changed_byte = u32::MAX;
+        let mut before = 0u32;
+        let mut after = 0u32;
+        if syndrome != 0 && syndrome.count_ones() != 1 {
+            let mut probe = [0u8; FSMC_ECC_CHUNK_SIZE];
+            probe.copy_from_slice(chunk);
+            if correct_ecc_chunk(&mut probe, stored_ecc, calculated_ecc) {
+                if let Some(index) = chunk.iter().zip(probe.iter()).position(|(a, b)| a != b) {
+                    changed_byte = index as u32;
+                    before = chunk[index] as u32;
+                    after = probe[index] as u32;
+                    ECC_READ_COUNTS[2].fetch_add(0, Ordering::Relaxed);
+                    ECC_READ_COUNTS[3].fetch_add(0, Ordering::Relaxed);
+                }
+            }
+        }
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
             record_ecc_read_failure(page, chunk_index as u32, stored_ecc, calculated_ecc);
             return false;
+        }
+        if changed_byte != u32::MAX {
+            ECC_READ_COUNTS[2].fetch_add(0, Ordering::Relaxed);
+            ECC_LAST_BYTE.store(changed_byte, Ordering::Relaxed);
+            ECC_LAST_BEFORE.store(before, Ordering::Relaxed);
+            ECC_LAST_AFTER.store(after, Ordering::Relaxed);
         }
     }
     true
