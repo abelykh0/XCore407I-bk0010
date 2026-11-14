@@ -239,9 +239,10 @@ fn main() -> ! {
         USB_FS_READY.store(false, Ordering::Release);
         USB_HOST_TASK_PENDING.store(false, Ordering::Release);
 
-        // Mount LittleFS exactly once for the lifetime of CDC mode. The
-        // emulator and normal-mode storage paths are never entered here.
+        // Mount LittleFS for each CDC session. After formatting, the old
+        // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
         let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
+        loop {
         let mount_result: Result<bool, xcore407i_blinker::nand_fs::FsAccessError> =
             xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
                 loop {
@@ -290,12 +291,15 @@ fn main() -> ! {
                     },
                 );
             match format_result {
-                Ok(()) => xcore407i_blinker::cdc_console::report_format_status(
-                    b"\r\nNAND format complete. Reboot the device to mount the new volume.\r\n",
-                ),
-                Err(_) => xcore407i_blinker::cdc_console::report_format_status(
-                    b"\r\nNAND format failed. Check NAND diagnostics and reboot.\r\n",
-                ),
+                Ok(report) => {
+                    xcore407i_blinker::cdc_console::report_format_complete(report);
+                    continue;
+                }
+                Err(_) => {
+                    xcore407i_blinker::cdc_console::report_format_status(
+                        b"\r\nNAND format failed. Check NAND diagnostics.\r\n",
+                    );
+                }
             }
             loop {
                 unsafe {
@@ -342,6 +346,8 @@ fn main() -> ! {
                 while prepare_next_video_batch(&mut video_renderer) {}
             }
         }
+        }
+
     }
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
