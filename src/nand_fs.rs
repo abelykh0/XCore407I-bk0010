@@ -70,6 +70,10 @@ static ECC_LAST_CALCULATED: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_BYTE: AtomicU32 = AtomicU32::new(u32::MAX);
 static ECC_LAST_BEFORE: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_AFTER: AtomicU32 = AtomicU32::new(0);
+// Calculated ECC for each 512-byte chunk of the most recently read page.
+static ECC_LAST_PAGE_CHUNKS: [AtomicU32; FSMC_ECC_CHUNKS_PER_PAGE] = [
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
+];
 
 
 // First raw NAND command failure during a storage operation.
@@ -132,11 +136,12 @@ pub(crate) fn clear_nand_read_diagnostic() {
     ECC_LAST_BYTE.store(u32::MAX, Ordering::Release);
     ECC_LAST_BEFORE.store(0, Ordering::Release);
     ECC_LAST_AFTER.store(0, Ordering::Release);
+    for value in &ECC_LAST_PAGE_CHUNKS { value.store(0, Ordering::Release); }
     clear_nand_device_diagnostic();
 }
 
 
-pub(crate) fn ecc_read_diagnostic() -> [u32; 14] {
+pub(crate) fn ecc_read_diagnostic() -> [u32; 18] {
     [
         ECC_READ_COUNTS[0].load(Ordering::Acquire),
         ECC_READ_COUNTS[1].load(Ordering::Acquire),
@@ -152,6 +157,10 @@ pub(crate) fn ecc_read_diagnostic() -> [u32; 14] {
         ECC_LAST_BYTE.load(Ordering::Acquire),
         ECC_LAST_BEFORE.load(Ordering::Acquire),
         ECC_LAST_AFTER.load(Ordering::Acquire),
+        ECC_LAST_PAGE_CHUNKS[0].load(Ordering::Acquire),
+        ECC_LAST_PAGE_CHUNKS[1].load(Ordering::Acquire),
+        ECC_LAST_PAGE_CHUNKS[2].load(Ordering::Acquire),
+        ECC_LAST_PAGE_CHUNKS[3].load(Ordering::Acquire),
     ]
 }
 
@@ -453,7 +462,9 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         for byte in chunk {
             *byte = read_data();
         }
-        encode_ecc(ecc_end_chunk(), &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
+        let chunk_ecc = ecc_end_chunk();
+        ECC_LAST_PAGE_CHUNKS[chunk_index].store(chunk_ecc, Ordering::Relaxed);
+        encode_ecc(chunk_ecc, &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
 
     let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
