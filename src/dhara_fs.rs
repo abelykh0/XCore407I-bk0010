@@ -46,7 +46,6 @@ unsafe extern "C" {
     fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
     fn xcore_lfs_alloc_diag_clear();
     fn xcore_lfs_alloc_diag_read(out: *mut u32);
-    fn xcore_lfs_alloc_trace_read(out: *mut u32, stats: *mut u32);
 }
 
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
@@ -147,11 +146,12 @@ pub(crate) fn littlefs_alloc_diagnostic() -> [u32; 10] {
 }
 
 pub(crate) fn littlefs_alloc_trace_diagnostic() -> ([u32; 7], [u32; 112]) {
+    let mut combined = [0u32; 129];
+    unsafe { xcore_lfs_alloc_diag_read(combined.as_mut_ptr()); }
     let mut stats = [0u32; 7];
+    stats.copy_from_slice(&combined[10..17]);
     let mut trace = [0u32; 112];
-    unsafe {
-        xcore_lfs_alloc_trace_read(trace.as_mut_ptr(), stats.as_mut_ptr());
-    }
+    trace.copy_from_slice(&combined[17..129]);
     (stats, trace)
 }
 
