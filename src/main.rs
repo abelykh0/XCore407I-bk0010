@@ -14,7 +14,7 @@ use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, Nv12DemoImage};
+use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line, show_usb_status, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
 use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
@@ -45,7 +45,7 @@ use file_browser::{
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
     configure_usb_host_task_timer, try_init_usb_fs_host, USB_FS_READY,
-    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING,
+    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
 };
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
@@ -113,7 +113,10 @@ fn main() -> ! {
     // Start host-task scheduling before waiting for the boot keyboard.
     configure_usb_host_task_timer(&device.RCC, &device.TIM3, &mut core.NVIC);
 
-    const KEYBOARD_DETECT_TIMEOUT_MS: u32 = 30_000;
+    // Do not leave the PC-facing USB device uninitialized for tens of seconds
+    // if the optional boot keyboard is absent. A healthy FS host should report
+    // the boot keyboard well before this fallback interval.
+    const KEYBOARD_DETECT_TIMEOUT_MS: u32 = 3_000;
     let keyboard_wait_started = TICKS.load(Ordering::Relaxed);
     while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
         if !USB_FS_READY.load(Ordering::Acquire) {
@@ -161,7 +164,20 @@ fn main() -> ! {
         clear_demo_canvas(0x10);
     } else if boot_mode == keyboard::BOOT_SELECTION_TIMEOUT {
         clear_demo_canvas(0x10);
-        show_usb_status(b"KEYBOARD NOT DETECTED");
+        show_usb_status(b"BOOT KEYBOARD TIMEOUT (3s)");
+        let host_status = USB_FS_STATUS.load(Ordering::Acquire);
+        let detail: &[u8] = match host_status {
+            0 => b"FS HOST: NOT STARTED",
+            1 => b"FS HOST: READY; NO DEVICE",
+            2 => b"FS HOST: INIT FAILED",
+            3 => b"FS KEYBOARD: MOUNTED",
+            5 => b"FS KEYBOARD: REMOVED",
+            7 => b"FS ENUM: DEVICE DESCRIPTOR",
+            8 => b"FS ENUM: CONFIG DESCRIPTOR",
+            _ => b"FS HOST: OTHER STATE",
+        };
+        show_file_browser_line(2, detail, false);
+        show_file_browser_line(3, b"USB HS DEVICE INIT FOLLOWS", false);
     }
 
     // The main loop owns the renderer; TinyUSB UVC completion callbacks
