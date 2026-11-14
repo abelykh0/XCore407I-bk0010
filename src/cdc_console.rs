@@ -319,7 +319,7 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_decimal(alloc_stats[32] as usize);
     write_status(b" last_caller=");
     write_decimal(alloc_stats[33] as usize);
-    write_status(b"\\r\\nRecent LittleFS allocator events (oldest first):\\r\\n");
+    write_status(b"\r\nRecent LittleFS allocator events (oldest first):\\r\\n");
     let trace_count = alloc_stats[5].min(16) as usize;
     let trace_head = (alloc_stats[6] as usize) % 16;
     let trace_start = (trace_head + 16 - trace_count) % 16;
