@@ -20,6 +20,15 @@ static volatile uint32_t xcore_lfs_checkpoint_resets;
 static volatile uint32_t xcore_lfs_trace[XCORE_LFS_ALLOC_TRACE_COUNT][XCORE_LFS_ALLOC_TRACE_FIELDS];
 static volatile uint32_t xcore_lfs_trace_head;
 static volatile uint32_t xcore_lfs_trace_count;
+static volatile uint32_t xcore_lfs_dir_alloc_calls;
+static volatile uint32_t xcore_lfs_ctz_extend_calls;
+static volatile uint32_t xcore_lfs_file_relocate_calls;
+static volatile uint32_t xcore_lfs_last_ctz_head;
+static volatile uint32_t xcore_lfs_last_ctz_size;
+static volatile uint32_t xcore_lfs_last_relocate_block;
+static volatile uint32_t xcore_lfs_last_relocate_off;
+static volatile uint32_t xcore_lfs_last_relocate_pos;
+static volatile uint32_t xcore_lfs_last_relocate_ctz_size;
 
 static void xcore_lfs_alloc_trace_record(lfs_t *lfs, uint32_t event) {
     uint32_t used = 0;
@@ -57,6 +66,15 @@ void xcore_lfs_alloc_diag_clear(void) {
     xcore_lfs_checkpoint_resets = 0;
     xcore_lfs_trace_head = 0;
     xcore_lfs_trace_count = 0;
+    xcore_lfs_dir_alloc_calls = 0;
+    xcore_lfs_ctz_extend_calls = 0;
+    xcore_lfs_file_relocate_calls = 0;
+    xcore_lfs_last_ctz_head = 0;
+    xcore_lfs_last_ctz_size = 0;
+    xcore_lfs_last_relocate_block = 0;
+    xcore_lfs_last_relocate_off = 0;
+    xcore_lfs_last_relocate_pos = 0;
+    xcore_lfs_last_relocate_ctz_size = 0;
 }
 
 // out[0..10] is the original failure snapshot. The extended tail contains
@@ -76,6 +94,15 @@ void xcore_lfs_alloc_diag_read(uint32_t *out) {
             out[17 + i * XCORE_LFS_ALLOC_TRACE_FIELDS + j] = xcore_lfs_trace[i][j];
         }
     }
+    out[129] = xcore_lfs_dir_alloc_calls;
+    out[130] = xcore_lfs_ctz_extend_calls;
+    out[131] = xcore_lfs_file_relocate_calls;
+    out[132] = xcore_lfs_last_ctz_head;
+    out[133] = xcore_lfs_last_ctz_size;
+    out[134] = xcore_lfs_last_relocate_block;
+    out[135] = xcore_lfs_last_relocate_off;
+    out[136] = xcore_lfs_last_relocate_pos;
+    out[137] = xcore_lfs_last_relocate_ctz_size;
 }
 
 static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
@@ -1891,6 +1918,7 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
 
 #ifndef LFS_READONLY
 static int lfs_dir_alloc(lfs_t *lfs, lfs_mdir_t *dir) {
+    xcore_lfs_dir_alloc_calls++;
     // allocate pair of dir blocks (backwards, so we write block 1 first)
     for (int i = 0; i < 2; i++) {
         int err = lfs_alloc(lfs, &dir->pair[(i+1)%2]);
@@ -3001,6 +3029,9 @@ static int lfs_ctz_extend(lfs_t *lfs,
     while (true) {
         // go ahead and grab a block
         lfs_block_t nblock;
+        xcore_lfs_ctz_extend_calls++;
+        xcore_lfs_last_ctz_head = head;
+        xcore_lfs_last_ctz_size = size;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
@@ -3334,6 +3365,11 @@ static int lfs_file_close_(lfs_t *lfs, lfs_file_t *file) {
 
 #ifndef LFS_READONLY
 static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
+    xcore_lfs_file_relocate_calls++;
+    xcore_lfs_last_relocate_block = file->block;
+    xcore_lfs_last_relocate_off = file->off;
+    xcore_lfs_last_relocate_pos = file->pos;
+    xcore_lfs_last_relocate_ctz_size = file->ctz.size;
     while (true) {
         // just relocate what exists into new block
         lfs_block_t nblock;
