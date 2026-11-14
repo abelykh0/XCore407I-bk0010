@@ -59,27 +59,22 @@ void xcore_lfs_alloc_diag_clear(void) {
     xcore_lfs_trace_count = 0;
 }
 
+// out[0..10] is the original failure snapshot. The extended tail contains
+// allocator stats [10..17] followed by the 16 x 7 event trace [17..129].
 void xcore_lfs_alloc_diag_read(uint32_t *out) {
     if (!out) return;
     for (unsigned i = 0; i < 10; i++) out[i] = xcore_lfs_alloc_diag[i];
-}
-
-void xcore_lfs_alloc_trace_read(uint32_t *out, uint32_t *stats) {
-    if (out) {
-        for (unsigned i = 0; i < XCORE_LFS_ALLOC_TRACE_COUNT; i++) {
-            for (unsigned j = 0; j < XCORE_LFS_ALLOC_TRACE_FIELDS; j++) {
-                out[i * XCORE_LFS_ALLOC_TRACE_FIELDS + j] = xcore_lfs_trace[i][j];
-            }
+    out[10] = xcore_lfs_alloc_calls;
+    out[11] = xcore_lfs_alloc_successes;
+    out[12] = xcore_lfs_checkpoint_resets;
+    out[13] = xcore_lfs_alloc_scans;
+    out[14] = xcore_lfs_traversed_blocks;
+    out[15] = xcore_lfs_trace_count;
+    out[16] = xcore_lfs_trace_head;
+    for (unsigned i = 0; i < XCORE_LFS_ALLOC_TRACE_COUNT; i++) {
+        for (unsigned j = 0; j < XCORE_LFS_ALLOC_TRACE_FIELDS; j++) {
+            out[17 + i * XCORE_LFS_ALLOC_TRACE_FIELDS + j] = xcore_lfs_trace[i][j];
         }
-    }
-    if (stats) {
-        stats[0] = xcore_lfs_alloc_calls;
-        stats[1] = xcore_lfs_alloc_successes;
-        stats[2] = xcore_lfs_checkpoint_resets;
-        stats[3] = xcore_lfs_alloc_scans;
-        stats[4] = xcore_lfs_traversed_blocks;
-        stats[5] = xcore_lfs_trace_count;
-        stats[6] = xcore_lfs_trace_head;
     }
 }
 
