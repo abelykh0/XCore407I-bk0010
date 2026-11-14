@@ -14,7 +14,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP     Show this help\r\n  STATUS   Show USB/storage status\r\n  VERSION  Show firmware target\r\n  RECV     Receive a file with ZMODEM\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  VERSION    Show firmware target\r\n  RECV       Receive a file with ZMODEM\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n> ";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n> ";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -182,6 +182,36 @@ pub fn service(
                             write_status(b"ZMODEM receiver ready. In Tera Term choose Transfer > ZMODEM > Send.\r\n");
                         } else {
                             write_status(b"Unable to start ZMODEM receiver.\r\n> ");
+                        }
+                    } else if command_is(line, b"FORMAT") {
+                        write_status(
+                            b"WARNING: FORMAT YES erases the NAND and creates a new Dhara/LittleFS volume.\r\nType FORMAT YES to confirm.\r\n> ",
+                        );
+                    } else if command_is(line, b"FORMAT YES") {
+                        if fs.is_some() {
+                            write_status(
+                                b"Refusing: filesystem is mounted. Reboot into CDC mode with storage unavailable before formatting.\r\n> ",
+                            );
+                        } else {
+                            write_status(b"Formatting NAND; all files will be lost...\r\n");
+                            match crate::nand_fs::initialize_nand_volume() {
+                                Ok(()) => write_status(
+                                    b"NAND format complete. Reboot the device to mount the new volume.\r\n> ",
+                                ),
+                                Err(error) => {
+                                    use crate::nand_fs::InitError;
+                                    let message: &[u8] = match error {
+                                        InitError::Timeout => b"NAND format failed: timeout.\r\n> ",
+                                        InitError::WrongDevice => b"NAND format failed: unexpected NAND device.\r\n> ",
+                                        InitError::MarkerRead => b"NAND format failed: bad-block marker read error.\r\n> ",
+                                        InitError::MountFailed => b"NAND format failed: LittleFS format/mount error.\r\n> ",
+                                        InitError::DharaNoJournal => b"NAND format failed: Dhara journal missing.\r\n> ",
+                                        InitError::DharaCapacity => b"NAND format failed: insufficient Dhara capacity.\r\n> ",
+                                        InitError::ProvisionFailed => b"NAND format failed: Dhara provisioning error.\r\n> ",
+                                    };
+                                    write_status(message);
+                                }
+                            }
                         }
                     } else if LINE_LEN == 0 {
                         write_status(b"> ");
