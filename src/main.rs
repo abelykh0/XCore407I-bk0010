@@ -278,9 +278,40 @@ fn main() -> ! {
 
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
-        if matches!(&mount_result, Ok(true)) {
+        let mut format_requested = matches!(&mount_result, Ok(true));
+
+        // If the volume could not be mounted, keep the console available and
+        // allow FORMAT YES to recover it through the same provisioning path.
+        if let Err(error) = mount_result {
+            loop {
+                unsafe {
+                    let _ = tusb::tud_task_ext(0, false);
+                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                }
+                let requested = xcore407i_blinker::cdc_console::service(
+                    None,
+                    &mut zmodem_state,
+                    TICKS.load(Ordering::Relaxed),
+                    &mut || {
+                        unsafe {
+                            let _ = tusb::tud_task_ext(0, false);
+                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                        }
+                        while prepare_next_video_batch(&mut video_renderer) {}
+                    },
+                );
+                xcore407i_blinker::cdc_console::report_storage_error(error);
+                while prepare_next_video_batch(&mut video_renderer) {}
+                if requested {
+                    format_requested = true;
+                    break;
+                }
+            }
+        }
+
+        if format_requested {
             xcore407i_blinker::cdc_console::report_format_status(
-                b"Filesystem unmounted. Formatting NAND; all files will be lost...\r\n",
+                b"Filesystem released. Formatting NAND; all files will be lost...\\r\\n",
             );
             let mut last_reported = 0u32;
             let format_result =
@@ -305,61 +336,10 @@ fn main() -> ! {
                 }
                 Err(_) => {
                     xcore407i_blinker::cdc_console::report_format_status(
-                        b"\r\nNAND format failed. Check NAND diagnostics.\r\n",
+                        b"\\r\\nNAND format failed. Check NAND diagnostics.\\r\\n",
                     );
                 }
             }
-            loop {
-                unsafe {
-                    let _ = tusb::tud_task_ext(0, false);
-                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                }
-                let format_requested = xcore407i_blinker::cdc_console::service(
-                    None,
-                    &mut zmodem_state,
-                    TICKS.load(Ordering::Relaxed),
-                    &mut || {
-                        unsafe {
-                            let _ = tusb::tud_task_ext(0, false);
-                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                        }
-                        while prepare_next_video_batch(&mut video_renderer) {}
-                    },
-                );
-                while prepare_next_video_batch(&mut video_renderer) {}
-                if format_requested {
-                    break;
-                }
-            }
-        }
-
-        // Keep the CDC camera and command console alive if NAND initialization
-        // or the existing LittleFS mount fails; file receive stays disabled.
-        if let Err(error) = mount_result {
-            loop {
-                unsafe {
-                    let _ = tusb::tud_task_ext(0, false);
-                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                }
-                let format_requested = xcore407i_blinker::cdc_console::service(
-                    None,
-                    &mut zmodem_state,
-                    TICKS.load(Ordering::Relaxed),
-                    &mut || {
-                        unsafe {
-                            let _ = tusb::tud_task_ext(0, false);
-                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                        }
-                        while prepare_next_video_batch(&mut video_renderer) {}
-                    },
-                );
-                xcore407i_blinker::cdc_console::report_storage_error(error);
-                while prepare_next_video_batch(&mut video_renderer) {}
-                if format_requested {
-                    break;
-                }
-            }
-        }
         }
 
     }
