@@ -380,7 +380,17 @@ static int find_head(struct dhara_journal *j, dhara_page_t start,
 	 * The block we end up on might be bad, but that's ok -- we'll
 	 * skip it when we go to prepare the next write.
 	 */
+	/* At most one complete NAND rotation is needed to find a free
+	 * checkpoint group. Bound this scan in case the journal pointers
+	 * or the NAND free-page test are inconsistent. */
+	unsigned int steps = 0;
+	const unsigned int max_steps =
+		j->nand->num_blocks << j->nand->log2_ppb;
+
 	for (;;) {
+		if (++steps > max_steps)
+			return -1;
+
 		/* How many free pages trail this checkpoint group? */
 		const unsigned int ppc = 1 << j->log2_ppc;
 		unsigned int n = 0;
