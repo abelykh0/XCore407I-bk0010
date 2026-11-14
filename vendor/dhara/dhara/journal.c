@@ -388,8 +388,10 @@ static int find_head(struct dhara_journal *j, dhara_page_t start,
 		j->nand->num_blocks << j->nand->log2_ppb;
 
 	for (;;) {
-		if (++steps > max_steps)
+		if (++steps > max_steps) {
+			dhara_set_error(err, DHARA_E_TOO_BAD);
 			return -1;
+		}
 
 		/* How many free pages trail this checkpoint group? */
 		const unsigned int ppc = 1 << j->log2_ppc;
