@@ -228,7 +228,7 @@ pub fn service(
     fs: Option<&Filesystem<'_, ActiveStorage>>,
     zmodem: &mut cdc_zmodem::State,
     now_ms: u32,
-    service_background: &mut impl FnMut(),
+    _service_background: &mut impl FnMut(),
 ) -> bool {
     let mut format_requested = false;
     unsafe {
