@@ -11,6 +11,7 @@ const LINE_CAPACITY: usize = 80;
 static mut LINE: [u8; LINE_CAPACITY] = [0; LINE_CAPACITY];
 static mut LINE_LEN: usize = 0;
 static mut WAS_CONNECTED: bool = false;
+static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
 const HELP: &[u8] = b"\r\nCommands:\r\n  HELP     Show this help\r\n  STATUS   Show USB/storage status\r\n  VERSION  Show firmware target\r\n  RECV     Receive a file with ZMODEM\r\n> ";
@@ -21,6 +22,15 @@ const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 /// Print the exact non-destructive storage initialization or mount failure.
 pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
     use crate::nand_fs::{FsAccessError, InitError};
+
+    // The CDC terminal may not have asserted DTR when storage initialization
+    // fails. Defer the diagnostic until the host opens the port.
+    unsafe {
+        if !tusb::tud_cdc_n_connected(0) || STORAGE_ERROR_REPORTED {
+            return;
+        }
+        STORAGE_ERROR_REPORTED = true;
+    }
 
     match error {
         FsAccessError::Init(kind) => {
@@ -84,6 +94,7 @@ pub fn service(
         if !connected {
             LINE_LEN = 0;
             WAS_CONNECTED = false;
+            STORAGE_ERROR_REPORTED = false;
             cdc_zmodem::cancel(zmodem);
             return;
         }
