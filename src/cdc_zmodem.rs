@@ -16,7 +16,7 @@ use crate::{nand_fs::ActiveStorage, tusb};
 
 const NAME_CAPACITY: usize = 64;
 const WIRE_CAPACITY: usize = 64;
-const TRANSFER_TIMEOUT_MS: u32 = 10_000;
+const TRANSFER_TIMEOUT_MS: u32 = 60_000;
 
 pub struct State {
     receiver: Option<Receiver>,
@@ -27,6 +27,8 @@ pub struct State {
     wire_pos: usize,
     last_activity_ms: u32,
     transfer_failed: bool,
+    transfer_started: bool,
+    timeout_pending: bool,
 }
 
 impl State {
@@ -40,6 +42,8 @@ impl State {
             wire_pos: 0,
             last_activity_ms: 0,
             transfer_failed: false,
+            transfer_started: false,
+            timeout_pending: false,
         }
     }
 
@@ -59,6 +63,8 @@ pub fn cancel(state: &mut State) {
     state.path_len = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
+    state.transfer_started = false;
+    state.timeout_pending = false;
 }
 
 fn make_path(name: &[u8], path: &mut [u8; NAME_CAPACITY + 2]) -> Option<usize> {
@@ -88,6 +94,16 @@ fn create_new_file(fs: &Filesystem<'_, ActiveStorage>, path_bytes: &[u8]) -> boo
         |_file| Ok(()),
     )
     .is_ok()
+}
+
+fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
+    if state.path_len == 0 {
+        return;
+    }
+    if let Ok(path) = Path::from_bytes_with_nul(&state.path[..state.path_len]) {
+        let _ = fs.remove(path);
+    }
+    state.path_len = 0;
 }
 
 fn append_file(
@@ -127,6 +143,8 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.wire_pos = 0;
     state.last_activity_ms = now_ms;
     state.transfer_failed = false;
+    state.transfer_started = false;
+    state.timeout_pending = false;
     state.receiver = Some(receiver);
     Ok(())
 }
@@ -181,6 +199,7 @@ pub fn service(
                 state.last_activity_ms = now_ms;
             }
             Action::Event(Event::FileStarted(info)) => {
+                state.transfer_started = true;
                 let path_len = make_path(info.name, &mut state.path);
                 let created = match path_len {
                     Some(len) => create_new_file(fs, &state.path[..len]),
@@ -218,7 +237,18 @@ pub fn service(
             }
             Action::Event(Event::Aborted) => {
                 finished = true;
-                super::cdc_console::write_status(b"\r\nZMODEM aborted\r\n> ");
+                remove_partial_file(fs, state);
+                if state.timeout_pending {
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM timed out after 60 seconds of inactivity\r\n> ",
+                    );
+                } else if state.transfer_started {
+                    super::cdc_console::write_status(b"\r\nZMODEM transfer cancelled\r\n> ");
+                } else {
+                    super::cdc_console::write_status(b"\r\nZMODEM session cancelled\r\n> ");
+                }
+                state.timeout_pending = false;
+                state.transfer_started = false;
                 break;
             }
             Action::Idle => {
@@ -248,9 +278,15 @@ pub fn service(
                         }
                     }
                 } else if now_ms.wrapping_sub(state.last_activity_ms) >= TRANSFER_TIMEOUT_MS {
-                    if receiver.timeout().is_err() {
+                    state.timeout_pending = true;
+                    if receiver.abort().is_err() {
                         state.transfer_failed = true;
-                        let _ = receiver.abort();
+                        finished = true;
+                        remove_partial_file(fs, state);
+                        super::cdc_console::write_status(
+                            b"\r\nZMODEM timeout; unable to queue abort\r\n> ",
+                        );
+                        break;
                     }
                     state.last_activity_ms = now_ms;
                 } else {
