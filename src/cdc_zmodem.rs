@@ -33,6 +33,7 @@ pub struct State {
     input_accepted: bool,
     response_queued: bool,
     response_sent: bool,
+    last_error: u8,
 }
 
 impl State {
@@ -51,6 +52,7 @@ impl State {
             input_accepted: false,
             response_queued: false,
             response_sent: false,
+            last_error: 0,
         }
     }
 
@@ -60,6 +62,10 @@ impl State {
 
     pub fn handshake_status(&self) -> (bool, bool, bool) {
         (self.input_accepted, self.response_queued, self.response_sent)
+    }
+
+    pub fn last_error(&self) -> u8 {
+        self.last_error
     }
 }
 
@@ -115,7 +121,9 @@ fn create_new_file(fs: &Filesystem<'_, ActiveStorage>, path_bytes: &[u8]) -> boo
 fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
     if state.final_path_len != 0 {
         if let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) {
-            let _ = fs.remove(path);
+            if fs.remove(path).is_err() && state.last_error == 0 {
+                state.last_error = 8;
+            }
         }
     }
     state.final_path_len = 0;
@@ -208,6 +216,7 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.input_accepted = false;
     state.response_queued = false;
     state.response_sent = false;
+    state.last_error = 0;
     state.receiver = Some(receiver);
     Ok(())
 }
@@ -279,6 +288,7 @@ pub fn service(
             Action::WriteFile(bytes) => {
                 let bytes_len = bytes.len();
                 if state.final_path_len == 0 {
+                    state.last_error = 1;
                     super::cdc_console::write_status(
                         b"\r\nZMODEM storage error: temp file not active\r\n",
                     );
@@ -287,6 +297,7 @@ pub fn service(
                     break;
                 }
                 if !append_file(fs, bytes) {
+                    state.last_error = 2;
                     super::cdc_console::write_status(
                         b"\r\nZMODEM storage error: append/write/flush failed\r\n",
                     );
@@ -295,6 +306,7 @@ pub fn service(
                     break;
                 }
                 if receiver.file_written(bytes_len).is_err() {
+                    state.last_error = 3;
                     super::cdc_console::write_status(
                         b"\r\nZMODEM protocol error: file_written rejected data\r\n",
                     );
@@ -319,6 +331,7 @@ pub fn service(
                 if available {
                     state.final_path_len = path_len.unwrap_or(0);
                     if receiver.accept_file_at(0).is_err() {
+                        state.last_error = 4;
                         super::cdc_console::write_status(
                             b"\r\nZMODEM protocol error: accept_file_at failed\r\n",
                         );
@@ -337,6 +350,7 @@ pub fn service(
             }
             Action::Event(Event::FileCompleted) => {
                 if !commit_temp_file(fs, state) {
+                    state.last_error = 5;
                     super::cdc_console::write_status(
                         b"\r\nZMODEM storage error: final rename/commit failed\r\n",
                     );
@@ -430,6 +444,7 @@ pub fn service(
                             state.last_activity_ms = now_ms;
                         },
                         Err(error) => {
+                            state.last_error = 6;
                             state.transfer_failed = true;
                             let message: &[u8] = match error {
                                 ZmodemError::MalformedEncoding(_) => b"\r\nZMODEM input: malformed encoding\r\n",
