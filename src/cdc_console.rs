@@ -333,6 +333,39 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_hex_u32(alloc_stats[39]);
     write_status(b" prog_errors=");
     write_decimal(alloc_stats[40] as usize);
+    let ecc = crate::nand_fs::ecc_read_diagnostic();
+    write_status(b"\r\nNAND ECC reads: tagged=");
+    write_decimal(ecc[0] as usize);
+    write_status(b" legacy=");
+    write_decimal(ecc[1] as usize);
+    write_status(b" nonzero_syndromes=");
+    write_decimal(ecc[2] as usize);
+    write_status(b" ecc_bit_errors=");
+    write_decimal(ecc[3] as usize);
+    write_status(b" corrected_data_bits=");
+    write_decimal(ecc[4] as usize);
+    write_status(b"\r\nLast ECC page: page=0x");
+    write_hex_u32(ecc[5]);
+    write_status(b" tag=");
+    write_decimal(ecc[6] as usize);
+    write_status(b" chunk=");
+    write_decimal(ecc[7] as usize);
+    write_status(b" syndrome=0x");
+    write_hex_u32(ecc[8]);
+    write_status(b" stored=0x");
+    write_hex_u32(ecc[9]);
+    write_status(b" calculated=0x");
+    write_hex_u32(ecc[10]);
+    write_status(b" correction_byte=");
+    if ecc[11] == u32::MAX {
+        write_status(b"none");
+    } else {
+        write_decimal(ecc[11] as usize);
+        write_status(b" before=0x");
+        write_hex_u32(ecc[12]);
+        write_status(b" after=0x");
+        write_hex_u32(ecc[13]);
+    }
     write_status(b"\r\nRecent LittleFS allocator events (oldest first):\\r\\n");
     let trace_count = alloc_stats[5].min(16) as usize;
     let trace_head = (alloc_stats[6] as usize) % 16;
