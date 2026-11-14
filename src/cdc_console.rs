@@ -311,6 +311,37 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_status(b"\r\nTest file retained for inspection.\r\n> ");
 }
 
+fn report_storage_phase_counters(stage: &[u8]) {
+    write_status(stage);
+    let counts = crate::dhara_fs::dhara_nand_diagnostic();
+    write_status(b"Dhara NAND: is_bad=");
+    write_decimal(counts[0] as usize);
+    write_status(b" mark_bad=");
+    write_decimal(counts[1] as usize);
+    write_status(b" erase=");
+    write_decimal(counts[2] as usize);
+    write_status(b" program=");
+    write_decimal(counts[3] as usize);
+    write_status(b" is_free=");
+    write_decimal(counts[4] as usize);
+    write_status(b" read=");
+    write_decimal(counts[5] as usize);
+    write_status(b" copy=");
+    write_decimal(counts[6] as usize);
+    write_status(b" last_op=");
+    write_decimal(counts[7] as usize);
+    write_status(b" last_location=0x");
+    write_hex_u32(counts[8]);
+    let (calls, iterations, timeouts) = crate::nand_fs::nand_rb_wait_diagnostic();
+    write_status(b"\r\nNAND R/B: calls=");
+    write_decimal(calls as usize);
+    write_status(b" poll_iterations=");
+    write_decimal(iterations as usize);
+    write_status(b" timeouts=");
+    write_decimal(timeouts as usize);
+    write_status(b"\r\n");
+}
+
 fn storage_test(
     fs: &Filesystem<'_, ActiveStorage>,
     service_usb_only: &mut impl FnMut(),
@@ -323,6 +354,7 @@ fn storage_test(
     write_status(b"\r\nSTORAGETEST starting; UVC/video servicing is paused.\r\n");
     service_usb_only();
 
+    report_storage_phase_counters(b"At STORAGETEST entry (since storage init):\r\n");
     report_storage_space(fs, b"Before test:");
     write_status(b"CLEANUP: checking previous test file...\r\n");
     service_usb_only();
@@ -331,6 +363,7 @@ fn storage_test(
         return;
     }
 
+    report_storage_phase_counters(b"Before test write (init + preparation):\r\n");
     crate::dhara_fs::clear_storage_io_diagnostic();
     crate::dhara_fs::clear_littlefs_alloc_diagnostic();
     crate::nand_fs::clear_nand_read_diagnostic();
