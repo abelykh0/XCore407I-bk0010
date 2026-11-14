@@ -23,6 +23,8 @@ const NAND_BASE: usize = 0x7000_0000;
 
 // STM32F407 FSMC NAND Bank 2 registers.
 const FSMC_PCR2: *mut u32 = (FSMC_BASE + 0x60) as *mut u32;
+const FSMC_SR2: *const u32 = (FSMC_BASE + 0x64) as *const u32;
+const FSMC_SR_FEMPT: u32 = 1 << 6;
 // Bank 2 ECCR2 is at offset 0x74 (PCR2 +0x60, SR2 +0x64,
 // PMEM2 +0x68, PATT2 +0x6C, reserved +0x70, ECCR2 +0x74).
 const FSMC_ECCR2: *const u32 = (FSMC_BASE + 0x74) as *const u32;
@@ -72,7 +74,8 @@ static ECC_LAST_AFTER: AtomicU32 = AtomicU32::new(0);
 
 // First raw NAND command failure during a storage operation.
 // Stages: 1=page-read timeout, 2=block-erase timeout, 3=block-erase
-// status failure, 4=page-program timeout, 5=page-program status failure.
+// status failure, 4=page-program timeout, 5=page-program status failure,
+// 6=FSMC write FIFO did not drain before ECC capture.
 static NAND_DEVICE_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_DEVICE_FAILURE_LOCATION: AtomicU32 = AtomicU32::new(0);
 static NAND_DEVICE_FAILURE_STATUS: AtomicU32 = AtomicU32::new(0);
@@ -190,6 +193,18 @@ fn ecc_begin_chunk() {
         );
         let _ = read_volatile(FSMC_PCR2);
     }
+}
+
+/// Wait until all buffered FSMC writes have reached the NAND data bus.
+/// RM0090 requires FEMPT=1 before reading ECC after a NAND write.
+fn wait_fsmc_fifo_empty() -> bool {
+    for _ in 0..TIMEOUT {
+        if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
 }
 
 /// Read the 24-bit ECC result and disable the engine before reuse.
@@ -312,6 +327,13 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
         ecc_begin_chunk();
         for &byte in chunk { write_data(byte); }
+        // The FSMC buffers NAND writes. Capturing ECC before FEMPT is set can
+        // store a code for an incomplete chunk and cause false corrections.
+        if !wait_fsmc_fifo_empty() {
+            let status = unsafe { read_volatile(FSMC_SR2) };
+            record_nand_device_failure(6, page, status);
+            return false;
+        }
         encode_ecc(ecc_end_chunk(), &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
 
