@@ -224,7 +224,7 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_hex_u32(lfs_error as u32);
     write_status(b"\r\n");
 
-    report_storage_space(fs, b"Allocator snapshot at failure:");
+    write_status(b"Free-space traversal skipped here to avoid an additional full NAND scan.\r\n");
     let alloc = crate::dhara_fs::littlefs_alloc_diagnostic();
     let (rb_calls, rb_iterations, rb_timeouts) = crate::nand_fs::nand_rb_wait_diagnostic();
     write_status(b"LittleFS allocator at NOSPC: captured=");
@@ -346,7 +346,6 @@ fn storage_test(
                     written += amount;
                 }
                 offset += count;
-                report_storage_space(fs, b"After successful write chunk:");
             }
             write_status(b"FLUSH: committing file...\r\n");
             service_usb_only();
