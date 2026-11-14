@@ -187,6 +187,10 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     write_status(b"> ");
 }
 
+pub fn report_format_status(bytes: &[u8]) {
+    write_status(bytes);
+}
+
 pub(crate) fn write_status(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
