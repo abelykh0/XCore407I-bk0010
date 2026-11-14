@@ -21,7 +21,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG    Read retained test data and report ECC registers (no writes)\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -610,6 +610,108 @@ fn report_storage_phase_counters(stage: &[u8]) {
     write_status(b"\r\n");
 }
 
+fn ecc_diagnostic_read(
+    fs: &Filesystem<'_, ActiveStorage>,
+    service_usb_only: &mut impl FnMut(),
+) {
+    let Ok(path) = Path::from_bytes_with_nul(STORAGE_TEST_PATH) else {
+        write_status(b"\\r\\nECCDIAG: invalid test path.\\r\\n> ");
+        return;
+    };
+
+    write_status(b"\\r\\nECCDIAG: read-only scan of /.storage-test; no NAND writes.\\r\\n");
+    crate::nand_fs::clear_nand_read_diagnostic();
+    crate::nand_fs::clear_nand_rb_wait_diagnostic();
+
+    let mut total = 0usize;
+    let mut mismatch: Option<(usize, u8, u8)> = None;
+    let result = fs.open_file_with_options_and_then(
+        |options| options.read(true),
+        path,
+        |file| {
+            let mut buffer = [0u8; STORAGE_TEST_CHUNK];
+            loop {
+                service_usb_only();
+                let count = file.read(&mut buffer)?;
+                if count == 0 { break; }
+                for (index, actual) in buffer[..count].iter().copied().enumerate() {
+                    let expected = storage_test_byte(total + index);
+                    if actual != expected && mismatch.is_none() {
+                        mismatch = Some((total + index, expected, actual));
+                    }
+                }
+                total += count;
+            }
+            Ok(())
+        },
+    );
+
+    match result {
+        Ok(()) => {
+            write_status(b"Read bytes: ");
+            write_decimal(total);
+            write_status(b"\\r\\n");
+            if let Some((offset, expected, actual)) = mismatch {
+                write_status(b"Pattern mismatch at byte ");
+                write_decimal(offset);
+                write_status(b": expected 0x");
+                write_hex_u32(expected as u32);
+                write_status(b", actual 0x");
+                write_hex_u32(actual as u32);
+                write_status(b"\\r\\n");
+            } else {
+                write_status(b"Pattern check: no mismatch in bytes read.\\r\\n");
+            }
+        }
+        Err(error) => {
+            write_status(b"Read failed; LittleFS error: 0x");
+            write_hex_u32(error.code() as u32);
+            write_status(b"\\r\\n");
+        }
+    }
+
+    let ecc = crate::nand_fs::ecc_read_diagnostic();
+    write_status(b"ECC reads: tagged=");
+    write_decimal(ecc[0] as usize);
+    write_status(b" legacy=");
+    write_decimal(ecc[1] as usize);
+    write_status(b" nonzero_syndromes=");
+    write_decimal(ecc[2] as usize);
+    write_status(b" corrected_data_bits=");
+    write_decimal(ecc[4] as usize);
+    write_status(b"\\r\\nLast page=0x");
+    write_hex_u32(ecc[5]);
+    write_status(b" chunk=");
+    write_decimal(ecc[7] as usize);
+    write_status(b" stored ECC=0x");
+    write_hex_u32(ecc[9]);
+    write_status(b" calculated ECC=0x");
+    write_hex_u32(ecc[10]);
+    write_status(b"\\r\\nECCR2 per 512-byte chunk: ");
+    for index in 0..4 {
+        if index != 0 { write_status(b" "); }
+        write_hex_u32(ecc[14 + index]);
+    }
+    write_status(b"\\r\\nPCR2 after ECC enable: ");
+    for index in 0..4 {
+        if index != 0 { write_status(b" "); }
+        write_hex_u32(ecc[18 + index]);
+    }
+    write_status(b"\\r\\nPCR2 before ECCR2 capture: ");
+    for index in 0..4 {
+        if index != 0 { write_status(b" "); }
+        write_hex_u32(ecc[22 + index]);
+    }
+    let (calls, iterations, timeouts) = crate::nand_fs::nand_rb_wait_diagnostic();
+    write_status(b"\\r\\nNAND R/B waits: calls=");
+    write_decimal(calls as usize);
+    write_status(b" polls=");
+    write_decimal(iterations as usize);
+    write_status(b" timeouts=");
+    write_decimal(timeouts as usize);
+    write_status(b"\\r\\n> ");
+}
+
 fn storage_test(
     fs: &Filesystem<'_, ActiveStorage>,
     service_usb_only: &mut impl FnMut(),
@@ -1044,6 +1146,12 @@ pub fn service(
                             list_files(fs);
                         } else {
                             write_status(b"Storage unavailable.\r\n> ");
+                        }
+                    } else if command_is(line, b"ECCDIAG") {
+                        if let Some(fs) = fs {
+                            ecc_diagnostic_read(fs, _service_background);
+                        } else {
+                            write_status(b"Storage unavailable.\\r\\n> ");
                         }
                     } else if command_is(line, b"STORAGETEST") {
                         if let Some(fs) = fs {
