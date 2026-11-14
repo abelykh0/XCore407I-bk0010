@@ -2,14 +2,11 @@
 
 use core::ffi::c_void;
 
-use littlefs2::{fs::Filesystem, io::{Error as LfsError, Read, Write}, path::Path};
+use littlefs2::{fs::Filesystem, path::Path};
 
 use crate::{cdc_zmodem, nand_fs::ActiveStorage, tusb};
 
 const LINE_CAPACITY: usize = 80;
-const STORAGE_TEST_PATH: &[u8] = b"/.storage-test\0";
-const STORAGE_TEST_LENGTH: usize = 8192;
-const STORAGE_TEST_CHUNK: usize = 64;
 
 static mut LINE: [u8; LINE_CAPACITY] = [0; LINE_CAPACITY];
 static mut LINE_LEN: usize = 0;
@@ -21,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  STORAGETEST Write, read, and compare a test file\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -191,173 +188,6 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
 }
 
 
-fn storage_test_byte(offset: usize) -> u8 {
-    (offset.wrapping_mul(37) ^ (offset >> 3) ^ 0xA5) as u8
-}
-
-fn report_storage_test_io_failure(stage: &[u8], lfs_error: i32) {
-    write_status(b"\r\nSTORAGETEST ");
-    write_status(stage);
-    write_status(b" failed; LittleFS error: 0x");
-    write_hex_u32(lfs_error as u32);
-    write_status(b"\r\n");
-
-    let (operation, location, storage_error) =
-        crate::dhara_fs::storage_io_diagnostic();
-    if operation != 0 {
-        write_status(b"Dhara operation: 0x");
-        write_hex_u32(operation);
-        write_status(b" logical sector: 0x");
-        write_hex_u32(location);
-        write_status(b" error: 0x");
-        write_hex_u32(storage_error);
-        write_status(b"\r\n");
-    }
-
-    let (nand_stage, detail, page, stored_ecc, calculated_ecc) =
-        crate::nand_fs::nand_read_diagnostic();
-    if nand_stage != 0 {
-        write_status(b"NAND read stage: 0x");
-        write_hex_u32(nand_stage);
-        write_status(b" detail: 0x");
-        write_hex_u32(detail);
-        write_status(b" physical page: 0x");
-        write_hex_u32(page);
-        write_status(b"\r\n");
-        if nand_stage == 4 {
-            write_status(b"Stored ECC: 0x");
-            write_hex_u32(stored_ecc);
-            write_status(b" calculated ECC: 0x");
-            write_hex_u32(calculated_ecc);
-            write_status(b"\r\n");
-        }
-    } else {
-        write_status(b"No lower-level NAND read failure was recorded.\r\n");
-    }
-}
-
-fn storage_test(
-    fs: &Filesystem<'_, ActiveStorage>,
-    service_background: &mut impl FnMut(),
-) {
-    let Ok(path) = Path::from_bytes_with_nul(STORAGE_TEST_PATH) else {
-        write_status(b"\r\nSTORAGETEST: invalid test path.\r\n> ");
-        return;
-    };
-
-    // The test owns only this reserved hidden filename. Remove an incomplete
-    // file left by an earlier interrupted test, but do not touch user files.
-    if fs.exists(path) && fs.remove(path).is_err() {
-        write_status(b"\r\nSTORAGETEST: cannot remove previous test file.\r\n> ");
-        return;
-    }
-
-    crate::dhara_fs::clear_storage_io_diagnostic();
-    crate::nand_fs::clear_nand_read_diagnostic();
-    let write_result = fs.open_file_with_options_and_then(
-        |options| options.write(true).create_new(true),
-        path,
-        |file| {
-            let mut offset = 0usize;
-            let mut buffer = [0u8; STORAGE_TEST_CHUNK];
-            while offset < STORAGE_TEST_LENGTH {
-                let count = core::cmp::min(buffer.len(), STORAGE_TEST_LENGTH - offset);
-                for (index, byte) in buffer[..count].iter_mut().enumerate() {
-                    *byte = storage_test_byte(offset + index);
-                }
-
-                let mut written = 0usize;
-                while written < count {
-                    let amount = file.write(&buffer[written..count])?;
-                    if amount == 0 {
-                        return Err(LfsError::IO);
-                    }
-                    written += amount;
-                }
-                offset += count;
-                service_background();
-            }
-            file.flush()
-        },
-    );
-
-    if let Err(error) = write_result {
-        report_storage_test_io_failure(b"write", error.code());
-        write_status(b"Test file was left in place for inspection.\r\n> ");
-        return;
-    }
-
-    crate::dhara_fs::clear_storage_io_diagnostic();
-    crate::nand_fs::clear_nand_read_diagnostic();
-    let mut mismatch: Option<(usize, u8, u8)> = None;
-    let mut short_read_at: Option<usize> = None;
-    let mut extra_byte: Option<u8> = None;
-    let read_result = fs.open_file_with_options_and_then(
-        |options| options.read(true),
-        path,
-        |file| {
-            let mut offset = 0usize;
-            let mut buffer = [0u8; STORAGE_TEST_CHUNK];
-            while offset < STORAGE_TEST_LENGTH {
-                let requested = core::cmp::min(buffer.len(), STORAGE_TEST_LENGTH - offset);
-                let count = file.read(&mut buffer[..requested])?;
-                if count == 0 {
-                    short_read_at = Some(offset);
-                    return Ok(());
-                }
-                for (index, actual) in buffer[..count].iter().copied().enumerate() {
-                    let expected = storage_test_byte(offset + index);
-                    if actual != expected {
-                        mismatch = Some((offset + index, expected, actual));
-                        return Ok(());
-                    }
-                }
-                offset += count;
-                service_background();
-            }
-
-            let mut extra = [0u8; 1];
-            if file.read(&mut extra)? != 0 {
-                extra_byte = Some(extra[0]);
-            }
-            Ok(())
-        },
-    );
-
-    if let Err(error) = read_result {
-        report_storage_test_io_failure(b"read", error.code());
-        write_status(b"Test file was left in place for inspection.\r\n> ");
-        return;
-    }
-
-    if let Some((offset, expected, actual)) = mismatch {
-        write_status(b"\r\nSTORAGETEST data mismatch at byte ");
-        write_decimal(offset);
-        write_status(b": expected 0x");
-        write_hex_u32(expected as u32);
-        write_status(b", read 0x");
-        write_hex_u32(actual as u32);
-        write_status(b". Test file was left in place.\r\n> ");
-        return;
-    }
-    if let Some(offset) = short_read_at {
-        write_status(b"\r\nSTORAGETEST unexpected end of file at byte ");
-        write_decimal(offset);
-        write_status(b". Test file was left in place.\r\n> ");
-        return;
-    }
-    if let Some(byte) = extra_byte {
-        write_status(b"\r\nSTORAGETEST file is longer than expected; extra byte 0x");
-        write_hex_u32(byte as u32);
-        write_status(b". Test file was left in place.\r\n> ");
-        return;
-    }
-
-    write_status(b"\r\nSTORAGETEST passed: wrote, flushed, reopened, and verified ");
-    write_decimal(STORAGE_TEST_LENGTH);
-    write_status(b" bytes.\r\nTest file retained as /.storage-test.\r\n> ");
-}
-
 pub fn report_format_status(bytes: &[u8]) {
     write_status(bytes);
 }
@@ -453,7 +283,7 @@ pub fn service(
     fs: Option<&Filesystem<'_, ActiveStorage>>,
     zmodem: &mut cdc_zmodem::State,
     now_ms: u32,
-    service_background: &mut impl FnMut(),
+    _service_background: &mut impl FnMut(),
 ) -> bool {
     let mut format_requested = false;
     unsafe {
@@ -611,12 +441,6 @@ pub fn service(
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
                             list_files(fs);
-                        } else {
-                            write_status(b"Storage unavailable.\r\n> ");
-                        }
-                    } else if command_is(line, b"STORAGETEST") {
-                        if let Some(fs) = fs {
-                            storage_test(fs, service_background);
                         } else {
                             write_status(b"Storage unavailable.\r\n> ");
                         }
