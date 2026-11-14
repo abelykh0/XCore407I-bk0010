@@ -675,9 +675,33 @@ pub(crate) fn write_status(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    let _ = unsafe {
-        tusb::tud_cdc_n_write(0, bytes.as_ptr().cast::<c_void>(), bytes.len() as u32)
-    };
+
+    // TinyUSB's CDC write may accept fewer bytes than requested when its TX
+    // FIFO is full. Do not silently discard the tail of diagnostic reports:
+    // flush and service the device task until all bytes are queued.
+    let mut offset = 0usize;
+    let mut stalled = 0u32;
+    while offset < bytes.len() && stalled < 4096 {
+        let written = unsafe {
+            tusb::tud_cdc_n_write(
+                0,
+                bytes[offset..].as_ptr().cast::<c_void>(),
+                (bytes.len() - offset) as u32,
+            )
+        } as usize;
+        offset += written;
+        let _ = unsafe { tusb::tud_cdc_n_write_flush(0) };
+
+        if written == 0 {
+            stalled += 1;
+            unsafe {
+                let _ = tusb::tud_task_ext(0, false);
+            }
+            core::hint::spin_loop();
+        } else {
+            stalled = 0;
+        }
+    }
     let _ = unsafe { tusb::tud_cdc_n_write_flush(0) };
 }
 
