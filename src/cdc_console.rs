@@ -2,7 +2,7 @@
 
 use core::ffi::c_void;
 
-use littlefs2::fs::Filesystem;
+use littlefs2::{fs::Filesystem, path::Path};
 
 use crate::{cdc_zmodem, nand_fs::ActiveStorage, tusb};
 
@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -114,6 +114,33 @@ fn write_hex_u32(value: u32) {
         *digit = HEX[((value >> shift) & 0x0F) as usize];
     }
     write_status(&digits);
+}
+
+fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
+    write_status(b"\r\nLittleFS root:\r\n");
+    let Ok(root) = Path::from_bytes_with_nul(b"/\\0") else {
+        write_status(b"Cannot construct root path.\\r\\n> ");
+        return;
+    };
+
+    let result = fs.read_dir_and_then(root, |entries| {
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            write_status(b"  ");
+            write_status(path.as_str().as_bytes());
+            if entry.file_type().is_dir() {
+                write_status(b" [DIR]");
+            }
+            write_status(b"\\r\\n");
+        }
+        Ok(())
+    });
+
+    if result.is_err() {
+        write_status(b"Directory read failed.\\r\\n");
+    }
+    write_status(b"> ");
 }
 
 pub(crate) fn write_status(bytes: &[u8]) {
@@ -253,6 +280,12 @@ pub fn service(
                             b"Response: not sent.\r\n"
                         });
                         write_status(b"> ");
+                    } else if command_is(line, b"LIST") {
+                        if let Some(fs) = fs {
+                            list_files(fs);
+                        } else {
+                            write_status(b"Storage unavailable.\\r\\n> ");
+                        }
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
                     } else if command_is(line, b"FORMAT") {
