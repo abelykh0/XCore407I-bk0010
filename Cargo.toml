@@ -34,4 +34,5 @@ panic = "abort"
 panic = "abort"
 
 [patch.crates-io]
+littlefs2-sys = { path = "vendor/littlefs2-sys" }
 hex = { path = "vendor/hex" }
