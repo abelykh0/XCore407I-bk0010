@@ -454,7 +454,7 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_hex_u32(dhara_limit[10]);
     write_status(b" journal_pages=");
     write_decimal(dhara_limit[11] as usize);
-    write_status(b"\\r\\n");
+    write_status(b"\r\n");
 
     let (nand_stage, detail, page, stored_ecc, calculated_ecc) =
         crate::nand_fs::nand_read_diagnostic();
