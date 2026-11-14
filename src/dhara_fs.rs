@@ -66,6 +66,35 @@ static DHARA_NAND_COUNTS: [AtomicU32; 7] = [
 static DHARA_NAND_LAST_OPERATION: AtomicU32 = AtomicU32::new(0);
 static DHARA_NAND_LAST_LOCATION: AtomicU32 = AtomicU32::new(0);
 
+// Attribute NAND callbacks to the Dhara API call that caused them. This
+// distinguishes GC performed by map_write/map_trim from work deferred to
+// map_sync, without changing synchronization or recovery behavior.
+static DHARA_WRITE_COUNTS: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
+static DHARA_TRIM_COUNTS: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
+static DHARA_SYNC_COUNTS: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
+
+fn dhara_nand_counts_snapshot() -> [u32; 7] {
+    core::array::from_fn(|i| DHARA_NAND_COUNTS[i].load(Ordering::Acquire))
+}
+
+fn accumulate_dhara_phase(target: &[AtomicU32; 7], before: [u32; 7]) {
+    for (i, counter) in target.iter().enumerate() {
+        let after = DHARA_NAND_COUNTS[i].load(Ordering::Acquire);
+        counter.fetch_add(after.wrapping_sub(before[i]), Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn dhara_phase_diagnostic() -> [[u32; 7]; 3] {
+    core::array::from_fn(|phase| {
+        let counters = match phase {
+            0 => &DHARA_WRITE_COUNTS,
+            1 => &DHARA_TRIM_COUNTS,
+            _ => &DHARA_SYNC_COUNTS,
+        };
+        core::array::from_fn(|i| counters[i].load(Ordering::Acquire))
+    })
+}
+
 fn record_dhara_nand_call(operation: usize, location: u32) {
     DHARA_NAND_COUNTS[operation - 1].fetch_add(1, Ordering::Relaxed);
     DHARA_NAND_LAST_LOCATION.store(location, Ordering::Relaxed);
@@ -78,6 +107,11 @@ pub(crate) fn clear_dhara_nand_diagnostic() {
     }
     DHARA_NAND_LAST_OPERATION.store(0, Ordering::Release);
     DHARA_NAND_LAST_LOCATION.store(0, Ordering::Release);
+    for counters in [&DHARA_WRITE_COUNTS, &DHARA_TRIM_COUNTS, &DHARA_SYNC_COUNTS] {
+        for count in counters {
+            count.store(0, Ordering::Release);
+        }
+    }
 }
 
 pub(crate) fn dhara_nand_diagnostic() -> [u32; 9] {
@@ -539,20 +573,25 @@ impl Storage for DharaStorage {
             return Err(LfsError::IO);
         }
 
+        let before_write = dhara_nand_counts_snapshot();
         for (index, page) in data.chunks_exact(PAGE_SIZE).enumerate() {
             let sector = (off / PAGE_SIZE + index) as u32;
             let mut error = 0i32;
             let result = unsafe { xcore_dhara_map_write(sector, page.as_ptr(), &mut error) };
             if result != 0 {
+                accumulate_dhara_phase(&DHARA_WRITE_COUNTS, before_write);
                 record_storage_io_error(2, sector, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
         }
+        accumulate_dhara_phase(&DHARA_WRITE_COUNTS, before_write);
 
-        // LittleFS has no separate sync callback in this Storage trait.
-        // Commit each completed write call before reporting success.
+        // Keep the existing durability behavior. Attribute this separate
+        // maintenance pass so we can tell whether sync causes the write spike.
+        let before_sync = dhara_nand_counts_snapshot();
         let mut error = 0i32;
         let result = unsafe { xcore_dhara_map_sync(&mut error) };
+        accumulate_dhara_phase(&DHARA_SYNC_COUNTS, before_sync);
         if result != 0 {
             record_storage_io_error(3, 0, if error != 0 { error } else { result });
             return Err(LfsError::IO);
@@ -573,16 +612,21 @@ impl Storage for DharaStorage {
 
         let first_sector = off / PAGE_SIZE;
         let sector_count = len / PAGE_SIZE;
+        let before_trim = dhara_nand_counts_snapshot();
         for sector in first_sector..(first_sector + sector_count) {
             let mut error = 0i32;
             let result = unsafe { xcore_dhara_map_trim(sector as u32, &mut error) };
             if result != 0 {
+                accumulate_dhara_phase(&DHARA_TRIM_COUNTS, before_trim);
                 record_storage_io_error(4, sector as u32, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
         }
+        accumulate_dhara_phase(&DHARA_TRIM_COUNTS, before_trim);
+        let before_sync = dhara_nand_counts_snapshot();
         let mut error = 0i32;
         let result = unsafe { xcore_dhara_map_sync(&mut error) };
+        accumulate_dhara_phase(&DHARA_SYNC_COUNTS, before_sync);
         if result != 0 {
             record_storage_io_error(5, 0, if error != 0 { error } else { result });
             return Err(LfsError::IO);
