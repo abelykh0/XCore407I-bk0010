@@ -8,11 +8,12 @@ use crate::io::Result;
 
 /// Users of this library provide a "storage driver" by implementing this trait.
 ///
-/// The `write` method is assumed to be synchronized to storage immediately.
-/// littlefs provides more flexibility - if required, this could also be exposed.
-/// Do note that due to caches, files still must be synched. And unfortunately,
-/// this can't be automatically done in `drop`, since it needs mut refs to both
-/// filesystem and storage.
+/// The `write` method may leave changes pending in the storage driver.
+/// littlefs invokes `sync()` at filesystem synchronization boundaries.
+/// Due to filesystem caches, files must still be synchronized explicitly;
+/// this cannot be done automatically in `drop`, which would need mutable
+/// references to both filesystem and storage.
+// Local XCore407I modification: expose the LittleFS sync callback to drivers.
 ///
 /// The `*_SIZE` types must be `generic_array::typenume::consts` such as `U256`.
 ///

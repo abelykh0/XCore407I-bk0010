@@ -1,4 +1,5 @@
 //! Experimental Filesystem version using closures.
+// Local XCore407I modification: forward LittleFS sync callbacks to Storage::sync().
 
 use core::ffi::{c_int, c_void};
 use core::ptr::addr_of;
