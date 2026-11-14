@@ -355,13 +355,7 @@ fn storage_test(
 
     write_status(b"\r\nSTORAGETEST passed: wrote, flushed, reopened, and verified ");
     write_decimal(STORAGE_TEST_LENGTH);
-    write_status(b" bytes.\r\n");
-    if fs.remove(path).is_err() {
-        write_status(b"Could not remove /.storage-test; it remains in the root.\r\n");
-    } else {
-        write_status(b"Temporary test file removed.\r\n");
-    }
-    write_status(b"> ");
+    write_status(b" bytes.\r\nTest file retained as /.storage-test.\r\n> ");
 }
 
 pub fn report_format_status(bytes: &[u8]) {
@@ -624,7 +618,7 @@ pub fn service(
                         if let Some(fs) = fs {
                             storage_test(fs, service_background);
                         } else {
-                            write_status(b"Storage unavailable.\\r\\n> ");
+                            write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
