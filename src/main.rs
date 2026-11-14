@@ -271,7 +271,7 @@ fn main() -> ! {
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
         if matches!(&mount_result, Ok(true)) {
-            xcore407i_blinker::cdc_console::write_status(
+            xcore407i_blinker::cdc_console::report_format_status(
                 b"Filesystem unmounted. Formatting NAND; all files will be lost...\r\n",
             );
             let mut last_reported = 0u32;
@@ -285,15 +285,15 @@ fn main() -> ! {
                         while prepare_next_video_batch(&mut video_renderer) {}
                         if completed == total || completed >= last_reported + 32 {
                             last_reported = completed;
-                            xcore407i_blinker::cdc_console::write_status(b"Format progress checkpoint.\r\n");
+                            xcore407i_blinker::cdc_console::report_format_status(b"Format progress checkpoint.\r\n");
                         }
                     },
                 );
             match format_result {
-                Ok(()) => xcore407i_blinker::cdc_console::write_status(
+                Ok(()) => xcore407i_blinker::cdc_console::report_format_status(
                     b"NAND format complete. Reboot the device to mount the new volume.\r\n",
                 ),
-                Err(_) => xcore407i_blinker::cdc_console::write_status(
+                Err(_) => xcore407i_blinker::cdc_console::report_format_status(
                     b"NAND format failed. Check NAND diagnostics and reboot.\r\n",
                 ),
             }
