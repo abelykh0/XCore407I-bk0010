@@ -9,6 +9,9 @@
 
 /* XCore allocator diagnostics, captured only when lfs_alloc reports NOSPC. */
 static volatile uint32_t xcore_lfs_alloc_diag[8];
+void xcore_lfs_alloc_diag_clear(void) {
+    for (unsigned i = 0; i < 8; i++) xcore_lfs_alloc_diag[i] = 0;
+}
 void xcore_lfs_alloc_diag_read(uint32_t *out) {
     if (!out) return;
     for (unsigned i = 0; i < 8; i++) out[i] = xcore_lfs_alloc_diag[i];
