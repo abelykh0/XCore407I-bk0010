@@ -400,35 +400,12 @@ pub fn service(
                             write_status(
                                 b"Unmounting LittleFS before NAND format...\r\n",
                             );
-                            format_requested = true;
                         } else {
-                            write_status(b"Formatting NAND; all files will be lost...\r\n");
-                            let mut last_reported = 0u32;
-                            match crate::nand_fs::initialize_nand_volume_with_progress(
-                                |completed, total| {
-                                    service_background();
-                                    if completed == total || completed >= last_reported + 32 {
-                                        last_reported = completed;
-                                        write_status(b".");
-                                    }
-                                },
-                            ) {
-                                Ok(report) => report_format_complete(report),
-                                Err(error) => {
-                                    use crate::nand_fs::InitError;
-                                    let message: &[u8] = match error {
-                                        InitError::Timeout => b"\r\nNAND format failed: timeout.\r\n> ",
-                                        InitError::WrongDevice => b"\r\nNAND format failed: unexpected NAND device.\r\n> ",
-                                        InitError::MarkerRead => b"\r\nNAND format failed: bad-block marker read error.\r\n> ",
-                                        InitError::MountFailed => b"\r\nNAND format failed: LittleFS format/mount error.\r\n> ",
-                                        InitError::DharaNoJournal => b"\r\nNAND format failed: Dhara journal missing.\r\n> ",
-                                        InitError::DharaCapacity => b"\r\nNAND format failed: insufficient Dhara capacity.\r\n> ",
-                                        InitError::ProvisionFailed => b"\r\nNAND format failed: Dhara provisioning error.\r\n> ",
-                                    };
-                                    write_status(message);
-                                }
-                            }
+                            write_status(
+                                b"Storage is unavailable. Formatting NAND...\r\n",
+                            );
                         }
+                        format_requested = true;
                     } else if LINE_LEN == 0 {
                         write_status(b"> ");
                     } else {
