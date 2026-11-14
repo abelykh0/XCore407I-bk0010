@@ -557,6 +557,7 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
         3 => b" (block-erase status failure)\r\n",
         4 => b" (page-program ready/busy timeout)\r\n",
         5 => b" (page-program status failure)\r\n",
+        6 => b" (FSMC write FIFO did not drain before ECC capture)\r\n",
         _ => b" (no raw NAND command failure recorded)\r\n",
     });
     write_status(b"Test file retained for inspection.\r\n> ");
