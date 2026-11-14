@@ -206,10 +206,23 @@ fn report_storage_test_io_failure(stage: &[u8], lfs_error: i32) {
     let (operation, location, storage_error) = crate::dhara_fs::storage_io_diagnostic();
     write_status(b"Dhara operation: 0x");
     write_hex_u32(operation);
-    write_status(b" logical sector: 0x");
+    write_status(match operation {
+        1 => b" (read), logical sector: 0x" as &[u8],
+        2 => b" (write), logical sector: 0x",
+        3 => b" (sync), logical sector: 0x",
+        4 => b" (erase), logical sector: 0x",
+        _ => b", logical sector: 0x",
+    });
     write_hex_u32(location);
     write_status(b" error: 0x");
     write_hex_u32(storage_error);
+    if storage_error == 3 {
+        write_status(b" (Dhara retry/recovery budget exhausted)");
+    } else if storage_error == 2 {
+        write_status(b" (NAND ECC failure)");
+    } else if storage_error == 1 {
+        write_status(b" (NAND block operation failed)");
+    }
     write_status(b"\r\n");
 
     let (nand_stage, detail, page, stored_ecc, calculated_ecc) =
