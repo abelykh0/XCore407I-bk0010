@@ -334,10 +334,8 @@ fn main() -> ! {
                     just_formatted = true;
                     continue;
                 }
-                Err(_) => {
-                    xcore407i_blinker::cdc_console::report_format_status(
-                        b"\r\nNAND format failed. Check NAND diagnostics.\r\n",
-                    );
+                Err(error) => {
+                    xcore407i_blinker::cdc_console::report_format_failure(error);
                 }
             }
         }
