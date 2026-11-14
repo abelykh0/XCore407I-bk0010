@@ -166,7 +166,7 @@ pub fn service(
             // ZMODEM senders initiate a session with a ZRQINIT hex header:
             // "**" + ZDLE + "B00". Hold this short prefix out of the console
             // parser until it either matches or proves to be ordinary text.
-            const ZRQINIT_PREFIX: &[u8; 6] = b"**\\x18B00";
+            const ZRQINIT_PREFIX: &[u8; 6] = b"**\x18B00";
             if ZMODEM_PROBE_LEN != 0 || byte == b'*' {
                 ZMODEM_PROBE[ZMODEM_PROBE_LEN] = byte;
                 ZMODEM_PROBE_LEN += 1;
