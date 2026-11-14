@@ -116,6 +116,32 @@ fn write_hex_u32(value: u32) {
     write_status(&digits);
 }
 
+fn write_append_failure(lfs_error: i32, operation: u32, location: u32, storage_error: u32) {
+    write_status(b"\r\nZMODEM append failed; LittleFS error: 0x");
+    write_hex_u32(lfs_error as u32);
+    write_status(b"\r\nDhara operation: ");
+    write_hex_u32(operation);
+    write_status(b" logical sector: 0x");
+    write_hex_u32(location);
+    write_status(b" error: 0x");
+    write_hex_u32(storage_error);
+    write_status(b"\r\n");
+}
+
+fn write_decimal(mut value: usize) {
+    let mut digits = [0u8; 10];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    write_status(&digits[start..]);
+}
+
 fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     write_status(b"\r\nLittleFS root:\r\n");
     let Ok(root) = Path::from_bytes_with_nul(b"/\0") else {
@@ -129,16 +155,34 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
             let path = entry.path();
             write_status(b"  ");
             write_status(path.as_str().as_bytes());
-            if entry.file_type().is_dir() {
+            let metadata = entry.metadata();
+            if metadata.is_dir() {
                 write_status(b" [DIR]");
+            } else {
+                write_status(b"  ");
+                write_decimal(metadata.len());
+                write_status(b" bytes");
             }
             write_status(b"\r\n");
         }
         Ok(())
     });
 
-    if result.is_err() {
-        write_status(b"Directory read failed.\r\n");
+    if let Err(error) = result {
+        write_status(b"Directory read failed; LittleFS error: 0x");
+        write_hex_u32(error.code() as u32);
+        write_status(b"\r\n");
+        let (operation, location, storage_error) =
+            crate::dhara_fs::storage_io_diagnostic();
+        if operation != 0 {
+            write_status(b"Dhara operation: ");
+            write_hex_u32(operation);
+            write_status(b" logical sector: 0x");
+            write_hex_u32(location);
+            write_status(b" error: 0x");
+            write_hex_u32(storage_error);
+            write_status(b"\r\n");
+        }
     }
     write_status(b"> ");
 }
