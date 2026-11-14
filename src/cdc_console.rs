@@ -116,7 +116,7 @@ fn write_hex_u32(value: u32) {
     write_status(&digits);
 }
 
-fn write_append_failure(lfs_error: i32, operation: u32, location: u32, storage_error: u32) {
+pub(crate) fn write_append_failure(lfs_error: i32, operation: u32, location: u32, storage_error: u32) {
     write_status(b"\r\nZMODEM append failed; LittleFS error: 0x");
     write_hex_u32(lfs_error as u32);
     write_status(b"\r\nDhara operation: ");
