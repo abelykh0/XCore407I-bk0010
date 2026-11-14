@@ -209,7 +209,8 @@ pub fn service(
     zmodem: &mut cdc_zmodem::State,
     now_ms: u32,
     service_background: &mut impl FnMut(),
-) {
+) -> bool {
+    let mut format_requested = false;
     unsafe {
         let connected = tusb::tud_cdc_n_connected(0);
         if connected && !WAS_CONNECTED {
@@ -377,8 +378,9 @@ pub fn service(
                     } else if command_is(line, b"FORMAT YES") {
                         if fs.is_some() {
                             write_status(
-                                b"Refusing: filesystem is mounted. Reboot into CDC mode with storage unavailable before formatting.\r\n> ",
+                                b"Unmounting LittleFS before NAND format...\r\n",
                             );
+                            format_requested = true;
                         } else {
                             write_status(b"Formatting NAND; all files will be lost...\r\n");
                             let mut last_reported = 0u32;
@@ -419,6 +421,9 @@ pub fn service(
                         write_status(b"Unknown command. Type HELP.\r\n> ");
                     }
                     LINE_LEN = 0;
+                    if format_requested {
+                        break;
+                    }
                 }
                 0x08 | 0x7f => {
                     if LINE_LEN != 0 {
@@ -439,4 +444,5 @@ pub fn service(
             }
         }
     }
+    format_requested
 }
