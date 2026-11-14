@@ -371,6 +371,16 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
         if index != 0 { write_status(b" "); }
         write_hex_u32(ecc[14 + index]);
     }
+    write_status(b"\r\nPCR2 immediately after ECC enable (per chunk): ");
+    for index in 0..4 {
+        if index != 0 { write_status(b" "); }
+        write_hex_u32(ecc[18 + index]);
+    }
+    write_status(b"\r\nPCR2 immediately before ECCR2 capture (per chunk): ");
+    for index in 0..4 {
+        if index != 0 { write_status(b" "); }
+        write_hex_u32(ecc[22 + index]);
+    }
     write_status(b"\r\n");
     write_status(b"\r\nRecent LittleFS allocator events (oldest first):\\r\\n");
     let trace_count = alloc_stats[5].min(16) as usize;
