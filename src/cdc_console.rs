@@ -630,7 +630,7 @@ pub fn service(
                         if let Some(fs) = fs {
                             storage_test(fs, _service_background);
                         } else {
-                            write_status(b"Storage unavailable.\\r\\n> ");
+                            write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
