@@ -162,6 +162,23 @@ pub fn service(
 
     // Bound work per iteration so UVC buffer production keeps running.
     for _ in 0..8 {
+        // Check inactivity independently of the protocol action. The
+        // receiver can remain in a non-Idle action while CDC is backpressured.
+        if !state.timeout_pending
+            && now_ms.wrapping_sub(state.last_activity_ms) >= TRANSFER_TIMEOUT_MS
+        {
+            state.timeout_pending = true;
+            if receiver.abort().is_err() {
+                state.transfer_failed = true;
+                finished = true;
+                remove_partial_file(fs, state);
+                super::cdc_console::write_status(
+                    b"\r\nZMODEM timeout; unable to queue abort\r\n> ",
+                );
+                break;
+            }
+        }
+
         match receiver.poll() {
             Action::WriteWire(bytes) => {
                 let bytes_len = bytes.len();
@@ -282,18 +299,6 @@ pub fn service(
                             break;
                         }
                     }
-                } else if now_ms.wrapping_sub(state.last_activity_ms) >= TRANSFER_TIMEOUT_MS {
-                    state.timeout_pending = true;
-                    if receiver.abort().is_err() {
-                        state.transfer_failed = true;
-                        finished = true;
-                        remove_partial_file(fs, state);
-                        super::cdc_console::write_status(
-                            b"\r\nZMODEM timeout; unable to queue abort\r\n> ",
-                        );
-                        break;
-                    }
-                    state.last_activity_ms = now_ms;
                 } else {
                     break;
                 }
