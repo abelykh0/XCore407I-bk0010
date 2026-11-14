@@ -133,6 +133,7 @@ pub fn service(
     fs: Option<&Filesystem<'_, ActiveStorage>>,
     zmodem: &mut cdc_zmodem::State,
     now_ms: u32,
+    service_background: &mut impl FnMut(),
 ) {
     unsafe {
         let connected = tusb::tud_cdc_n_connected(0);
@@ -194,7 +195,20 @@ pub fn service(
                             );
                         } else {
                             write_status(b"Formatting NAND; all files will be lost...\r\n");
-                            match crate::nand_fs::initialize_nand_volume() {
+                            let mut last_reported = 0u32;
+                            match crate::nand_fs::initialize_nand_volume_with_progress(
+                                |completed, total| {
+                                    service_background();
+                                    if completed == total || completed >= last_reported + 32 {
+                                        last_reported = completed;
+                                        write_status(b"Format progress: ");
+                                        write_hex_u32(completed);
+                                        write_status(b" / ");
+                                        write_hex_u32(total);
+                                        write_status(b" blocks\r\n");
+                                    }
+                                },
+                            ) {
                                 Ok(()) => write_status(
                                     b"NAND format complete. Reboot the device to mount the new volume.\r\n> ",
                                 ),
