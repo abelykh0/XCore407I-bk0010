@@ -336,8 +336,11 @@ pub fn service(
                         };
                         write_status(failure);
                         if zmodem.last_error() == 2 {
-                            let (lfs_error, operation, location, storage_error) =
-                                zmodem.append_failure_details();
+                            let (
+                                lfs_error, operation, location, storage_error,
+                                nand_stage, nand_detail, nand_page,
+                                nand_stored_ecc, nand_calculated_ecc,
+                            ) = zmodem.append_failure_details();
                             write_status(b"Append LittleFS error: 0x");
                             write_hex_u32(lfs_error as u32);
                             write_status(b"\r\nDhara operation: 0x");
@@ -346,6 +349,16 @@ pub fn service(
                             write_hex_u32(location);
                             write_status(b" error: 0x");
                             write_hex_u32(storage_error);
+                            write_status(b"\r\nNAND read stage: 0x");
+                            write_hex_u32(nand_stage);
+                            write_status(b" detail: 0x");
+                            write_hex_u32(nand_detail);
+                            write_status(b" physical page: 0x");
+                            write_hex_u32(nand_page);
+                            write_status(b"\r\nStored ECC: 0x");
+                            write_hex_u32(nand_stored_ecc);
+                            write_status(b" calculated ECC: 0x");
+                            write_hex_u32(nand_calculated_ecc);
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
