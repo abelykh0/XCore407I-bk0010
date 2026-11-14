@@ -382,8 +382,6 @@ dependencies = [
 [[package]]
 name = "littlefs2-sys"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "999d08bb7fae46d63ecb98d2474d28f7af1a6c928a51b4dfe5f1804abf9afc46"
 dependencies = [
  "bindgen",
  "cc",
