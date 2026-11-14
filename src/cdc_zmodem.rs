@@ -242,11 +242,16 @@ pub fn service(
                     super::cdc_console::write_status(
                         b"\r\nZMODEM timed out after 60 seconds of inactivity\r\n> ",
                     );
+                } else if state.transfer_failed {
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM stopped: storage/protocol error\r\n> ",
+                    );
                 } else if state.transfer_started {
                     super::cdc_console::write_status(b"\r\nZMODEM transfer cancelled\r\n> ");
                 } else {
                     super::cdc_console::write_status(b"\r\nZMODEM session cancelled\r\n> ");
                 }
+                state.transfer_failed = false;
                 state.timeout_pending = false;
                 state.transfer_started = false;
                 break;
