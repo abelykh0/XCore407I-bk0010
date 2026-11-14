@@ -236,6 +236,22 @@ pub fn service(
                         } else {
                             b"ZMODEM startup: header not detected.\r\n"
                         });
+                        let (input, queued, sent) = zmodem.handshake_status();
+                        write_status(if input {
+                            b"ZMODEM input: accepted. "
+                        } else {
+                            b"ZMODEM input: not yet accepted. "
+                        });
+                        write_status(if queued {
+                            b"Response: queued. "
+                        } else {
+                            b"Response: not queued. "
+                        });
+                        write_status(if sent {
+                            b"Response: sent to CDC IN.\r\n"
+                        } else {
+                            b"Response: not sent.\r\n"
+                        });
                         write_status(b"> ");
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
