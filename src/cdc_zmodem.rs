@@ -270,8 +270,10 @@ pub fn service(
                 let path_len = make_path(info.name, &mut state.final_path);
                 let available = match path_len {
                     Some(len) => {
-                        let final_path = Path::from_bytes_with_nul(&state.final_path[..len]);
-                        final_path.is_ok_and(|path| !fs.exists(path)) && create_temp_file(fs)
+                        match Path::from_bytes_with_nul(&state.final_path[..len]) {
+                            Ok(path) => !fs.exists(path) && create_temp_file(fs),
+                            Err(_) => false,
+                        }
                     }
                     None => false,
                 };
