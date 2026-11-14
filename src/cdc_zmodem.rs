@@ -17,11 +17,12 @@ use crate::{camera, nand_fs::ActiveStorage, tusb};
 const NAME_CAPACITY: usize = 64;
 const WIRE_CAPACITY: usize = 64;
 const TRANSFER_TIMEOUT_MS: u32 = 60_000;
+const TEMP_PATH: &[u8] = b"/.zmodem-upload\\0";
 
 pub struct State {
     receiver: Option<NonNull<Receiver>>,
-    path: [u8; NAME_CAPACITY + 2],
-    path_len: usize,
+    final_path: [u8; NAME_CAPACITY + 2],
+    final_path_len: usize,
     wire: [u8; WIRE_CAPACITY],
     wire_len: usize,
     wire_pos: usize,
@@ -35,8 +36,8 @@ impl State {
     pub const fn new() -> Self {
         Self {
             receiver: None,
-            path: [0; NAME_CAPACITY + 2],
-            path_len: 0,
+            final_path: [0; NAME_CAPACITY + 2],
+            final_path_len: 0,
             wire: [0; WIRE_CAPACITY],
             wire_len: 0,
             wire_pos: 0,
@@ -58,11 +59,14 @@ impl Default for State {
     }
 }
 
-pub fn cancel(state: &mut State) {
+pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
+    if let Some(fs) = fs {
+        remove_partial_file(fs, state);
+    }
     if state.receiver.take().is_some() {
         camera::release_cdc_receiver_storage();
     }
-    state.path_len = 0;
+    state.final_path_len = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
     state.transfer_started = false;
@@ -99,21 +103,48 @@ fn create_new_file(fs: &Filesystem<'_, ActiveStorage>, path_bytes: &[u8]) -> boo
 }
 
 fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
-    if state.path_len == 0 {
-        return;
+    if state.final_path_len != 0 {
+        if let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) {
+            let _ = fs.remove(path);
+        }
     }
-    if let Ok(path) = Path::from_bytes_with_nul(&state.path[..state.path_len]) {
-        let _ = fs.remove(path);
+    state.final_path_len = 0;
+}
+
+fn create_temp_file(fs: &Filesystem<'_, ActiveStorage>) -> bool {
+    let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) else {
+        return false;
+    };
+    if fs.exists(path) && fs.remove(path).is_err() {
+        return false;
     }
-    state.path_len = 0;
+    create_new_file(fs, TEMP_PATH)
+}
+
+fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> bool {
+    if state.final_path_len == 0 {
+        return true;
+    }
+    let Ok(temp) = Path::from_bytes_with_nul(TEMP_PATH) else {
+        return false;
+    };
+    let Ok(final_path) = Path::from_bytes_with_nul(&state.final_path[..state.final_path_len]) else {
+        return false;
+    };
+    if fs.exists(final_path) || fs.rename(temp, final_path).is_err() {
+        let _ = fs.remove(temp);
+        state.final_path_len = 0;
+        return false;
+    }
+    state.final_path_len = 0;
+    true
 }
 
 fn append_file(
     fs: &Filesystem<'_, ActiveStorage>,
-    path_bytes: &[u8],
     data: &[u8],
 ) -> bool {
-    let Ok(path) = Path::from_bytes_with_nul(path_bytes) else {
+    let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) else {
         return false;
     };
     fs.open_file_with_options_and_then(
@@ -155,7 +186,7 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     };
     receiver.set_manual_file_accept(true);
     let receiver = NonNull::from(receiver);
-    state.path_len = 0;
+    state.final_path_len = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
     state.last_activity_ms = now_ms;
@@ -219,8 +250,8 @@ pub fn service(
             }
             Action::WriteFile(bytes) => {
                 let bytes_len = bytes.len();
-                if state.path_len == 0
-                    || !append_file(fs, &state.path[..state.path_len], bytes)
+                if state.final_path_len == 0
+                    || !append_file(fs, bytes)
                 {
                     state.transfer_failed = true;
                     let _ = receiver.abort();
@@ -235,20 +266,23 @@ pub fn service(
             }
             Action::Event(Event::FileStarted(info)) => {
                 state.transfer_started = true;
-                let path_len = make_path(info.name, &mut state.path);
-                let created = match path_len {
-                    Some(len) => create_new_file(fs, &state.path[..len]),
+                let path_len = make_path(info.name, &mut state.final_path);
+                let available = match path_len {
+                    Some(len) => {
+                        let final_path = Path::from_bytes_with_nul(&state.final_path[..len]);
+                        final_path.is_ok_and(|path| !fs.exists(path)) && create_temp_file(fs)
+                    }
                     None => false,
                 };
-                if created {
-                    state.path_len = path_len.unwrap_or(0);
+                if available {
+                    state.final_path_len = path_len.unwrap_or(0);
                     if receiver.accept_file_at(0).is_err() {
                         state.transfer_failed = true;
                         let _ = receiver.abort();
                         break;
                     }
                 } else {
-                    state.path_len = 0;
+                    state.final_path_len = 0;
                     if receiver.skip_file().is_err() {
                         state.transfer_failed = true;
                         let _ = receiver.abort();
@@ -257,10 +291,15 @@ pub fn service(
                 }
             }
             Action::Event(Event::FileCompleted) => {
-                state.path_len = 0;
+                if !commit_temp_file(fs, state) {
+                    state.transfer_failed = true;
+                    let _ = receiver.abort();
+                    break;
+                }
             }
             Action::Event(Event::SessionCompleted) => {
                 finished = true;
+                remove_partial_file(fs, state);
                 if state.transfer_failed {
                     super::cdc_console::write_status(
                         b"\r\nZMODEM stopped: storage/protocol error\r\n> ",
@@ -342,7 +381,26 @@ pub fn service(
     }
 
     if finished {
+        // Do not let trailing ZMODEM bytes leak into the interactive console.
+        state.wire_len = 0;
+        state.wire_pos = 0;
+        loop {
+            let count = unsafe {
+                tusb::tud_cdc_n_read(
+                    0,
+                    state.wire.as_mut_ptr().cast::<c_void>(),
+                    WIRE_CAPACITY as u32,
+                )
+            } as usize;
+            if count == 0 {
+                break;
+            }
+        }
         state.receiver = None;
+        state.final_path_len = 0;
+        state.transfer_failed = false;
+        state.transfer_started = false;
+        state.timeout_pending = false;
         camera::release_cdc_receiver_storage();
     }
 }
