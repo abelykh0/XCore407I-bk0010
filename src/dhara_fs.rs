@@ -44,6 +44,8 @@ unsafe extern "C" {
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_trim(sector: u32, error: *mut i32) -> c_int;
     fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
+    fn xcore_lfs_alloc_diag_clear();
+    fn xcore_lfs_alloc_diag_read(out: *mut u32);
 }
 
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
@@ -59,6 +61,16 @@ fn record_storage_io_error(operation: u32, location: u32, error: i32) {
         STORAGE_IO_LOCATION.store(location, Ordering::Release);
         STORAGE_IO_ERROR.store(error as u32, Ordering::Release);
     }
+}
+
+pub(crate) fn clear_littlefs_alloc_diagnostic() {
+    unsafe { xcore_lfs_alloc_diag_clear(); }
+}
+
+pub(crate) fn littlefs_alloc_diagnostic() -> [u32; 8] {
+    let mut values = [0u32; 8];
+    unsafe { xcore_lfs_alloc_diag_read(values.as_mut_ptr()); }
+    values
 }
 
 pub(crate) fn clear_storage_io_diagnostic() {
