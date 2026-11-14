@@ -280,6 +280,12 @@ impl DharaStorage {
     /// Destructively provision a blank logical Dhara volume on raw NAND.
     /// The caller must obtain explicit confirmation before invoking this.
     pub fn initialize_new_volume() -> Result<Self, crate::nand_fs::InitError> {
+        Self::initialize_new_volume_with_progress(|_, _| {})
+    }
+
+    pub fn initialize_new_volume_with_progress(
+        mut progress: impl FnMut(u32, u32),
+    ) -> Result<Self, crate::nand_fs::InitError> {
         nand_fs::configure_fsmc();
         nand_fs::command(0xFF);
         if !nand_fs::wait_ready_status() {
@@ -317,6 +323,9 @@ impl DharaStorage {
                 }
                 Err(()) => return Err(crate::nand_fs::InitError::MarkerRead),
             }
+            // Yield to the caller between physical blocks so USB and video
+            // can continue while the long NAND initialization is in progress.
+            progress(block + 1, PHYSICAL_BLOCKS);
         }
 
         // Start a fresh map only after all usable physical blocks have been
