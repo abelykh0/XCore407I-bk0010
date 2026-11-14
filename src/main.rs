@@ -248,7 +248,7 @@ fn main() -> ! {
                 xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
                     if just_formatted {
                         xcore407i_blinker::cdc_console::report_format_status(
-                            b"Fresh LittleFS mount succeeded. CDC storage is ready.\\r\\n",
+                            b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
                         );
                         just_formatted = false;
                     }
