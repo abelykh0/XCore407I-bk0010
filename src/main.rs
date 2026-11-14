@@ -242,10 +242,17 @@ fn main() -> ! {
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
         let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
+        let mut just_formatted = false;
         loop {
-        let mount_result: Result<bool, xcore407i_blinker::nand_fs::FsAccessError> =
-            xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
-                loop {
+            let mount_result: Result<bool, xcore407i_blinker::nand_fs::FsAccessError> =
+                xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
+                    if just_formatted {
+                        xcore407i_blinker::cdc_console::report_format_status(
+                            b"Fresh LittleFS mount succeeded. CDC storage is ready.\\r\\n",
+                        );
+                        just_formatted = false;
+                    }
+                    loop {
                     unsafe {
                         let _ = tusb::tud_task_ext(0, false);
                         xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
@@ -293,6 +300,7 @@ fn main() -> ! {
             match format_result {
                 Ok(report) => {
                     xcore407i_blinker::cdc_console::report_format_complete(report);
+                    just_formatted = true;
                     continue;
                 }
                 Err(_) => {
