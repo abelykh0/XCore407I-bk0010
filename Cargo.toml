@@ -20,7 +20,7 @@ stm32f4 = { version = "0.16.0", default-features = false, features = ["stm32f407
 stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f407"] }
 panic-halt = "1.0.0"
 libm = "0.2"
-littlefs2 = { version = "0.8.1", default-features = false, features = ["c-stubs"] }
+littlefs2 = { path = "vendor/littlefs2", default-features = false, features = ["c-stubs"] }
 zmodem2 = { path = "vendor/zmodem2", default-features = false }
 
 [profile.release]

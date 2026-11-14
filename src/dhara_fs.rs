@@ -586,16 +586,6 @@ impl Storage for DharaStorage {
         }
         accumulate_dhara_phase(&DHARA_WRITE_COUNTS, before_write);
 
-        // Keep the existing durability behavior. Attribute this separate
-        // maintenance pass so we can tell whether sync causes the write spike.
-        let before_sync = dhara_nand_counts_snapshot();
-        let mut error = 0i32;
-        let result = unsafe { xcore_dhara_map_sync(&mut error) };
-        accumulate_dhara_phase(&DHARA_SYNC_COUNTS, before_sync);
-        if result != 0 {
-            record_storage_io_error(3, 0, if error != 0 { error } else { result });
-            return Err(LfsError::IO);
-        }
         Ok(data.len())
     }
 
@@ -623,15 +613,19 @@ impl Storage for DharaStorage {
             }
         }
         accumulate_dhara_phase(&DHARA_TRIM_COUNTS, before_trim);
+        Ok(len)
+    }
+
+    fn sync(&mut self) -> LfsResult<()> {
         let before_sync = dhara_nand_counts_snapshot();
         let mut error = 0i32;
         let result = unsafe { xcore_dhara_map_sync(&mut error) };
         accumulate_dhara_phase(&DHARA_SYNC_COUNTS, before_sync);
         if result != 0 {
-            record_storage_io_error(5, 0, if error != 0 { error } else { result });
+            record_storage_io_error(3, 0, if error != 0 { error } else { result });
             return Err(LfsError::IO);
         }
-        Ok(len)
+        Ok(())
     }
 }
 
