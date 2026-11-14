@@ -247,6 +247,51 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_decimal(alloc[8] as usize);
     write_status(b" traversed_blocks=");
     write_decimal(alloc[9] as usize);
+    let (alloc_stats, alloc_trace) = crate::dhara_fs::littlefs_alloc_trace_diagnostic();
+    write_status(b"LittleFS allocator activity: calls=");
+    write_decimal(alloc_stats[0] as usize);
+    write_status(b" successes=");
+    write_decimal(alloc_stats[1] as usize);
+    write_status(b" checkpoint_resets=");
+    write_decimal(alloc_stats[2] as usize);
+    write_status(b" scans=");
+    write_decimal(alloc_stats[3] as usize);
+    write_status(b" traversed_blocks=");
+    write_decimal(alloc_stats[4] as usize);
+    write_status(b" trace_events=");
+    write_decimal(alloc_stats[5] as usize);
+    write_status(b"\\r\\nRecent LittleFS allocator events (oldest first):\\r\\n");
+    let trace_count = alloc_stats[5].min(16) as usize;
+    let trace_head = (alloc_stats[6] as usize) % 16;
+    let trace_start = (trace_head + 16 - trace_count) % 16;
+    for index in 0..trace_count {
+        let slot = (trace_start + index) % 16;
+        let base = slot * 7;
+        let event_name: &[u8] = match alloc_trace[base] {
+            1 => b"checkpoint",
+            2 => b"drop",
+            3 => b"scan",
+            4 => b"allocate",
+            5 => b"NOSPC",
+            _ => b"unknown",
+        };
+        write_status(b"  ");
+        write_status(event_name);
+        write_status(b" start=");
+        write_decimal(alloc_trace[base + 1] as usize);
+        write_status(b" next=");
+        write_decimal(alloc_trace[base + 2] as usize);
+        write_status(b" size=");
+        write_decimal(alloc_trace[base + 3] as usize);
+        write_status(b" checkpoint=");
+        write_decimal(alloc_trace[base + 4] as usize);
+        write_status(b" used_bits=");
+        write_decimal(alloc_trace[base + 5] as usize);
+        write_status(b" scans=");
+        write_decimal(alloc_trace[base + 6] as usize);
+        write_status(b"\\r\\n");
+    }
+
     write_status(b"\r\nNAND R/B waits: calls=");
     write_decimal(rb_calls as usize);
     write_status(b" total_poll_iterations=");
@@ -371,6 +416,9 @@ fn storage_test(
 
     write_status(b"\r\nSTORAGETEST starting; UVC/video servicing is paused.\r\n");
     service_usb_only();
+    // Keep allocator history from the start of the test, including cleanup
+    // and free-space traversal, rather than clearing it just before writes.
+    crate::dhara_fs::clear_littlefs_alloc_diagnostic();
 
     report_storage_phase_counters(b"At STORAGETEST entry (since storage init):\r\n");
     report_storage_space(fs, b"Before test:");
@@ -383,7 +431,6 @@ fn storage_test(
 
     report_storage_phase_counters(b"Before test write (init + preparation):\r\n");
     crate::dhara_fs::clear_storage_io_diagnostic();
-    crate::dhara_fs::clear_littlefs_alloc_diagnostic();
     crate::nand_fs::clear_nand_read_diagnostic();
     crate::nand_fs::clear_nand_rb_wait_diagnostic();
     write_status(b"WRITE: opening test file...\r\n");
