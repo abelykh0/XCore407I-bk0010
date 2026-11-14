@@ -191,7 +191,7 @@ pub fn service(
 
                 // Not a ZMODEM startup header. Replay held printable bytes
                 // as console input, then process the current byte normally.
-                for index in 0..ZMODEM_PROBE_LEN {
+                for index in 0..ZMODEM_PROBE_LEN.saturating_sub(1) {
                     let held = ZMODEM_PROBE[index];
                     if (0x20..=0x7e).contains(&held) && LINE_LEN < LINE_CAPACITY {
                         LINE[LINE_LEN] = held;
