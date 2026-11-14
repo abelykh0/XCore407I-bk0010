@@ -279,6 +279,18 @@ pub fn service(
                         } else {
                             b"Response: not sent.\r\n"
                         });
+                        let failure = match zmodem.last_error() {
+                            0 => b"ZMODEM last failure: none recorded.\r\n" as &[u8],
+                            1 => b"ZMODEM last failure: temp file not active.\r\n",
+                            2 => b"ZMODEM last failure: LittleFS append/write/flush.\r\n",
+                            3 => b"ZMODEM last failure: receiver rejected file_written.\r\n",
+                            4 => b"ZMODEM last failure: receiver rejected accept_file_at.\r\n",
+                            5 => b"ZMODEM last failure: final file commit/rename.\r\n",
+                            6 => b"ZMODEM last failure: protocol input error.\r\n",
+                            8 => b"ZMODEM last failure: temp-file cleanup failed.\r\n",
+                            _ => b"ZMODEM last failure: unknown stage.\r\n",
+                        };
+                        write_status(failure);
                         write_status(b"> ");
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
