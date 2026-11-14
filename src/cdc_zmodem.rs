@@ -34,6 +34,10 @@ pub struct State {
     response_queued: bool,
     response_sent: bool,
     last_error: u8,
+    append_lfs_error: i32,
+    append_storage_operation: u32,
+    append_storage_location: u32,
+    append_storage_error: u32,
 }
 
 impl State {
@@ -53,6 +57,10 @@ impl State {
             response_queued: false,
             response_sent: false,
             last_error: 0,
+            append_lfs_error: 0,
+            append_storage_operation: 0,
+            append_storage_location: 0,
+            append_storage_error: 0,
         }
     }
 
@@ -66,6 +74,15 @@ impl State {
 
     pub fn last_error(&self) -> u8 {
         self.last_error
+    }
+
+    pub fn append_failure_details(&self) -> (i32, u32, u32, u32) {
+        (
+            self.append_lfs_error,
+            self.append_storage_operation,
+            self.append_storage_location,
+            self.append_storage_error,
+        )
     }
 }
 
@@ -214,6 +231,10 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.response_queued = false;
     state.response_sent = false;
     state.last_error = 0;
+    state.append_lfs_error = 0;
+    state.append_storage_operation = 0;
+    state.append_storage_location = 0;
+    state.append_storage_error = 0;
     state.receiver = Some(receiver);
     Ok(())
 }
@@ -298,12 +319,10 @@ pub fn service(
                     state.last_error = 2;
                     let (operation, location, storage_error) =
                         crate::dhara_fs::storage_io_diagnostic();
-                    super::cdc_console::write_append_failure(
-                        lfs_error,
-                        operation,
-                        location,
-                        storage_error,
-                    );
+                    state.append_lfs_error = lfs_error;
+                    state.append_storage_operation = operation;
+                    state.append_storage_location = location;
+                    state.append_storage_error = storage_error;
                     state.transfer_failed = true;
                     let _ = receiver.abort();
                     break;
