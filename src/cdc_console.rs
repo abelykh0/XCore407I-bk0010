@@ -12,13 +12,15 @@ static mut LINE: [u8; LINE_CAPACITY] = [0; LINE_CAPACITY];
 static mut LINE_LEN: usize = 0;
 static mut ZMODEM_PROBE: [u8; 6] = [0; 6];
 static mut ZMODEM_PROBE_LEN: usize = 0;
+static mut ZMODEM_PROBE_MATCHED: bool = false;
+static mut ZMODEM_START_FAILED: bool = false;
 static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
 const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
-const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n> ";
-const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n> ";
+const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
+const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
 /// Print the exact non-destructive storage initialization or mount failure.
@@ -142,11 +144,15 @@ pub fn service(
         if connected && !WAS_CONNECTED {
             LINE_LEN = 0;
             ZMODEM_PROBE_LEN = 0;
+            ZMODEM_PROBE_MATCHED = false;
+            ZMODEM_START_FAILED = false;
             write_status(BANNER);
         }
         if !connected {
             LINE_LEN = 0;
             ZMODEM_PROBE_LEN = 0;
+            ZMODEM_PROBE_MATCHED = false;
+            ZMODEM_START_FAILED = false;
             WAS_CONNECTED = false;
             STORAGE_ERROR_REPORTED = false;
             cdc_zmodem::cancel(zmodem, fs);
@@ -172,6 +178,7 @@ pub fn service(
                 ZMODEM_PROBE_LEN += 1;
                 if ZRQINIT_PREFIX.starts_with(&ZMODEM_PROBE[..ZMODEM_PROBE_LEN]) {
                     if ZMODEM_PROBE_LEN == ZRQINIT_PREFIX.len() {
+                        ZMODEM_PROBE_MATCHED = true;
                         let started = if fs.is_some()
                             && cdc_zmodem::start(zmodem, true, now_ms).is_ok()
                         {
@@ -179,6 +186,7 @@ pub fn service(
                         } else {
                             false
                         };
+                        ZMODEM_START_FAILED = !started;
                         ZMODEM_PROBE_LEN = 0;
                         if started {
                             // Leave remaining CDC OUT bytes queued for the
@@ -221,6 +229,14 @@ pub fn service(
                         } else {
                             STATUS_UNAVAILABLE
                         });
+                        write_status(if ZMODEM_START_FAILED {
+                            b"ZMODEM startup: header detected, receiver did not start.\r\n"
+                        } else if ZMODEM_PROBE_MATCHED {
+                            b"ZMODEM startup: header detected; receiver started.\r\n"
+                        } else {
+                            b"ZMODEM startup: header not detected.\r\n"
+                        });
+                        write_status(b"> ");
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
                     } else if command_is(line, b"FORMAT") {
