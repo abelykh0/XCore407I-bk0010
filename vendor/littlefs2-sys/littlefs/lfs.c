@@ -801,9 +801,6 @@ static int lfs_alloc_scan(lfs_t *lfs) {
 #ifndef LFS_READONLY
 static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
     xcore_lfs_alloc_calls++;
-    xcore_lfs_alloc_last_caller = xcore_lfs_alloc_caller;
-    xcore_lfs_alloc_caller_counts[xcore_lfs_alloc_caller <= 4U
-            ? xcore_lfs_alloc_caller : 0U]++;
     while (true) {
         // scan our lookahead buffer for free blocks
         while (lfs->lookahead.next < lfs->lookahead.size) {
@@ -1951,6 +1948,8 @@ static int lfs_dir_alloc(lfs_t *lfs, lfs_mdir_t *dir) {
     // allocate pair of dir blocks (backwards, so we write block 1 first)
     for (int i = 0; i < 2; i++) {
         xcore_lfs_alloc_caller = 1;
+        xcore_lfs_alloc_last_caller = 1;
+        xcore_lfs_alloc_caller_counts[1]++;
         int err = lfs_alloc(lfs, &dir->pair[(i+1)%2]);
         if (err) {
             return err;
@@ -2270,6 +2269,8 @@ relocate:
 
         // relocate half of pair
         xcore_lfs_alloc_caller = 2;
+        xcore_lfs_alloc_last_caller = 2;
+        xcore_lfs_alloc_caller_counts[2]++;
         int err = lfs_alloc(lfs, &dir->pair[1]);
         if (err && (err != LFS_ERR_NOSPC || !tired)) {
             return err;
@@ -3089,6 +3090,8 @@ static int lfs_ctz_extend(lfs_t *lfs,
         xcore_lfs_last_ctz_head = head;
         xcore_lfs_last_ctz_size = size;
         xcore_lfs_alloc_caller = 3;
+        xcore_lfs_alloc_last_caller = 3;
+        xcore_lfs_alloc_caller_counts[3]++;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
@@ -3431,6 +3434,8 @@ static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
         // just relocate what exists into new block
         lfs_block_t nblock;
         xcore_lfs_alloc_caller = 4;
+        xcore_lfs_alloc_last_caller = 4;
+        xcore_lfs_alloc_caller_counts[4]++;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
