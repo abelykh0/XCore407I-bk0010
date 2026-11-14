@@ -210,7 +210,7 @@ fn report_storage_space(fs: &Filesystem<'_, ActiveStorage>, stage: &[u8]) {
     write_decimal(crate::dhara_fs::LITTLEFS_BLOCK_COUNT);
     write_status(b"; block size: ");
     write_decimal(crate::nand_fs::ERASE_BLOCK_SIZE);
-    write_status(b" bytes; lookahead: 256 blocks\r\n");
+    write_status(b" bytes\r\n");
 }
 
 fn storage_test_byte(offset: usize) -> u8 {
