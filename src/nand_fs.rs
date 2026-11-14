@@ -246,17 +246,23 @@ pub(crate) fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
 pub(crate) fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
 pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
-/// Prepare the FSMC ECC engine for one 512-byte data chunk.
-fn ecc_begin_chunk() -> u32 {
+/// Prepare the FSMC ECC engine for one data chunk. ECCPS is the
+/// RM0090 encoding: 0=256 bytes, 1=512 bytes, etc.
+fn ecc_begin_chunk_size(eccps: u32) -> u32 {
     unsafe {
         let pcr = read_volatile(FSMC_PCR2);
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         write_volatile(
             FSMC_PCR2,
-            (pcr & !FSMC_PCR_ECCPS_MASK) | (1 << 17) | FSMC_PCR_ECCEN,
+            (pcr & !FSMC_PCR_ECCPS_MASK) | ((eccps & 0x7) << 17) | FSMC_PCR_ECCEN,
         );
         read_volatile(FSMC_PCR2)
     }
+}
+
+/// Prepare the FSMC ECC engine for one 512-byte data chunk.
+fn ecc_begin_chunk() -> u32 {
+    ecc_begin_chunk_size(1)
 }
 
 /// Wait until all buffered FSMC writes have reached the NAND data bus.
@@ -517,7 +523,11 @@ pub(crate) struct EccStandaloneChunk {
 /// values. This bypasses Dhara and LittleFS and never changes NAND contents.
 pub(crate) fn ecc_standalone_read(
     page: u32,
-) -> Option<([u32; 4], [EccStandaloneChunk; FSMC_ECC_CHUNKS_PER_PAGE])> {
+) -> Option<(
+    [u32; 4],
+    [EccStandaloneChunk; FSMC_ECC_CHUNKS_PER_PAGE],
+    [u32; 8],
+)> {
     let mut data = [0u8; PAGE_SIZE];
 
     // Complete NAND command/address/read-cycle setup before enabling ECC.
@@ -584,7 +594,34 @@ pub(crate) fn ecc_standalone_read(
             0,
         ]);
     }
-    Some((stored, chunks))
+    // Repeat the direct read using 256-byte ECC windows. This is a
+    // read-only probe of ECCPS=000 and does not compare against OOB values.
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb() {
+        return None;
+    }
+    let mut calculated_256 = [0u32; 8];
+    let mut remaining = PAGE_SIZE;
+    for value in &mut calculated_256 {
+        let _ = ecc_begin_chunk_size(0);
+        for _ in 0..256 {
+            let _ = read_data();
+        }
+        if !wait_fsmc_fifo_empty() {
+            let _ = ecc_end_chunk();
+            return None;
+        }
+        *value = ecc_end_chunk().0 & 0x00FF_FFFF;
+        remaining -= 256;
+    }
+    debug_assert_eq!(remaining, 0);
+
+    Some((stored, chunks, calculated_256))
 }
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
