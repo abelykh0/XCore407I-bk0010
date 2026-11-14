@@ -3,7 +3,7 @@
 //! The protocol engine is the no_std, heapless state machine from zmodem2.
 //! Incoming file data is appended to LittleFS in bounded chunks.
 
-use core::ffi::c_void;
+use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 
 use littlefs2::{
     fs::Filesystem,
@@ -12,14 +12,14 @@ use littlefs2::{
 };
 use zmodem2::{Action, Event, Receiver};
 
-use crate::{nand_fs::ActiveStorage, tusb};
+use crate::{camera, nand_fs::ActiveStorage, tusb};
 
 const NAME_CAPACITY: usize = 64;
 const WIRE_CAPACITY: usize = 64;
 const TRANSFER_TIMEOUT_MS: u32 = 60_000;
 
 pub struct State {
-    receiver: Option<Receiver>,
+    receiver: Option<NonNull<Receiver>>,
     path: [u8; NAME_CAPACITY + 2],
     path_len: usize,
     wire: [u8; WIRE_CAPACITY],
@@ -59,7 +59,9 @@ impl Default for State {
 }
 
 pub fn cancel(state: &mut State) {
-    state.receiver = None;
+    if state.receiver.take().is_some() {
+        camera::release_cdc_receiver_storage();
+    }
     state.path_len = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
@@ -136,8 +138,23 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     if !storage_available || state.receiver.is_some() {
         return Err(());
     }
-    let mut receiver = Receiver::new().map_err(|_| ())?;
+    let (storage, storage_len) = camera::claim_cdc_receiver_storage().ok_or(())?;
+    if storage_len < core::mem::size_of::<Receiver>()
+        || (storage as usize) % core::mem::align_of::<Receiver>() != 0
+    {
+        camera::release_cdc_receiver_storage();
+        return Err(());
+    }
+    let storage = unsafe { &mut *storage.cast::<MaybeUninit<Receiver>>() };
+    let receiver = match Receiver::new_in_place(storage) {
+        Ok(receiver) => receiver,
+        Err(_) => {
+            camera::release_cdc_receiver_storage();
+            return Err(());
+        }
+    };
     receiver.set_manual_file_accept(true);
+    let receiver = NonNull::from(receiver);
     state.path_len = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
@@ -155,9 +172,10 @@ pub fn service(
     state: &mut State,
     now_ms: u32,
 ) {
-    let Some(mut receiver) = state.receiver.take() else {
+    let Some(mut receiver_ptr) = state.receiver else {
         return;
     };
+    let receiver = unsafe { receiver_ptr.as_mut() };
     let mut finished = false;
 
     // Bound work per iteration so UVC buffer production keeps running.
@@ -307,7 +325,8 @@ pub fn service(
         }
     }
 
-    if !finished {
-        state.receiver = Some(receiver);
+    if finished {
+        state.receiver = None;
+        camera::release_cdc_receiver_storage();
     }
 }
