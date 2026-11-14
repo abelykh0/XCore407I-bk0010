@@ -30,6 +30,9 @@ pub struct State {
     transfer_failed: bool,
     transfer_started: bool,
     timeout_pending: bool,
+    input_accepted: bool,
+    response_queued: bool,
+    response_sent: bool,
 }
 
 impl State {
@@ -45,11 +48,18 @@ impl State {
             transfer_failed: false,
             transfer_started: false,
             timeout_pending: false,
+            input_accepted: false,
+            response_queued: false,
+            response_sent: false,
         }
     }
 
     pub fn active(&self) -> bool {
         self.receiver.is_some()
+    }
+
+    pub fn handshake_status(&self) -> (bool, bool, bool) {
+        (self.input_accepted, self.response_queued, self.response_sent)
     }
 }
 
@@ -194,6 +204,9 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.transfer_failed = false;
     state.transfer_started = false;
     state.timeout_pending = false;
+    state.input_accepted = false;
+    state.response_queued = false;
+    state.response_sent = false;
     state.receiver = Some(receiver);
     Ok(())
 }
@@ -242,6 +255,7 @@ pub fn service(
 
         match receiver.poll() {
             Action::WriteWire(bytes) => {
+                state.response_queued = true;
                 let bytes_len = bytes.len();
                 let count = unsafe {
                     tusb::tud_cdc_n_write(
@@ -254,6 +268,7 @@ pub fn service(
                     break;
                 }
                 unsafe { let _ = tusb::tud_cdc_n_write_flush(0); }
+                state.response_sent = true;
                 receiver.wire_written(count);
                 state.last_activity_ms = now_ms;
                 if count < bytes_len {
@@ -362,7 +377,10 @@ pub fn service(
                 if state.wire_pos < state.wire_len {
                     let input = &state.wire[state.wire_pos..state.wire_len];
                     match receiver.submit_wire(input) {
-                        Ok(consumed) if consumed != 0 => state.wire_pos += consumed,
+                        Ok(consumed) if consumed != 0 => {
+                            state.input_accepted = true;
+                            state.wire_pos += consumed;
+                        },
                         Ok(_) => {
                             // The decoder may need more bytes before it can
                             // consume an incomplete header or packet. Preserve
