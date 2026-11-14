@@ -409,6 +409,41 @@ pub fn service(
 
                 if state.wire_pos < state.wire_len {
                     let input = &state.wire[state.wire_pos..state.wire_len];
+
+                    // Tera Term/lrzsz cancellation is a raw run of CAN
+                    // (ZDLE, 0x18) bytes, followed by backspaces. It is not
+                    // a ZCAN header, so the normal header decoder would
+                    // otherwise discard it while remaining in the session.
+                    const CAN_RUN: [u8; 5] = [0x18; 5];
+                    if let Some(cancel_at) = input.windows(CAN_RUN.len())
+                        .position(|window| window == CAN_RUN)
+                    {
+                        if cancel_at != 0 {
+                            match receiver.submit_wire(&input[..cancel_at]) {
+                                Ok(consumed) if consumed == cancel_at => {
+                                    state.input_accepted = true;
+                                    state.wire_pos += consumed;
+                                }
+                                Ok(consumed) => {
+                                    state.wire_pos += consumed;
+                                    break;
+                                }
+                                Err(_) => {
+                                    state.last_error = 6;
+                                    state.transfer_failed = true;
+                                    let _ = receiver.abort();
+                                    break;
+                                }
+                            }
+                        }
+                        // Drop the CAN/backspace tail and enter the regular
+                        // abort path, which queues the peer notification and
+                        // emits Event::Aborted for normal cleanup/prompt restore.
+                        state.wire_pos = state.wire_len;
+                        let _ = receiver.abort();
+                        continue;
+                    }
+
                     match receiver.submit_wire(input) {
                         Ok(consumed) if consumed != 0 => {
                             state.input_accepted = true;
