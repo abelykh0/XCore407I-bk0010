@@ -3,6 +3,11 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let littlefs_path = "littlefs";
+    // The C backend is patched locally. Track its sources explicitly so
+    // changes to allocator, diagnostics, or storage logic always rebuild it.
+    for source in ["lfs.c", "lfs.h", "lfs_util.c", "lfs_util.h"] {
+        println!("cargo:rerun-if-changed={littlefs_path}/{source}");
+    }
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     let lfs_h = std::fs::read_to_string(format!("{littlefs_path}/lfs.h"))?;
     println!("cargo:rerun-if-changed={littlefs_path}/lfs.h");
