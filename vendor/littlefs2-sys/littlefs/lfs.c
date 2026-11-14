@@ -3089,7 +3089,6 @@ static int lfs_ctz_extend(lfs_t *lfs,
         xcore_lfs_last_ctz_head = head;
         xcore_lfs_last_ctz_size = size;
         xcore_lfs_alloc_caller = 3;
-        xcore_lfs_alloc_caller = 4;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
@@ -3431,6 +3430,7 @@ static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
     while (true) {
         // just relocate what exists into new block
         lfs_block_t nblock;
+        xcore_lfs_alloc_caller = 4;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
