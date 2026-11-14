@@ -45,6 +45,7 @@ version = "2.4"
 
 [dependencies.hex]
 version = "0.4.3"
+default-features = false
 
 [dependencies.thiserror]
 version = "1.0"
