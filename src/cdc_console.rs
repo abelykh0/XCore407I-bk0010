@@ -393,27 +393,23 @@ pub fn service(
                                     service_background();
                                     if completed == total || completed >= last_reported + 32 {
                                         last_reported = completed;
-                                        write_status(b"Format progress: ");
-                                        write_hex_u32(completed);
-                                        write_status(b" / ");
-                                        write_hex_u32(total);
-                                        write_status(b" blocks\r\n");
+                                        write_status(b".");
                                     }
                                 },
                             ) {
                                 Ok(()) => write_status(
-                                    b"NAND format complete. Reboot the device to mount the new volume.\r\n> ",
+                                    b"\r\nNAND format complete. Reboot the device to mount the new volume.\r\n> ",
                                 ),
                                 Err(error) => {
                                     use crate::nand_fs::InitError;
                                     let message: &[u8] = match error {
-                                        InitError::Timeout => b"NAND format failed: timeout.\r\n> ",
-                                        InitError::WrongDevice => b"NAND format failed: unexpected NAND device.\r\n> ",
-                                        InitError::MarkerRead => b"NAND format failed: bad-block marker read error.\r\n> ",
-                                        InitError::MountFailed => b"NAND format failed: LittleFS format/mount error.\r\n> ",
-                                        InitError::DharaNoJournal => b"NAND format failed: Dhara journal missing.\r\n> ",
-                                        InitError::DharaCapacity => b"NAND format failed: insufficient Dhara capacity.\r\n> ",
-                                        InitError::ProvisionFailed => b"NAND format failed: Dhara provisioning error.\r\n> ",
+                                        InitError::Timeout => b"\r\nNAND format failed: timeout.\r\n> ",
+                                        InitError::WrongDevice => b"\r\nNAND format failed: unexpected NAND device.\r\n> ",
+                                        InitError::MarkerRead => b"\r\nNAND format failed: bad-block marker read error.\r\n> ",
+                                        InitError::MountFailed => b"\r\nNAND format failed: LittleFS format/mount error.\r\n> ",
+                                        InitError::DharaNoJournal => b"\r\nNAND format failed: Dhara journal missing.\r\n> ",
+                                        InitError::DharaCapacity => b"\r\nNAND format failed: insufficient Dhara capacity.\r\n> ",
+                                        InitError::ProvisionFailed => b"\r\nNAND format failed: Dhara provisioning error.\r\n> ",
                                     };
                                     write_status(message);
                                 }
