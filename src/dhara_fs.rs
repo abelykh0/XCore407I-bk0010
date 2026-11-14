@@ -92,7 +92,7 @@ pub(crate) fn dhara_nand_diagnostic() -> [u32; 9] {
         DHARA_NAND_LAST_OPERATION.load(Ordering::Acquire),
         DHARA_NAND_LAST_LOCATION.load(Ordering::Acquire),
     ]
-];
+}
 
 fn record_storage_io_error(operation: u32, location: u32, error: i32) {
     if STORAGE_IO_OPERATION.compare_exchange(0, operation, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
