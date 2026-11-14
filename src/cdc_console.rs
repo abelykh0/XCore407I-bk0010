@@ -2,7 +2,7 @@
 
 use core::ffi::c_void;
 
-use littlefs2::{fs::Filesystem, path::Path};
+use littlefs2::{fs::Filesystem, io::{Error as LfsError, Read, Write}, path::Path};
 
 use crate::{cdc_zmodem, nand_fs::ActiveStorage, tusb};
 
