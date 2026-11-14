@@ -74,6 +74,13 @@ static ECC_LAST_AFTER: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_PAGE_CHUNKS: [AtomicU32; FSMC_ECC_CHUNKS_PER_PAGE] = [
     AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
 ];
+// PCR2 read-back immediately after ECC enable and immediately before ECCR2 capture.
+static ECC_LAST_PCR_ENABLE: [AtomicU32; FSMC_ECC_CHUNKS_PER_PAGE] = [
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
+];
+static ECC_LAST_PCR_CAPTURE: [AtomicU32; FSMC_ECC_CHUNKS_PER_PAGE] = [
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
+];
 
 
 // First raw NAND command failure during a storage operation.
@@ -137,11 +144,13 @@ pub(crate) fn clear_nand_read_diagnostic() {
     ECC_LAST_BEFORE.store(0, Ordering::Release);
     ECC_LAST_AFTER.store(0, Ordering::Release);
     for value in &ECC_LAST_PAGE_CHUNKS { value.store(0, Ordering::Release); }
+    for value in &ECC_LAST_PCR_ENABLE { value.store(0, Ordering::Release); }
+    for value in &ECC_LAST_PCR_CAPTURE { value.store(0, Ordering::Release); }
     clear_nand_device_diagnostic();
 }
 
 
-pub(crate) fn ecc_read_diagnostic() -> [u32; 18] {
+pub(crate) fn ecc_read_diagnostic() -> [u32; 26] {
     [
         ECC_READ_COUNTS[0].load(Ordering::Acquire),
         ECC_READ_COUNTS[1].load(Ordering::Acquire),
@@ -161,6 +170,14 @@ pub(crate) fn ecc_read_diagnostic() -> [u32; 18] {
         ECC_LAST_PAGE_CHUNKS[1].load(Ordering::Acquire),
         ECC_LAST_PAGE_CHUNKS[2].load(Ordering::Acquire),
         ECC_LAST_PAGE_CHUNKS[3].load(Ordering::Acquire),
+        ECC_LAST_PCR_ENABLE[0].load(Ordering::Acquire),
+        ECC_LAST_PCR_ENABLE[1].load(Ordering::Acquire),
+        ECC_LAST_PCR_ENABLE[2].load(Ordering::Acquire),
+        ECC_LAST_PCR_ENABLE[3].load(Ordering::Acquire),
+        ECC_LAST_PCR_CAPTURE[0].load(Ordering::Acquire),
+        ECC_LAST_PCR_CAPTURE[1].load(Ordering::Acquire),
+        ECC_LAST_PCR_CAPTURE[2].load(Ordering::Acquire),
+        ECC_LAST_PCR_CAPTURE[3].load(Ordering::Acquire),
     ]
 }
 
@@ -192,7 +209,7 @@ pub(crate) fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
 pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
 /// Prepare the FSMC ECC engine for one 512-byte data chunk.
-fn ecc_begin_chunk() {
+fn ecc_begin_chunk() -> u32 {
     unsafe {
         let pcr = read_volatile(FSMC_PCR2);
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
@@ -200,7 +217,7 @@ fn ecc_begin_chunk() {
             FSMC_PCR2,
             (pcr & !FSMC_PCR_ECCPS_MASK) | (1 << 17) | FSMC_PCR_ECCEN,
         );
-        let _ = read_volatile(FSMC_PCR2);
+        read_volatile(FSMC_PCR2)
     }
 }
 
@@ -217,13 +234,15 @@ fn wait_fsmc_fifo_empty() -> bool {
 }
 
 /// Read the 24-bit ECC result and disable the engine before reuse.
-fn ecc_end_chunk() -> u32 {
+fn ecc_end_chunk() -> (u32, u32) {
     unsafe {
-        let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
+        // Capture both registers before disabling ECC so the diagnostic
+        // reflects the state at the exact end of the 512-byte transfer.
         let pcr = read_volatile(FSMC_PCR2);
+        let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
-        ecc
+        (ecc, pcr)
     }
 }
 
@@ -334,7 +353,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
 
     let mut ecc = [0u8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        ecc_begin_chunk();
+        let _ = ecc_begin_chunk();
         for &byte in chunk { write_data(byte); }
         // The FSMC buffers NAND writes. Capturing ECC before FEMPT is set can
         // store a code for an incomplete chunk and cause false corrections.
@@ -343,7 +362,8 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             record_nand_device_failure(6, page, status);
             return false;
         }
-        encode_ecc(ecc_end_chunk(), &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
+        let (chunk_ecc, _) = ecc_end_chunk();
+        encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
 
     // Continue the same sequential page-program operation into the spare area.
@@ -458,11 +478,13 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     let mut calculated = [0u8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        ecc_begin_chunk();
+        let pcr_enable = ecc_begin_chunk();
+        ECC_LAST_PCR_ENABLE[chunk_index].store(pcr_enable, Ordering::Relaxed);
         for byte in chunk {
             *byte = read_data();
         }
-        let chunk_ecc = ecc_end_chunk();
+        let (chunk_ecc, pcr_capture) = ecc_end_chunk();
+        ECC_LAST_PCR_CAPTURE[chunk_index].store(pcr_capture, Ordering::Relaxed);
         ECC_LAST_PAGE_CHUNKS[chunk_index].store(chunk_ecc, Ordering::Relaxed);
         encode_ecc(chunk_ecc, &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
