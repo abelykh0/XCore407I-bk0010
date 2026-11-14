@@ -473,10 +473,12 @@ fn storage_test(
     write_status(b"WRITE: opening test file...\r\n");
     service_usb_only();
 
+    let mut file_opened = false;
     let write_result = fs.open_file_with_options_and_then(
         |options| options.write(true).create_new(true),
         path,
         |file| {
+            file_opened = true;
             let mut offset = 0usize;
             let mut buffer = [0u8; STORAGE_TEST_CHUNK];
             while offset < STORAGE_TEST_LENGTH {
@@ -509,7 +511,8 @@ fn storage_test(
     );
 
     if let Err(error) = write_result {
-        report_storage_test_io_failure(fs, b"write/flush", error.code());
+        let stage = if file_opened { b"write/flush" as &[u8] } else { b"open" };
+        report_storage_test_io_failure(fs, stage, error.code());
         return;
     }
 
