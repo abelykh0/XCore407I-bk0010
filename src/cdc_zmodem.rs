@@ -146,6 +146,7 @@ pub fn service(
     for _ in 0..8 {
         match receiver.poll() {
             Action::WriteWire(bytes) => {
+                let bytes_len = bytes.len();
                 let count = unsafe {
                     tusb::tud_cdc_n_write(
                         0,
@@ -159,11 +160,12 @@ pub fn service(
                 unsafe { let _ = tusb::tud_cdc_n_write_flush(0); }
                 receiver.wire_written(count);
                 state.last_activity_ms = now_ms;
-                if count < bytes.len() {
+                if count < bytes_len {
                     break;
                 }
             }
             Action::WriteFile(bytes) => {
+                let bytes_len = bytes.len();
                 if state.path_len == 0
                     || !append_file(fs, &state.path[..state.path_len], bytes)
                 {
@@ -171,7 +173,7 @@ pub fn service(
                     let _ = receiver.abort();
                     break;
                 }
-                if receiver.file_written(bytes.len()).is_err() {
+                if receiver.file_written(bytes_len).is_err() {
                     state.transfer_failed = true;
                     let _ = receiver.abort();
                     break;
