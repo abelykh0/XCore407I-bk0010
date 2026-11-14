@@ -29,6 +29,12 @@ static volatile uint32_t xcore_lfs_last_relocate_block;
 static volatile uint32_t xcore_lfs_last_relocate_off;
 static volatile uint32_t xcore_lfs_last_relocate_pos;
 static volatile uint32_t xcore_lfs_last_relocate_ctz_size;
+static volatile uint32_t xcore_lfs_compact_relocate_reasons[7];
+static volatile uint32_t xcore_lfs_last_compact_reason;
+static volatile uint32_t xcore_lfs_last_compact_pair0;
+static volatile uint32_t xcore_lfs_last_compact_pair1;
+static volatile uint32_t xcore_lfs_last_compact_rev;
+static volatile uint32_t xcore_lfs_last_compact_off;
 
 static void xcore_lfs_alloc_trace_record(lfs_t *lfs, uint32_t event) {
     uint32_t used = 0;
@@ -75,6 +81,12 @@ void xcore_lfs_alloc_diag_clear(void) {
     xcore_lfs_last_relocate_off = 0;
     xcore_lfs_last_relocate_pos = 0;
     xcore_lfs_last_relocate_ctz_size = 0;
+    for (unsigned i = 0; i < 7; i++) xcore_lfs_compact_relocate_reasons[i] = 0;
+    xcore_lfs_last_compact_reason = 0;
+    xcore_lfs_last_compact_pair0 = 0;
+    xcore_lfs_last_compact_pair1 = 0;
+    xcore_lfs_last_compact_rev = 0;
+    xcore_lfs_last_compact_off = 0;
 }
 
 // out[0..10] is the original failure snapshot. The extended tail contains
@@ -103,6 +115,12 @@ void xcore_lfs_alloc_diag_read(uint32_t *out) {
     out[135] = xcore_lfs_last_relocate_off;
     out[136] = xcore_lfs_last_relocate_pos;
     out[137] = xcore_lfs_last_relocate_ctz_size;
+    for (unsigned i = 0; i < 7; i++) out[138 + i] = xcore_lfs_compact_relocate_reasons[i];
+    out[145] = xcore_lfs_last_compact_reason;
+    out[146] = xcore_lfs_last_compact_pair0;
+    out[147] = xcore_lfs_last_compact_pair1;
+    out[148] = xcore_lfs_last_compact_rev;
+    out[149] = xcore_lfs_last_compact_off;
 }
 
 static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
@@ -2079,6 +2097,9 @@ static int lfs_dir_compact(lfs_t *lfs,
 
     if (tired && lfs_pair_cmp(dir->pair, (const lfs_block_t[2]){0, 1}) != 0) {
         // we're writing too much, time to relocate
+        xcore_lfs_compact_relocate_reasons[0]++;
+        xcore_lfs_last_compact_reason = 1;
+        xcore_lfs_last_compact_off = 0;
         goto relocate;
     }
 
@@ -2101,6 +2122,9 @@ static int lfs_dir_compact(lfs_t *lfs,
             int err = lfs_bd_erase(lfs, dir->pair[1]);
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
+                    xcore_lfs_compact_relocate_reasons[1]++;
+                    xcore_lfs_last_compact_reason = 2;
+                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2113,6 +2137,9 @@ static int lfs_dir_compact(lfs_t *lfs,
             dir->rev = lfs_fromle32(dir->rev);
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
+                    xcore_lfs_compact_relocate_reasons[2]++;
+                    xcore_lfs_last_compact_reason = 3;
+                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2128,6 +2155,9 @@ static int lfs_dir_compact(lfs_t *lfs,
                         lfs, &commit});
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
+                    xcore_lfs_compact_relocate_reasons[3]++;
+                    xcore_lfs_last_compact_reason = 4;
+                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2142,6 +2172,9 @@ static int lfs_dir_compact(lfs_t *lfs,
                 lfs_pair_fromle32(dir->tail);
                 if (err) {
                     if (err == LFS_ERR_CORRUPT) {
+                        xcore_lfs_compact_relocate_reasons[4]++;
+                        xcore_lfs_last_compact_reason = 5;
+                        xcore_lfs_last_compact_off = commit.off;
                         goto relocate;
                     }
                     return err;
@@ -2169,6 +2202,9 @@ static int lfs_dir_compact(lfs_t *lfs,
                             sizeof(delta)), &delta);
                 if (err) {
                     if (err == LFS_ERR_CORRUPT) {
+                        xcore_lfs_compact_relocate_reasons[5]++;
+                        xcore_lfs_last_compact_reason = 6;
+                        xcore_lfs_last_compact_off = commit.off;
                         goto relocate;
                     }
                     return err;
@@ -2179,6 +2215,9 @@ static int lfs_dir_compact(lfs_t *lfs,
             err = lfs_dir_commitcrc(lfs, &commit);
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
+                    xcore_lfs_compact_relocate_reasons[6]++;
+                    xcore_lfs_last_compact_reason = 7;
+                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2199,6 +2238,10 @@ static int lfs_dir_compact(lfs_t *lfs,
         break;
 
 relocate:
+        // Capture the metadata pair and revision that triggered relocation.
+        xcore_lfs_last_compact_pair0 = dir->pair[0];
+        xcore_lfs_last_compact_pair1 = dir->pair[1];
+        xcore_lfs_last_compact_rev = dir->rev;
         // commit was corrupted, drop caches and prepare to relocate block
         relocated = true;
         lfs_cache_drop(lfs, &lfs->pcache);
