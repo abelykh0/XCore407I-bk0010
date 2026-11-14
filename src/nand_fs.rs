@@ -10,6 +10,7 @@
 //! single-bit data errors and reject uncorrectable ECC syndromes.
 
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -43,6 +44,22 @@ pub const PAGES_PER_BLOCK: u32 = 64;
 pub const PHYSICAL_BLOCKS: u32 = 1024;
 pub const ERASE_BLOCK_SIZE: usize = PAGE_SIZE * PAGES_PER_BLOCK as usize;
 pub type ActiveStorage = crate::dhara_fs::DharaStorage;
+
+// First failure inside the raw NAND page-read/ECC path.
+// Stages: 1=data read ready timeout, 2=OOB read timeout,
+// 3=invalid ECC tag, 4=uncorrectable ECC syndrome.
+static NAND_READ_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
+static NAND_READ_FAILURE_DETAIL: AtomicU32 = AtomicU32::new(0);
+
+fn record_nand_read_failure(stage: u32, detail: u32) {
+    if NAND_READ_FAILURE_STAGE.compare_exchange(0, stage, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+        NAND_READ_FAILURE_DETAIL.store(detail, Ordering::Release);
+    }
+}
+
+pub(crate) fn nand_read_diagnostic() -> (u32, u32) {
+    (NAND_READ_FAILURE_STAGE.load(Ordering::Acquire), NAND_READ_FAILURE_DETAIL.load(Ordering::Acquire))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitError {
