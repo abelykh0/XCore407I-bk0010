@@ -115,7 +115,8 @@ fn create_temp_file(fs: &Filesystem<'_, ActiveStorage>) -> bool {
     let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) else {
         return false;
     };
-    if fs.exists(path) && fs.remove(path).is_err() {
+    // Never delete an existing hidden file: it may belong to the user.
+    if fs.exists(path) {
         return false;
     }
     create_new_file(fs, TEMP_PATH)
