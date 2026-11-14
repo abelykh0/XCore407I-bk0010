@@ -306,7 +306,7 @@ fn main() -> ! {
                     let _ = tusb::tud_task_ext(0, false);
                     xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                 }
-                xcore407i_blinker::cdc_console::service(
+                let format_requested = xcore407i_blinker::cdc_console::service(
                     None,
                     &mut zmodem_state,
                     TICKS.load(Ordering::Relaxed),
@@ -319,6 +319,9 @@ fn main() -> ! {
                     },
                 );
                 while prepare_next_video_batch(&mut video_renderer) {}
+                if format_requested {
+                    break;
+                }
             }
         }
 
@@ -330,7 +333,7 @@ fn main() -> ! {
                     let _ = tusb::tud_task_ext(0, false);
                     xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                 }
-                xcore407i_blinker::cdc_console::service(
+                let format_requested = xcore407i_blinker::cdc_console::service(
                     None,
                     &mut zmodem_state,
                     TICKS.load(Ordering::Relaxed),
@@ -344,6 +347,9 @@ fn main() -> ! {
                 );
                 xcore407i_blinker::cdc_console::report_storage_error(error);
                 while prepare_next_video_batch(&mut video_renderer) {}
+                if format_requested {
+                    break;
+                }
             }
         }
         }
