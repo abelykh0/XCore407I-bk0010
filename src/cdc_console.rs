@@ -9,7 +9,7 @@ use crate::{cdc_zmodem, nand_fs::ActiveStorage, tusb};
 const LINE_CAPACITY: usize = 80;
 const STORAGE_TEST_PATH: &[u8] = b"/.storage-test\0";
 const STORAGE_TEST_LENGTH: usize = 8192;
-const STORAGE_TEST_CHUNK: usize = 256;
+const STORAGE_TEST_CHUNK: usize = 64;
 
 static mut LINE: [u8; LINE_CAPACITY] = [0; LINE_CAPACITY];
 static mut LINE_LEN: usize = 0;
