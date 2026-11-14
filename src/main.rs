@@ -270,7 +270,7 @@ fn main() -> ! {
 
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
-        if matches!(mount_result, Ok(true)) {
+        if matches!(&mount_result, Ok(true)) {
             xcore407i_blinker::cdc_console::write_status(
                 b"Filesystem unmounted. Formatting NAND; all files will be lost...\r\n",
             );
