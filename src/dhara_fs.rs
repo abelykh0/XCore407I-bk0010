@@ -44,6 +44,8 @@ unsafe extern "C" {
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_trim(sector: u32, error: *mut i32) -> c_int;
     fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
+    fn xcore_dhara_diag_clear();
+    fn xcore_dhara_diag_read(out: *mut u32);
     fn xcore_lfs_alloc_diag_clear();
     fn xcore_lfs_alloc_diag_read(out: *mut u32);
 }
@@ -185,7 +187,14 @@ pub(crate) fn littlefs_alloc_trace_diagnostic() -> ([u32; 28], [u32; 112]) {
     (stats, trace)
 }
 
+pub(crate) fn dhara_limit_diagnostic() -> [u32; 12] {
+    let mut values = [0u32; 12];
+    unsafe { xcore_dhara_diag_read(values.as_mut_ptr()); }
+    values
+}
+
 pub(crate) fn clear_storage_io_diagnostic() {
+    unsafe { xcore_dhara_diag_clear(); }
     clear_dhara_nand_diagnostic();
     for count in &STORAGE_CALLBACK_COUNTS {
         count.store(0, Ordering::Release);
