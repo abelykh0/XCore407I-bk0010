@@ -335,6 +335,19 @@ pub fn service(
                             _ => b"ZMODEM last failure: unknown stage.\r\n",
                         };
                         write_status(failure);
+                        if zmodem.last_error() == 2 {
+                            let (lfs_error, operation, location, storage_error) =
+                                zmodem.append_failure_details();
+                            write_status(b"Append LittleFS error: 0x");
+                            write_hex_u32(lfs_error as u32);
+                            write_status(b"\r\nDhara operation: 0x");
+                            write_hex_u32(operation);
+                            write_status(b" logical sector: 0x");
+                            write_hex_u32(location);
+                            write_status(b" error: 0x");
+                            write_hex_u32(storage_error);
+                            write_status(b"\r\n");
+                        }
                         write_status(b"> ");
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
