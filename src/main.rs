@@ -262,11 +262,12 @@ fn main() -> ! {
                         &mut zmodem_state,
                         TICKS.load(Ordering::Relaxed),
                         &mut || {
+                            // STORAGETEST intentionally pauses UVC/video work.
+                            // Keep only TinyUSB device servicing alive so CDC
+                            // progress and diagnostics remain visible.
                             unsafe {
                                 let _ = tusb::tud_task_ext(0, false);
-                                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                             }
-                            while prepare_next_video_batch(&mut video_renderer) {}
                         },
                     );
                     while prepare_next_video_batch(&mut video_renderer) {}
