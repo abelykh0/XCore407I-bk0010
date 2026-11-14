@@ -355,6 +355,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     command(0x30);
     if !wait_ready_rb() {
         record_nand_read_failure(1, page);
+        record_nand_device_failure(1, page, 0);
         return false;
     }
 
