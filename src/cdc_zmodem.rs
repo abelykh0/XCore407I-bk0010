@@ -278,14 +278,26 @@ pub fn service(
             }
             Action::WriteFile(bytes) => {
                 let bytes_len = bytes.len();
-                if state.final_path_len == 0
-                    || !append_file(fs, bytes)
-                {
+                if state.final_path_len == 0 {
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM storage error: temp file not active\r\n",
+                    );
+                    state.transfer_failed = true;
+                    let _ = receiver.abort();
+                    break;
+                }
+                if !append_file(fs, bytes) {
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM storage error: append/write/flush failed\r\n",
+                    );
                     state.transfer_failed = true;
                     let _ = receiver.abort();
                     break;
                 }
                 if receiver.file_written(bytes_len).is_err() {
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM protocol error: file_written rejected data\r\n",
+                    );
                     state.transfer_failed = true;
                     let _ = receiver.abort();
                     break;
@@ -307,6 +319,9 @@ pub fn service(
                 if available {
                     state.final_path_len = path_len.unwrap_or(0);
                     if receiver.accept_file_at(0).is_err() {
+                        super::cdc_console::write_status(
+                            b"\r\nZMODEM protocol error: accept_file_at failed\r\n",
+                        );
                         state.transfer_failed = true;
                         let _ = receiver.abort();
                         break;
@@ -322,6 +337,9 @@ pub fn service(
             }
             Action::Event(Event::FileCompleted) => {
                 if !commit_temp_file(fs, state) {
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM storage error: final rename/commit failed\r\n",
+                    );
                     state.transfer_failed = true;
                     let _ = receiver.abort();
                     break;
