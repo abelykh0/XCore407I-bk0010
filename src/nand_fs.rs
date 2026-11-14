@@ -507,6 +507,18 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return false;
     }
 
+    let raw_read = RAW_NAND_TEST_MODE.load(Ordering::SeqCst)
+        || ECC_WRITE_RAW_READ_TEST_MODE.load(Ordering::SeqCst);
+
+    // For ECC reads, enable the engine before starting the NAND page-read
+    // transaction. This keeps ECCEN asserted across command/address setup,
+    // the NAND's internal read cycle, and the 512-byte data transfer.
+    // Command/address accesses use separate FSMC addresses and are excluded
+    // from ECC accumulation by the controller.
+    if !raw_read {
+        let _ = ecc_begin_chunk();
+    }
+
     command(0x00);
     address(0);
     address(0);
@@ -514,21 +526,25 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     address((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
+        if !raw_read {
+            let _ = ecc_end_chunk();
+        }
         record_nand_read_failure(1, page);
         record_nand_device_failure(1, page, 0);
         return false;
     }
 
-    if RAW_NAND_TEST_MODE.load(Ordering::SeqCst)
-        || ECC_WRITE_RAW_READ_TEST_MODE.load(Ordering::SeqCst)
-    {
+    if raw_read {
         for byte in out.iter_mut() { *byte = read_data(); }
         return true;
     }
 
     let mut calculated = [0u8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let pcr_enable = ecc_begin_chunk();
+        if chunk_index != 0 {
+            let _ = ecc_begin_chunk();
+        }
+        let pcr_enable = unsafe { read_volatile(FSMC_PCR2) };
         ECC_LAST_PCR_ENABLE[chunk_index].store(pcr_enable, Ordering::Relaxed);
         for byte in chunk {
             *byte = read_data();
