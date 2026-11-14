@@ -69,6 +69,21 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
                 write_hex_u32(detail);
                 write_status(b"\r\n");
             }
+            let (stage, detail) = crate::nand_fs::nand_read_diagnostic();
+            if stage != 0 {
+                let description: &[u8] = match stage {
+                    1 => b"NAND data-page ready/busy timeout; physical page 0x",
+                    2 => b"NAND OOB read ready/busy timeout; physical page 0x",
+                    3 => b"Invalid ECC tag; observed OOB tag 0x",
+                    4 => b"Uncorrectable ECC syndrome (chunk in high byte); detail 0x",
+                    _ => b"Unknown NAND read failure stage; detail 0x",
+                };
+                write_status(description);
+                write_hex_u32(detail);
+                write_status(b"\r\n");
+            } else {
+                write_status(b"No lower-level NAND read stage was recorded.\r\n");
+            }
             write_status(b"NAND was not modified by this diagnostic.\r\n");
         }
         FsAccessError::Operation => {
