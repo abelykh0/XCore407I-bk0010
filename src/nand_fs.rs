@@ -493,7 +493,15 @@ fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
 /// This erases every non-factory-bad physical block, creates a new Dhara
 /// journal and marker, then formats and verifies an empty LittleFS volume.
 pub fn initialize_nand_volume() -> Result<(), InitError> {
-    let mut storage = ActiveStorage::initialize_new_volume()?;
+    initialize_nand_volume_with_progress(|_, _| {})
+}
+
+/// CDC variant: invoke progress after each physical block, allowing the
+/// caller to service USB/video between NAND erase operations.
+pub fn initialize_nand_volume_with_progress(
+    progress: impl FnMut(u32, u32),
+) -> Result<(), InitError> {
+    let mut storage = ActiveStorage::initialize_new_volume_with_progress(progress)?;
     Filesystem::<ActiveStorage>::format(&mut storage)
         .map_err(|_| InitError::MountFailed)?;
     Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
