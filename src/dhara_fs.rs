@@ -187,8 +187,8 @@ pub(crate) fn littlefs_alloc_trace_diagnostic() -> ([u32; 28], [u32; 112]) {
     (stats, trace)
 }
 
-pub(crate) fn dhara_limit_diagnostic() -> [u32; 12] {
-    let mut values = [0u32; 12];
+pub(crate) fn dhara_limit_diagnostic() -> [u32; 20] {
+    let mut values = [0u32; 20];
     unsafe { xcore_dhara_diag_read(values.as_mut_ptr()); }
     values
 }
