@@ -260,7 +260,8 @@ fn main() -> ! {
 
         // Keep the CDC camera and command console alive if NAND initialization
         // or the existing LittleFS mount fails; file receive stays disabled.
-        if mount_result.is_err() {
+        if let Err(error) = mount_result {
+            xcore407i_blinker::cdc_console::report_storage_error(error);
             loop {
                 unsafe {
                     let _ = tusb::tud_task_ext(0, false);
