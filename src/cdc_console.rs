@@ -145,7 +145,7 @@ pub fn service(
             LINE_LEN = 0;
             WAS_CONNECTED = false;
             STORAGE_ERROR_REPORTED = false;
-            cdc_zmodem::cancel(zmodem);
+            cdc_zmodem::cancel(zmodem, fs);
             return;
         }
         WAS_CONNECTED = true;
