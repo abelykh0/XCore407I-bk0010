@@ -75,6 +75,49 @@ impl Receiver {
     /// # Errors
     ///
     /// * [`OutOfMemory`](crate::Error::OutOfMemory) when the outgoing buffer cannot hold the handshake
+    /// Initialize a receiver directly in caller-provided storage.
+    ///
+    /// This avoids constructing the large fixed-size protocol buffers on a
+    /// constrained embedded stack. The storage must be suitably aligned and
+    /// large enough for `Receiver`; it is exclusively borrowed for the
+    /// returned receiver's lifetime.
+    pub fn new_in_place(
+        storage: &mut core::mem::MaybeUninit<Self>,
+    ) -> Result<&mut Self, Error> {
+        let receiver = storage.as_mut_ptr();
+        unsafe {
+            core::ptr::addr_of_mut!((*receiver).state).write(ReceiverPhase::SessionBegin);
+            core::ptr::addr_of_mut!((*receiver).count).write(0);
+            core::ptr::addr_of_mut!((*receiver).file_name).write(String::new());
+            core::ptr::addr_of_mut!((*receiver).file_size).write(0);
+            core::ptr::addr_of_mut!((*receiver).file_modified).write(None);
+            core::ptr::addr_of_mut!((*receiver).file_mode).write(None);
+            core::ptr::addr_of_mut!((*receiver).buf).write(Buffer::<SUBPACKET_MAX_SIZE>::new());
+            core::ptr::addr_of_mut!((*receiver).buf_write_offset).write(0);
+            core::ptr::addr_of_mut!((*receiver).data_encoding).write(Encoding::ZBIN);
+            core::ptr::addr_of_mut!((*receiver).header_reader).write(HeaderReader::new());
+            core::ptr::addr_of_mut!((*receiver).subpacket_state).write(SubpacketPhase::Idle);
+            core::ptr::addr_of_mut!((*receiver).subpacket_escape_pending).write(false);
+            core::ptr::addr_of_mut!((*receiver).crc).write(RxCrc::new());
+            core::ptr::addr_of_mut!((*receiver).outgoing).write(Buffer::<WIRE_BUF_SIZE>::new());
+            core::ptr::addr_of_mut!((*receiver).outgoing_offset).write(0);
+            core::ptr::addr_of_mut!((*receiver).pending_events)
+                .write([None; RECEIVER_EVENT_QUEUE_CAP]);
+            core::ptr::addr_of_mut!((*receiver).pending_event_head).write(0);
+            core::ptr::addr_of_mut!((*receiver).pending_event_len).write(0);
+            core::ptr::addr_of_mut!((*receiver).buffer_len)
+                .write(SUBPACKET_MAX_SIZE as u16);
+            core::ptr::addr_of_mut!((*receiver).overlapped_io).write(false);
+            core::ptr::addr_of_mut!((*receiver).manual_accept).write(false);
+            core::ptr::addr_of_mut!((*receiver).zrpos_retries).write(0);
+            core::ptr::addr_of_mut!((*receiver).file_active).write(false);
+            core::ptr::addr_of_mut!((*receiver).pending_abort).write(false);
+            let receiver = &mut *receiver;
+            receiver.queue_zrinit()?;
+            Ok(receiver)
+        }
+    }
+
     pub fn new() -> Result<Self, Error> {
         let buffer_len =
             u16::try_from(SUBPACKET_MAX_SIZE).map_err(|_| Error::UnsupportedFeature)?;
