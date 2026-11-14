@@ -199,7 +199,13 @@ pub fn report_format_complete(report: crate::nand_fs::FormatReport) {
     write_decimal(report.good_blocks as usize);
     write_status(b"  Bad/skipped: ");
     write_decimal(report.bad_blocks as usize);
-    write_status(b"\r\nLittleFS: ");
+    write_status(b"\r\nNAND geometry: ");
+    write_decimal(report.page_size_bytes as usize);
+    write_status(b"-byte pages, ");
+    write_decimal(report.pages_per_block as usize);
+    write_status(b" pages/block, ");
+    write_decimal(report.erase_block_bytes as usize);
+    write_status(b"-byte erase blocks.\r\nLittleFS: ");
     write_decimal(report.littlefs_blocks as usize);
     write_status(b" logical blocks, ");
     write_decimal(report.littlefs_capacity_bytes as usize);
