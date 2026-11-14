@@ -503,6 +503,9 @@ pub struct FormatReport {
     pub physical_blocks: u32,
     pub bad_blocks: u16,
     pub good_blocks: u32,
+    pub page_size_bytes: u32,
+    pub pages_per_block: u32,
+    pub erase_block_bytes: u32,
     pub littlefs_blocks: u32,
     pub littlefs_capacity_bytes: u32,
 }
@@ -529,6 +532,9 @@ pub fn initialize_nand_volume_with_progress(
         physical_blocks: PHYSICAL_BLOCKS,
         bad_blocks,
         good_blocks: PHYSICAL_BLOCKS - bad_blocks as u32,
+        page_size_bytes: PAGE_SIZE as u32,
+        pages_per_block: PAGES_PER_BLOCK,
+        erase_block_bytes: ERASE_BLOCK_SIZE as u32,
         littlefs_blocks: 700,
         littlefs_capacity_bytes: storage.logical_capacity() as u32,
     })
