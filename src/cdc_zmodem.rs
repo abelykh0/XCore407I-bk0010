@@ -163,10 +163,8 @@ fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> bo
 fn append_file(
     fs: &Filesystem<'_, ActiveStorage>,
     data: &[u8],
-) -> bool {
-    let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) else {
-        return false;
-    };
+) -> Result<(), i32> {
+    let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::INVAL.code())?;
     fs.open_file_with_options_and_then(
         |options| options.write(true).append(true),
         path,
@@ -181,8 +179,7 @@ fn append_file(
             }
             file.flush()
         },
-    )
-    .is_ok()
+    ).map_err(|error| error.code())
 }
 
 pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<(), ()> {
@@ -296,10 +293,16 @@ pub fn service(
                     let _ = receiver.abort();
                     break;
                 }
-                if !append_file(fs, bytes) {
+                crate::dhara_fs::clear_storage_io_diagnostic();
+                if let Err(lfs_error) = append_file(fs, bytes) {
                     state.last_error = 2;
-                    super::cdc_console::write_status(
-                        b"\r\nZMODEM storage error: append/write/flush failed\r\n",
+                    let (operation, location, storage_error) =
+                        crate::dhara_fs::storage_io_diagnostic();
+                    super::cdc_console::write_append_failure(
+                        lfs_error,
+                        operation,
+                        location,
+                        storage_error,
                     );
                     state.transfer_failed = true;
                     let _ = receiver.abort();
