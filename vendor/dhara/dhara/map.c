@@ -26,6 +26,39 @@
 
 #define DHARA_RADIX_DEPTH	(sizeof(dhara_sector_t) << 3)
 
+/* Last bounded-loop exit, for diagnosing persistent sync/recovery failures. */
+static uint32_t xcore_dhara_limit_diag[12];
+
+static void record_limit_failure(uint32_t stage, uint32_t steps,
+				 uint32_t restarts, const struct dhara_map *m)
+{
+	const struct dhara_journal *j = &m->journal;
+
+	xcore_dhara_limit_diag[0] = stage;
+	xcore_dhara_limit_diag[1] = steps;
+	xcore_dhara_limit_diag[2] = restarts;
+	xcore_dhara_limit_diag[3] = j->head;
+	xcore_dhara_limit_diag[4] = j->tail;
+	xcore_dhara_limit_diag[5] = j->tail_sync;
+	xcore_dhara_limit_diag[6] = j->root;
+	xcore_dhara_limit_diag[7] = j->recover_next;
+	xcore_dhara_limit_diag[8] = j->recover_root;
+	xcore_dhara_limit_diag[9] = j->recover_meta;
+	xcore_dhara_limit_diag[10] = j->flags;
+	xcore_dhara_limit_diag[11] = dhara_journal_size(j);
+}
+
+void dhara_map_diag_clear(void)
+{
+	memset(xcore_dhara_limit_diag, 0, sizeof(xcore_dhara_limit_diag));
+}
+
+void dhara_map_diag_read(uint32_t *out)
+{
+	if (out)
+		memcpy(out, xcore_dhara_limit_diag, sizeof(xcore_dhara_limit_diag));
+}
+
 static inline dhara_sector_t d_bit(int depth)
 {
 	return ((dhara_sector_t)1) << (DHARA_RADIX_DEPTH - depth - 1);
@@ -282,6 +315,7 @@ static int try_recover(struct dhara_map *m, dhara_error_t cause,
 
 	while (dhara_journal_in_recovery(&m->journal)) {
 		if (++steps > XCORE_DHARA_MAX_RECOVERY_STEPS) {
+			record_limit_failure(2, steps, restart_count, m);
 			dhara_set_error(err, DHARA_E_TOO_BAD);
 			return -1;
 		}
@@ -302,6 +336,7 @@ static int try_recover(struct dhara_map *m, dhara_error_t cause,
 			}
 
 			if (restart_count >= DHARA_MAX_RETRIES) {
+				record_limit_failure(3, steps, restart_count, m);
 				dhara_set_error(err, DHARA_E_TOO_BAD);
 				return -1;
 			}
@@ -505,6 +540,7 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 
 	while (!dhara_journal_is_clean(&m->journal)) {
 		if (++steps > XCORE_DHARA_MAX_MAINTENANCE_STEPS) {
+			record_limit_failure(1, steps, 0, m);
 			dhara_set_error(err, DHARA_E_TOO_BAD);
 			return -1;
 		}
