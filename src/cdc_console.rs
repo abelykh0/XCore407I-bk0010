@@ -191,6 +191,22 @@ pub fn report_format_status(bytes: &[u8]) {
     write_status(bytes);
 }
 
+pub fn report_format_complete(report: crate::nand_fs::FormatReport) {
+    write_status(b"\r\nNAND format complete; new LittleFS volume verified.\r\n");
+    write_status(b"Physical blocks: ");
+    write_decimal(report.physical_blocks as usize);
+    write_status(b"  Good: ");
+    write_decimal(report.good_blocks as usize);
+    write_status(b"  Bad/skipped: ");
+    write_decimal(report.bad_blocks as usize);
+    write_status(b"\r\nLittleFS: ");
+    write_decimal(report.littlefs_blocks as usize);
+    write_status(b" logical blocks, ");
+    write_decimal(report.littlefs_capacity_bytes as usize);
+    write_status(b" bytes.\r\n");
+    write_status(b"Storage remounting...\r\n");
+}
+
 pub(crate) fn write_status(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
@@ -397,9 +413,7 @@ pub fn service(
                                     }
                                 },
                             ) {
-                                Ok(()) => write_status(
-                                    b"\r\nNAND format complete. Reboot the device to mount the new volume.\r\n> ",
-                                ),
+                                Ok(report) => report_format_complete(report),
                                 Err(error) => {
                                     use crate::nand_fs::InitError;
                                     let message: &[u8] = match error {
