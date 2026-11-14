@@ -191,6 +191,54 @@ pub fn report_format_status(bytes: &[u8]) {
     write_status(bytes);
 }
 
+pub fn report_format_failure(error: crate::nand_fs::InitError) {
+    use crate::nand_fs::InitError;
+
+    let reason: &[u8] = match error {
+        InitError::Timeout => b"NAND timeout",
+        InitError::WrongDevice => b"unexpected NAND device",
+        InitError::MarkerRead => b"bad-block marker read failed",
+        InitError::MountFailed => b"LittleFS format or verification mount failed",
+        InitError::DharaNoJournal => b"Dhara journal/volume marker missing",
+        InitError::DharaCapacity => b"insufficient Dhara capacity",
+        InitError::ProvisionFailed => b"Dhara provisioning or block retirement failed",
+    };
+    write_status(b"\r\nNAND format failed: ");
+    write_status(reason);
+    write_status(b".\r\n");
+
+    let (operation, location, storage_error) =
+        crate::dhara_fs::storage_io_diagnostic();
+    if operation != 0 {
+        write_status(b"Dhara operation 0x");
+        write_hex_u32(operation);
+        write_status(b", logical sector 0x");
+        write_hex_u32(location);
+        write_status(b", error 0x");
+        write_hex_u32(storage_error);
+        write_status(b"\r\n");
+    }
+
+    let (stage, detail, page, stored_ecc, calculated_ecc) =
+        crate::nand_fs::nand_read_diagnostic();
+    if stage != 0 {
+        write_status(b"NAND read stage 0x");
+        write_hex_u32(stage);
+        write_status(b", detail 0x");
+        write_hex_u32(detail);
+        write_status(b", physical page 0x");
+        write_hex_u32(page);
+        write_status(b"\r\n");
+        if stage == 4 {
+            write_status(b"Stored ECC 0x");
+            write_hex_u32(stored_ecc);
+            write_status(b", calculated ECC 0x");
+            write_hex_u32(calculated_ecc);
+            write_status(b"\r\n");
+        }
+    }
+}
+
 pub fn report_format_complete(report: crate::nand_fs::FormatReport) {
     write_status(b"\r\nNAND format complete; new LittleFS volume verified.\r\n");
     write_status(b"Physical blocks: ");
