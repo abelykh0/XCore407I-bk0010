@@ -415,13 +415,46 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_status(b" error: 0x");
     write_hex_u32(storage_error);
     if storage_error == 3 {
-        write_status(b" (Dhara retry/recovery budget exhausted)");
+        write_status(b" (Dhara safety limit exhausted: TOO_BAD)");
     } else if storage_error == 2 {
         write_status(b" (NAND ECC failure)");
     } else if storage_error == 1 {
         write_status(b" (NAND block operation failed)");
     }
     write_status(b"\r\n");
+
+    let dhara_limit = crate::dhara_fs::dhara_limit_diagnostic();
+    let limit_name: &[u8] = match dhara_limit[0] {
+        1 => b"map_sync_maintenance",
+        2 => b"recovery_steps",
+        3 => b"recovery_restarts",
+        _ => b"not_recorded",
+    };
+    write_status(b"Dhara limit diagnostic: stage=");
+    write_status(limit_name);
+    write_status(b" steps=");
+    write_decimal(dhara_limit[1] as usize);
+    write_status(b" restarts=");
+    write_decimal(dhara_limit[2] as usize);
+    write_status(b" head=0x");
+    write_hex_u32(dhara_limit[3]);
+    write_status(b" tail=0x");
+    write_hex_u32(dhara_limit[4]);
+    write_status(b" tail_sync=0x");
+    write_hex_u32(dhara_limit[5]);
+    write_status(b" root=0x");
+    write_hex_u32(dhara_limit[6]);
+    write_status(b" recover_next=0x");
+    write_hex_u32(dhara_limit[7]);
+    write_status(b" recover_root=0x");
+    write_hex_u32(dhara_limit[8]);
+    write_status(b" recover_meta=0x");
+    write_hex_u32(dhara_limit[9]);
+    write_status(b" flags=0x");
+    write_hex_u32(dhara_limit[10]);
+    write_status(b" journal_pages=");
+    write_decimal(dhara_limit[11] as usize);
+    write_status(b"\\r\\n");
 
     let (nand_stage, detail, page, stored_ecc, calculated_ecc) =
         crate::nand_fs::nand_read_diagnostic();
