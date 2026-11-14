@@ -110,47 +110,11 @@ fn main() -> ! {
         );
     }
 
-    // Start host-task scheduling before waiting for the boot keyboard.
-    configure_usb_host_task_timer(&device.RCC, &device.TIM3, &mut core.NVIC);
-
-    // Do not leave the PC-facing USB device uninitialized for tens of seconds
-    // if the optional boot keyboard is absent. A healthy FS host should report
-    // the boot keyboard well before this fallback interval.
-    const KEYBOARD_DETECT_TIMEOUT_MS: u32 = 10_000;
-    let keyboard_wait_started = TICKS.load(Ordering::Relaxed);
-    while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
-        if !USB_FS_READY.load(Ordering::Acquire) {
-            let now = TICKS.load(Ordering::Relaxed);
-            let retry_at = USB_FS_RETRY_AT.load(Ordering::Acquire);
-            if now.wrapping_sub(retry_at) as i32 >= 0 {
-                if !try_init_usb_fs_host(&device.RCC, &mut core.NVIC) {
-                    USB_FS_RETRY_AT.store(
-                        now.wrapping_add(USB_FS_RETRY_INTERVAL_MS),
-                        Ordering::Release,
-                    );
-                }
-            }
-        }
-
-        if USB_FS_READY.load(Ordering::Acquire)
-            && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
-        {
-            unsafe { tusb::tuh_task_ext(0, false); }
-        } else {
-            USB_HOST_TASK_PENDING.store(false, Ordering::Release);
-        }
-
-        let now = TICKS.load(Ordering::Relaxed);
-        if now.wrapping_sub(keyboard_wait_started) >= KEYBOARD_DETECT_TIMEOUT_MS {
-            keyboard::set_boot_timeout();
-            break;
-        }
-        cortex_m::asm::wfi();
-    }
-
-    let boot_mode = keyboard::boot_selection();
-    let cdc_enabled = boot_mode == keyboard::BOOT_SELECTION_CDC;
-    let emulator_enabled = boot_mode == keyboard::BOOT_SELECTION_NORMAL;
+    // Temporarily default to CDC mode. Boot-keyboard selection (F10) is
+    // bypassed until the USB host selection path is restored.
+    let boot_mode = keyboard::BOOT_SELECTION_CDC;
+    let cdc_enabled = true;
+    let emulator_enabled = false;
 
     if emulator_enabled {
         unsafe {
