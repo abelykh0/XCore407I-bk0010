@@ -47,20 +47,45 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
         }
         FsAccessError::Mount(code) => {
             write_status(b"\r\nLittleFS mount failed; error code 0x");
-            let mut digits = [b'0'; 8];
-            const HEX: &[u8; 16] = b"0123456789ABCDEF";
-            let value = code as u32;
-            for (index, digit) in digits.iter_mut().enumerate() {
-                let shift = (7 - index) * 4;
-                *digit = HEX[((value >> shift) & 0x0F) as usize];
+            write_hex_u32(code as u32);
+            write_status(b"\r\n");
+            let (operation, location, detail) = crate::dhara_fs::storage_io_diagnostic();
+            if operation == 0 {
+                write_status(b"No Dhara Storage callback failure was recorded.\r\n");
+            } else {
+                let name: &[u8] = match operation {
+                    1 => b"read",
+                    2 => b"write",
+                    3 => b"sync",
+                    4 => b"trim",
+                    5 => b"erase-sync",
+                    _ => b"unknown",
+                };
+                write_status(b"Dhara ");
+                write_status(name);
+                write_status(b" failed at logical sector 0x");
+                write_hex_u32(location);
+                write_status(b", error 0x");
+                write_hex_u32(detail);
+                write_status(b"\r\n");
             }
-            write_status(&digits);
-            write_status(b". NAND was not modified.\r\n");
+            write_status(b"NAND was not modified by this diagnostic.\r\n");
         }
         FsAccessError::Operation => {
             write_status(b"\r\nStorage service operation failed. NAND was not modified.\r\n");
         }
     }
+}
+
+
+fn write_hex_u32(value: u32) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut digits = [b'0'; 8];
+    for (index, digit) in digits.iter_mut().enumerate() {
+        let shift = (7 - index) * 4;
+        *digit = HEX[((value >> shift) & 0x0F) as usize];
+    }
+    write_status(&digits);
 }
 
 pub(crate) fn write_status(bytes: &[u8]) {
