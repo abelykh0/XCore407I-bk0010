@@ -273,7 +273,7 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_decimal(dhara_nand[7] as usize);
     write_status(b" last_location=0x");
     write_hex_u32(dhara_nand[8]);
-    write_status(b"\\r\\n");
+    write_status(b"\r\n");
     let (operation, location, storage_error) = crate::dhara_fs::storage_io_diagnostic();
     write_status(b"Dhara operation: 0x");
     write_hex_u32(operation);
