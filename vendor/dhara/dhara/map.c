@@ -541,6 +541,10 @@ int dhara_map_trim(struct dhara_map *m, dhara_sector_t s, dhara_error_t *err)
 int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 {
 	unsigned int steps = 0;
+	/* The journal size is an upper bound on queued user pages. Unlike a
+	 * fixed small constant, this lets a healthy sync drain the current
+	 * backlog while keeping the loop bounded by the physical journal. */
+	const dhara_page_t max_steps = dhara_journal_size(&m->journal) + 1;
 
 	/* Capture queue position and work performed if the bounded sync fails. */
 	xcore_dhara_sync_diag[0] = m->journal.tail;
@@ -553,7 +557,7 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 	xcore_dhara_sync_diag[7] = 0; /* recovery attempts */
 
 	while (!dhara_journal_is_clean(&m->journal)) {
-		if (++steps > XCORE_DHARA_MAX_MAINTENANCE_STEPS) {
+		if (++steps > max_steps) {
 			record_limit_failure(1, steps, 0, m);
 			dhara_set_error(err, DHARA_E_TOO_BAD);
 			return -1;
