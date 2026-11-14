@@ -454,6 +454,22 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_hex_u32(dhara_limit[10]);
     write_status(b" journal_pages=");
     write_decimal(dhara_limit[11] as usize);
+    write_status(b" sync_start_tail=0x");
+    write_hex_u32(dhara_limit[12]);
+    write_status(b" sync_start_tail_sync=0x");
+    write_hex_u32(dhara_limit[13]);
+    write_status(b" sync_start_head=0x");
+    write_hex_u32(dhara_limit[14]);
+    write_status(b" sync_last_page=0x");
+    write_hex_u32(dhara_limit[15]);
+    write_status(b" sync_processed=");
+    write_decimal(dhara_limit[16] as usize);
+    write_status(b" sync_padding=");
+    write_decimal(dhara_limit[17] as usize);
+    write_status(b" sync_gc_failures=");
+    write_decimal(dhara_limit[18] as usize);
+    write_status(b" sync_recoveries=");
+    write_decimal(dhara_limit[19] as usize);
     write_status(b"\r\n");
 
     let (nand_stage, detail, page, stored_ecc, calculated_ecc) =
