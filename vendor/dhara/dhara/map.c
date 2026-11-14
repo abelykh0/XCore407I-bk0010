@@ -18,6 +18,12 @@
 #include "dhara/bytes.h"
 #include "dhara/map.h"
 
+/* Hard limits prevent corrupted NAND/journal state from trapping the MCU
+ * in recovery or garbage-collection loops forever. */
+#define XCORE_DHARA_MAX_RECOVERY_STEPS 65536U
+#define XCORE_DHARA_MAX_WRITE_RETRIES 1024U
+#define XCORE_DHARA_MAX_MAINTENANCE_STEPS 65536U
+
 #define DHARA_RADIX_DEPTH	(sizeof(dhara_sector_t) << 3)
 
 static inline dhara_sector_t d_bit(int depth)
@@ -272,7 +278,14 @@ static int try_recover(struct dhara_map *m, dhara_error_t cause,
 		return -1;
 	}
 
+	unsigned int steps = 0;
+
 	while (dhara_journal_in_recovery(&m->journal)) {
+		if (++steps > XCORE_DHARA_MAX_RECOVERY_STEPS) {
+			dhara_set_error(err, DHARA_E_TOO_BAD);
+			return -1;
+		}
+
 		dhara_page_t p = dhara_journal_next_recoverable(&m->journal);
 		dhara_error_t my_err;
 		int ret;
@@ -343,7 +356,9 @@ static int prepare_write(struct dhara_map *m, dhara_sector_t dst,
 int dhara_map_write(struct dhara_map *m, dhara_sector_t dst,
 		    const uint8_t *data, dhara_error_t *err)
 {
-	for (;;) {
+	unsigned int steps;
+
+	for (steps = 0; steps < XCORE_DHARA_MAX_WRITE_RETRIES; steps++) {
 		uint8_t meta[DHARA_META_SIZE];
 		dhara_error_t my_err;
 		const dhara_sector_t old_count = m->count;
@@ -360,13 +375,16 @@ int dhara_map_write(struct dhara_map *m, dhara_sector_t dst,
 			return -1;
 	}
 
-	return 0;
+	dhara_set_error(err, DHARA_E_TOO_BAD);
+	return -1;
 }
 
 int dhara_map_copy_page(struct dhara_map *m, dhara_page_t src,
 			dhara_sector_t dst, dhara_error_t *err)
 {
-	for (;;) {
+	unsigned int steps;
+
+	for (steps = 0; steps < XCORE_DHARA_MAX_WRITE_RETRIES; steps++) {
 		uint8_t meta[DHARA_META_SIZE];
 		dhara_error_t my_err;
 		const dhara_sector_t old_count = m->count;
@@ -383,7 +401,8 @@ int dhara_map_copy_page(struct dhara_map *m, dhara_page_t src,
 			return -1;
 	}
 
-	return 0;
+	dhara_set_error(err, DHARA_E_TOO_BAD);
+	return -1;
 }
 
 int dhara_map_copy_sector(struct dhara_map *m, dhara_sector_t src,
@@ -461,7 +480,9 @@ static int try_delete(struct dhara_map *m, dhara_sector_t s,
 
 int dhara_map_trim(struct dhara_map *m, dhara_sector_t s, dhara_error_t *err)
 {
-	for (;;) {
+	unsigned int steps;
+
+	for (steps = 0; steps < XCORE_DHARA_MAX_WRITE_RETRIES; steps++) {
 		dhara_error_t my_err;
 
 		if (auto_gc(m, err) < 0)
@@ -474,12 +495,19 @@ int dhara_map_trim(struct dhara_map *m, dhara_sector_t s, dhara_error_t *err)
 			return -1;
 	}
 
-	return 0;
+	dhara_set_error(err, DHARA_E_TOO_BAD);
+	return -1;
 }
 
 int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 {
+	unsigned int steps = 0;
+
 	while (!dhara_journal_is_clean(&m->journal)) {
+		if (++steps > XCORE_DHARA_MAX_MAINTENANCE_STEPS) {
+			dhara_set_error(err, DHARA_E_TOO_BAD);
+			return -1;
+		}
 		dhara_page_t p = dhara_journal_peek(&m->journal);
 		dhara_error_t my_err;
 		int ret;
@@ -501,10 +529,16 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 
 int dhara_map_gc(struct dhara_map *m, dhara_error_t *err)
 {
+	unsigned int steps = 0;
+
 	if (!m->count)
 		return 0;
 
 	for (;;) {
+		if (++steps > XCORE_DHARA_MAX_MAINTENANCE_STEPS) {
+			dhara_set_error(err, DHARA_E_TOO_BAD);
+			return -1;
+		}
 		dhara_page_t tail = dhara_journal_peek(&m->journal);
 		dhara_error_t my_err;
 
