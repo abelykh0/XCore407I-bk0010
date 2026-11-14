@@ -328,9 +328,9 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_status(b" mismatch_index=");
     write_decimal(alloc_stats[37] as usize);
     write_status(b" expected=0x");
-    write_hex(alloc_stats[38]);
+    write_hex_u32(alloc_stats[38]);
     write_status(b" actual=0x");
-    write_hex(alloc_stats[39]);
+    write_hex_u32(alloc_stats[39]);
     write_status(b" prog_errors=");
     write_decimal(alloc_stats[40] as usize);
     write_status(b"\r\nRecent LittleFS allocator events (oldest first):\\r\\n");
