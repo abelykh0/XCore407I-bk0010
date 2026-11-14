@@ -227,7 +227,11 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_status(b"Free-space traversal skipped here to avoid an additional full NAND scan.\r\n");
     let alloc = crate::dhara_fs::littlefs_alloc_diagnostic();
     let (rb_calls, rb_iterations, rb_timeouts) = crate::nand_fs::nand_rb_wait_diagnostic();
-    write_status(b"LittleFS allocator at NOSPC: captured=");
+    if alloc[7] != 0 {
+        write_status(b"LittleFS allocator NOSPC snapshot: captured=");
+    } else {
+        write_status(b"LittleFS allocator: no NOSPC snapshot; captured=");
+    }
     write_decimal(alloc[7] as usize);
     write_status(b" block_count=");
     write_decimal(alloc[0] as usize);
@@ -338,6 +342,23 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     }
     write_status(b"\r\n");
     let (operation, location, storage_error) = crate::dhara_fs::storage_io_diagnostic();
+    let callbacks = crate::dhara_fs::storage_callback_diagnostic();
+    write_status(b"LittleFS Storage callbacks: read=");
+    write_decimal(callbacks[0] as usize);
+    write_status(b" write=");
+    write_decimal(callbacks[1] as usize);
+    write_status(b" erase=");
+    write_decimal(callbacks[2] as usize);
+    write_status(b" sync=");
+    write_decimal(callbacks[3] as usize);
+    write_status(b" last_op=");
+    write_decimal(callbacks[4] as usize);
+    write_status(b" offset=0x");
+    write_hex_u32(callbacks[5]);
+    write_status(b" length=");
+    write_decimal(callbacks[6] as usize);
+    write_status(b"\r\n");
+
     write_status(b"Dhara operation: 0x");
     write_hex_u32(operation);
     write_status(match operation {
@@ -371,7 +392,23 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_hex_u32(stored_ecc);
     write_status(b" calculated ECC: 0x");
     write_hex_u32(calculated_ecc);
-    write_status(b"\r\nTest file retained for inspection.\r\n> ");
+    let (device_stage, device_location, device_status) =
+        crate::nand_fs::nand_device_diagnostic();
+    write_status(b"Raw NAND failure: stage=");
+    write_decimal(device_stage as usize);
+    write_status(b" location=0x");
+    write_hex_u32(device_location);
+    write_status(b" status=0x");
+    write_hex_u32(device_status);
+    write_status(match device_stage {
+        1 => b" (page-read ready/busy timeout)\r\n" as &[u8],
+        2 => b" (block-erase ready/busy timeout)\r\n",
+        3 => b" (block-erase status failure)\r\n",
+        4 => b" (page-program ready/busy timeout)\r\n",
+        5 => b" (page-program status failure)\r\n",
+        _ => b" (no raw NAND command failure recorded)\r\n",
+    });
+    write_status(b"Test file retained for inspection.\r\n> ");
 }
 
 fn report_storage_phase_counters(stage: &[u8]) {
