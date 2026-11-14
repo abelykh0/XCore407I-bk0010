@@ -228,7 +228,7 @@ pub fn service(
             WAS_CONNECTED = false;
             STORAGE_ERROR_REPORTED = false;
             cdc_zmodem::cancel(zmodem, fs);
-            return;
+            return false;
         }
         WAS_CONNECTED = true;
 
@@ -236,7 +236,7 @@ pub fn service(
             if let Some(fs) = fs {
                 cdc_zmodem::service(fs, zmodem, now_ms);
             }
-            return;
+            return false;
         }
 
         let mut byte = 0u8;
