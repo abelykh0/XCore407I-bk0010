@@ -23,6 +23,9 @@ static volatile uint32_t xcore_lfs_trace_count;
 static volatile uint32_t xcore_lfs_dir_alloc_calls;
 static volatile uint32_t xcore_lfs_ctz_extend_calls;
 static volatile uint32_t xcore_lfs_file_relocate_calls;
+static volatile uint32_t xcore_lfs_alloc_caller;
+static volatile uint32_t xcore_lfs_alloc_caller_counts[5];
+static volatile uint32_t xcore_lfs_alloc_last_caller;
 static volatile uint32_t xcore_lfs_last_ctz_head;
 static volatile uint32_t xcore_lfs_last_ctz_size;
 static volatile uint32_t xcore_lfs_last_relocate_block;
@@ -75,6 +78,9 @@ void xcore_lfs_alloc_diag_clear(void) {
     xcore_lfs_dir_alloc_calls = 0;
     xcore_lfs_ctz_extend_calls = 0;
     xcore_lfs_file_relocate_calls = 0;
+    xcore_lfs_alloc_caller = 0;
+    xcore_lfs_alloc_last_caller = 0;
+    for (unsigned i = 0; i < 5; i++) xcore_lfs_alloc_caller_counts[i] = 0;
     xcore_lfs_last_ctz_head = 0;
     xcore_lfs_last_ctz_size = 0;
     xcore_lfs_last_relocate_block = 0;
@@ -121,6 +127,8 @@ void xcore_lfs_alloc_diag_read(uint32_t *out) {
     out[147] = xcore_lfs_last_compact_pair1;
     out[148] = xcore_lfs_last_compact_rev;
     out[149] = xcore_lfs_last_compact_off;
+    for (unsigned i = 0; i < 5; i++) out[150 + i] = xcore_lfs_alloc_caller_counts[i];
+    out[155] = xcore_lfs_alloc_last_caller;
 }
 
 static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
@@ -793,6 +801,9 @@ static int lfs_alloc_scan(lfs_t *lfs) {
 #ifndef LFS_READONLY
 static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
     xcore_lfs_alloc_calls++;
+    xcore_lfs_alloc_last_caller = xcore_lfs_alloc_caller;
+    xcore_lfs_alloc_caller_counts[xcore_lfs_alloc_caller <= 4U
+            ? xcore_lfs_alloc_caller : 0U]++;
     while (true) {
         // scan our lookahead buffer for free blocks
         while (lfs->lookahead.next < lfs->lookahead.size) {
@@ -1939,6 +1950,7 @@ static int lfs_dir_alloc(lfs_t *lfs, lfs_mdir_t *dir) {
     xcore_lfs_dir_alloc_calls++;
     // allocate pair of dir blocks (backwards, so we write block 1 first)
     for (int i = 0; i < 2; i++) {
+        xcore_lfs_alloc_caller = 1;
         int err = lfs_alloc(lfs, &dir->pair[(i+1)%2]);
         if (err) {
             return err;
@@ -2257,6 +2269,7 @@ relocate:
         }
 
         // relocate half of pair
+        xcore_lfs_alloc_caller = 2;
         int err = lfs_alloc(lfs, &dir->pair[1]);
         if (err && (err != LFS_ERR_NOSPC || !tired)) {
             return err;
@@ -3075,6 +3088,8 @@ static int lfs_ctz_extend(lfs_t *lfs,
         xcore_lfs_ctz_extend_calls++;
         xcore_lfs_last_ctz_head = head;
         xcore_lfs_last_ctz_size = size;
+        xcore_lfs_alloc_caller = 3;
+        xcore_lfs_alloc_caller = 4;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
