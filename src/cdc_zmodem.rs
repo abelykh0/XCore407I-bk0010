@@ -125,8 +125,9 @@ fn create_temp_file(fs: &Filesystem<'_, ActiveStorage>) -> bool {
     let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) else {
         return false;
     };
-    // Never delete an existing hidden file: it may belong to the user.
-    if fs.exists(path) {
+    // This path is reserved exclusively for an interrupted ZMODEM upload.
+    // Remove a stale partial file before starting the next transfer.
+    if fs.exists(path) && fs.remove(path).is_err() {
         return false;
     }
     create_new_file(fs, TEMP_PATH)
