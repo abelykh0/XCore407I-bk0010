@@ -56,6 +56,44 @@ static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_ERROR: AtomicU32 = AtomicU32::new(0);
 
+// Counts Dhara-to-NAND callbacks during one storage operation. These counters
+// distinguish ordinary reads from bad-block scans and recovery/GC activity.
+static DHARA_NAND_COUNTS: [AtomicU32; 7] = [
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
+    AtomicU32::new(0),
+];
+static DHARA_NAND_LAST_OPERATION: AtomicU32 = AtomicU32::new(0);
+static DHARA_NAND_LAST_LOCATION: AtomicU32 = AtomicU32::new(0);
+
+fn record_dhara_nand_call(operation: usize, location: u32) {
+    DHARA_NAND_COUNTS[operation - 1].fetch_add(1, Ordering::Relaxed);
+    DHARA_NAND_LAST_LOCATION.store(location, Ordering::Relaxed);
+    DHARA_NAND_LAST_OPERATION.store(operation as u32, Ordering::Release);
+}
+
+pub(crate) fn clear_dhara_nand_diagnostic() {
+    for count in &DHARA_NAND_COUNTS {
+        count.store(0, Ordering::Release);
+    }
+    DHARA_NAND_LAST_OPERATION.store(0, Ordering::Release);
+    DHARA_NAND_LAST_LOCATION.store(0, Ordering::Release);
+}
+
+pub(crate) fn dhara_nand_diagnostic() -> [u32; 9] {
+    [
+        DHARA_NAND_COUNTS[0].load(Ordering::Acquire),
+        DHARA_NAND_COUNTS[1].load(Ordering::Acquire),
+        DHARA_NAND_COUNTS[2].load(Ordering::Acquire),
+        DHARA_NAND_COUNTS[3].load(Ordering::Acquire),
+        DHARA_NAND_COUNTS[4].load(Ordering::Acquire),
+        DHARA_NAND_COUNTS[5].load(Ordering::Acquire),
+        DHARA_NAND_COUNTS[6].load(Ordering::Acquire),
+        DHARA_NAND_LAST_OPERATION.load(Ordering::Acquire),
+        DHARA_NAND_LAST_LOCATION.load(Ordering::Acquire),
+    ]
+];
+
 fn record_storage_io_error(operation: u32, location: u32, error: i32) {
     if STORAGE_IO_OPERATION.compare_exchange(0, operation, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
         STORAGE_IO_LOCATION.store(location, Ordering::Release);
@@ -74,6 +112,7 @@ pub(crate) fn littlefs_alloc_diagnostic() -> [u32; 10] {
 }
 
 pub(crate) fn clear_storage_io_diagnostic() {
+    clear_dhara_nand_diagnostic();
     STORAGE_IO_OPERATION.store(0, Ordering::Release);
     STORAGE_IO_LOCATION.store(0, Ordering::Release);
     STORAGE_IO_ERROR.store(0, Ordering::Release);
@@ -151,6 +190,7 @@ unsafe fn set_error(error: *mut i32, value: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> c_int {
+    record_dhara_nand_call(1, block);
     if !valid_nand(nand) {
         return 1;
     }
@@ -163,6 +203,7 @@ pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> c_int
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_mark_bad(nand: *const DharaNand, block: u32) {
+    record_dhara_nand_call(2, block);
     if valid_nand(nand) {
         let _ = mark_block_bad(block);
     }
@@ -174,6 +215,7 @@ pub extern "C" fn dhara_nand_erase(
     block: u32,
     error: *mut i32,
 ) -> c_int {
+    record_dhara_nand_call(3, block);
     if !valid_nand(nand) || block >= PHYSICAL_BLOCKS {
         unsafe { set_error(error, DHARA_E_BAD_BLOCK); }
         return -1;
@@ -194,6 +236,7 @@ pub extern "C" fn dhara_nand_prog(
     data: *const u8,
     error: *mut i32,
 ) -> c_int {
+    record_dhara_nand_call(4, page);
     if !valid_nand(nand)
         || page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
         || data.is_null()
@@ -213,6 +256,7 @@ pub extern "C" fn dhara_nand_prog(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> c_int {
+    record_dhara_nand_call(5, page);
     if !valid_nand(nand) || page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK {
         return 0;
     }
@@ -232,6 +276,7 @@ pub extern "C" fn dhara_nand_read(
     data: *mut u8,
     error: *mut i32,
 ) -> c_int {
+    record_dhara_nand_call(6, page);
     if !valid_nand(nand)
         || page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
         || offset > PAGE_SIZE
@@ -263,6 +308,7 @@ pub extern "C" fn dhara_nand_copy(
     destination: u32,
     error: *mut i32,
 ) -> c_int {
+    record_dhara_nand_call(7, source);
     if !valid_nand(nand)
         || source >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
         || destination >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
