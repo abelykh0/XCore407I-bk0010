@@ -18,6 +18,41 @@ const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nA
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n> ";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
+/// Print the exact non-destructive storage initialization or mount failure.
+pub(crate) fn report_storage_error(error: crate::nand_fs::FsAccessError) {
+    use crate::nand_fs::{FsAccessError, InitError};
+
+    match error {
+        FsAccessError::Init(kind) => {
+            let message: &[u8] = match kind {
+                InitError::Timeout => b"\r\nStorage init failed: NAND timeout. NAND was not modified.\r\n",
+                InitError::WrongDevice => b"\r\nStorage init failed: unexpected NAND device. NAND was not modified.\r\n",
+                InitError::MarkerRead => b"\r\nStorage init failed: NAND bad-block marker read error. NAND was not modified.\r\n",
+                InitError::MountFailed => b"\r\nStorage init failed: LittleFS mount failed. NAND was not modified.\r\n",
+                InitError::DharaNoJournal => b"\r\nStorage init failed: Dhara journal/volume marker missing. NAND was not modified.\r\n",
+                InitError::DharaCapacity => b"\r\nStorage init failed: Dhara capacity too small. NAND was not modified.\r\n",
+                InitError::ProvisionFailed => b"\r\nStorage init failed: Dhara provisioning error. NAND was not modified.\r\n",
+            };
+            write_status(message);
+        }
+        FsAccessError::Mount(code) => {
+            write_status(b"\r\nLittleFS mount failed; error code 0x");
+            let mut digits = [b'0'; 8];
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            let value = code as u32;
+            for (index, digit) in digits.iter_mut().enumerate() {
+                let shift = (7 - index) * 4;
+                *digit = HEX[((value >> shift) & 0x0F) as usize];
+            }
+            write_status(&digits);
+            write_status(b". NAND was not modified.\r\n");
+        }
+        FsAccessError::Operation => {
+            write_status(b"\r\nStorage service operation failed. NAND was not modified.\r\n");
+        }
+    }
+}
+
 pub(crate) fn write_status(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
