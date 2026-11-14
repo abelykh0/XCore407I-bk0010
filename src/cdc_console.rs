@@ -1201,16 +1201,27 @@ pub fn service(
                         write_hex_u32(0x0000_2391);
                         write_status(b"\\r\\n");
                         match crate::nand_fs::ecc_standalone_read(0x0000_2391) {
-                            Some((stored, calculated)) => {
+                            Some((stored, chunks)) => {
                                 for index in 0..4 {
+                                    let chunk = chunks[index];
                                     write_status(b"chunk ");
                                     write_decimal(index);
                                     write_status(b": stored=0x");
                                     write_hex_u32(stored[index]);
                                     write_status(b" calculated=0x");
-                                    write_hex_u32(calculated[index]);
+                                    write_hex_u32(chunk.calculated);
                                     write_status(b" syndrome=0x");
-                                    write_hex_u32(stored[index] ^ calculated[index]);
+                                    write_hex_u32(stored[index] ^ chunk.calculated);
+                                    write_status(b" data=");
+                                    write_hex_u32(chunk.first_byte as u32);
+                                    write_status(b"/");
+                                    write_hex_u32(chunk.last_byte as u32);
+                                    write_status(b" nonFF=");
+                                    write_decimal(chunk.non_ff_bytes as usize);
+                                    write_status(b" PCR=");
+                                    write_hex_u32(chunk.pcr_enable);
+                                    write_status(b"/");
+                                    write_hex_u32(chunk.pcr_capture);
                                     write_status(b"\\r\\n");
                                 }
                             }
