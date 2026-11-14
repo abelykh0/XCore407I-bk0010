@@ -258,6 +258,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     address((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
+        record_nand_read_failure(1, page);
         return false;
     }
 
@@ -272,6 +273,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
     if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut stored) {
+        record_nand_read_failure(2, page);
         return false;
     }
 
@@ -280,6 +282,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return true;
     }
     if tag != ECC_TAG {
+        record_nand_read_failure(3, u32::from(tag[0]) | (u32::from(tag[1]) << 8));
         return false;
     }
 
@@ -298,6 +301,8 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             0,
         ]);
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
+            let syndrome = stored_ecc ^ calculated_ecc;
+            record_nand_read_failure(4, ((chunk_index as u32) << 24) | (syndrome & 0x00FF_FFFF));
             return false;
         }
     }
