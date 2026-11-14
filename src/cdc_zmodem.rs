@@ -17,7 +17,7 @@ use crate::{camera, nand_fs::ActiveStorage, tusb};
 const NAME_CAPACITY: usize = 64;
 const WIRE_CAPACITY: usize = 64;
 const TRANSFER_TIMEOUT_MS: u32 = 60_000;
-const TEMP_PATH: &[u8] = b"/.zmodem-upload\\0";
+const TEMP_PATH: &[u8] = b"/.zmodem-upload\0";
 
 pub struct State {
     receiver: Option<NonNull<Receiver>>,
