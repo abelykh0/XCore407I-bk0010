@@ -128,6 +128,24 @@ struct RowBuffers([u8; WIDTH * 2]);
 #[unsafe(link_section = ".ccmram.rows")]
 static mut ROW_BUFFERS: RowBuffers = RowBuffers([0; WIDTH * 2]);
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
+// CDC mode uses the PC CONNECT renderer and never reads the demo canvas.
+ // Reuse its CCM tail for the heapless ZMODEM receiver instead of placing the
+ // receiver's multi-kilobyte buffers on the main stack.
+static CDC_RECEIVER_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn claim_cdc_receiver_storage() -> Option<(*mut u8, usize)> {
+    CDC_RECEIVER_STORAGE_IN_USE
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .ok()?;
+    let ptr = core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>();
+    Some((ptr, CANVAS_TAIL_BYTES))
+}
+
+pub(crate) fn release_cdc_receiver_storage() {
+    CDC_RECEIVER_STORAGE_IN_USE.store(false, Ordering::Release);
+}
+
+
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);
 
 fn write_canvas(index: usize, value: u8) {
