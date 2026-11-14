@@ -253,6 +253,13 @@ fn main() -> ! {
                         Some(fs),
                         &mut zmodem_state,
                         TICKS.load(Ordering::Relaxed),
+                        &mut || {
+                            unsafe {
+                                let _ = tusb::tud_task_ext(0, false);
+                                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                            }
+                            while prepare_next_video_batch(&mut video_renderer) {}
+                        },
                     );
                     while prepare_next_video_batch(&mut video_renderer) {}
                 }
@@ -270,6 +277,13 @@ fn main() -> ! {
                     None,
                     &mut zmodem_state,
                     TICKS.load(Ordering::Relaxed),
+                    &mut || {
+                        unsafe {
+                            let _ = tusb::tud_task_ext(0, false);
+                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                        }
+                        while prepare_next_video_batch(&mut video_renderer) {}
+                    },
                 );
                 xcore407i_blinker::cdc_console::report_storage_error(error);
                 while prepare_next_video_batch(&mut video_renderer) {}
