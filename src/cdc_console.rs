@@ -195,9 +195,9 @@ pub fn report_format_complete(report: crate::nand_fs::FormatReport) {
     write_status(b"\r\nNAND format complete; new LittleFS volume verified.\r\n");
     write_status(b"Physical blocks: ");
     write_decimal(report.physical_blocks as usize);
-    write_status(b"  Good: ");
+    write_status(b"  Good physical: ");
     write_decimal(report.good_blocks as usize);
-    write_status(b"  Bad/skipped: ");
+    write_status(b"  Bad (factory/retired): ");
     write_decimal(report.bad_blocks as usize);
     write_status(b"\r\nNAND geometry: ");
     write_decimal(report.page_size_bytes as usize);
