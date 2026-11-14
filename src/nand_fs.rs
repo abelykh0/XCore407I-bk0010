@@ -502,6 +502,53 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     true
 }
 
+/// Read one physical NAND page directly and compare FSMC ECC with its OOB
+/// values. This bypasses Dhara and LittleFS and never changes NAND contents.
+pub(crate) fn ecc_standalone_read(page: u32) -> Option<([u32; 4], [u32; 4])> {
+    let mut data = [0u8; PAGE_SIZE];
+
+    // Keep ECC enabled before READ0 and through the NAND read cycle.
+    let _ = ecc_begin_chunk();
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb() {
+        let _ = ecc_end_chunk();
+        return None;
+    }
+
+    let mut calculated = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        if index != 0 {
+            let _ = ecc_begin_chunk();
+        }
+        for byte in chunk {
+            *byte = read_data();
+        }
+        calculated[index] = ecc_end_chunk().0 & 0x00FF_FFFF;
+    }
+
+    // Read the four stored ECC words directly from the spare area.
+    let mut spare_ecc = [0u8; ECC_OOB_BYTES];
+    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut spare_ecc) {
+        return None;
+    }
+    let mut stored = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+        let offset = index * ECC_BYTES_PER_CHUNK;
+        stored[index] = u32::from_le_bytes([
+            spare_ecc[offset],
+            spare_ecc[offset + 1],
+            spare_ecc[offset + 2],
+            0,
+        ]);
+    }
+    Some((stored, calculated))
+}
+
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE {
         return false;
