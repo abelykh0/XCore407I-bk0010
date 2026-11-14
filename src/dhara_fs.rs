@@ -427,6 +427,11 @@ impl DharaStorage {
         self.factory_bad_blocks
     }
 
+    /// Total factory-marked and newly retired physical blocks.
+    pub fn bad_block_count(&self) -> u16 {
+        self.factory_bad_blocks
+    }
+
     pub fn logical_capacity(&self) -> usize {
         LITTLEFS_BLOCK_COUNT * ERASE_BLOCK_SIZE
     }
