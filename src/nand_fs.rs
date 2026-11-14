@@ -502,9 +502,22 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     true
 }
 
+/// Per-chunk evidence captured during the direct, read-only ECC diagnostic.
+#[derive(Clone, Copy)]
+pub(crate) struct EccStandaloneChunk {
+    pub calculated: u32,
+    pub pcr_enable: u32,
+    pub pcr_capture: u32,
+    pub first_byte: u8,
+    pub last_byte: u8,
+    pub non_ff_bytes: u16,
+}
+
 /// Read one physical NAND page directly and compare FSMC ECC with its OOB
 /// values. This bypasses Dhara and LittleFS and never changes NAND contents.
-pub(crate) fn ecc_standalone_read(page: u32) -> Option<([u32; 4], [u32; 4])> {
+pub(crate) fn ecc_standalone_read(
+    page: u32,
+) -> Option<([u32; 4], [EccStandaloneChunk; FSMC_ECC_CHUNKS_PER_PAGE])> {
     let mut data = [0u8; PAGE_SIZE];
 
     // Complete NAND command/address/read-cycle setup before enabling ECC.
@@ -520,11 +533,23 @@ pub(crate) fn ecc_standalone_read(page: u32) -> Option<([u32; 4], [u32; 4])> {
         return None;
     }
 
-    let mut calculated = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    let mut chunks = [EccStandaloneChunk {
+        calculated: 0,
+        pcr_enable: 0,
+        pcr_capture: 0,
+        first_byte: 0,
+        last_byte: 0,
+        non_ff_bytes: 0,
+    }; FSMC_ECC_CHUNKS_PER_PAGE];
+
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let _ = ecc_begin_chunk();
-        for byte in chunk {
+        let pcr_enable = ecc_begin_chunk();
+        let mut non_ff_bytes = 0u16;
+        for byte in chunk.iter_mut() {
             *byte = read_data();
+            if *byte != 0xFF {
+                non_ff_bytes += 1;
+            }
         }
         // Follow the reference sequence used by the STM32 NAND ECC example:
         // drain the FSMC FIFO before reading ECCR2, then disable ECC to reset
@@ -533,7 +558,15 @@ pub(crate) fn ecc_standalone_read(page: u32) -> Option<([u32; 4], [u32; 4])> {
             let _ = ecc_end_chunk();
             return None;
         }
-        calculated[index] = ecc_end_chunk().0 & 0x00FF_FFFF;
+        let (calculated, pcr_capture) = ecc_end_chunk();
+        chunks[index] = EccStandaloneChunk {
+            calculated: calculated & 0x00FF_FFFF,
+            pcr_enable,
+            pcr_capture,
+            first_byte: chunk[0],
+            last_byte: chunk[chunk.len() - 1],
+            non_ff_bytes,
+        };
     }
 
     // Read the four stored ECC words directly from the spare area.
@@ -551,7 +584,7 @@ pub(crate) fn ecc_standalone_read(page: u32) -> Option<([u32; 4], [u32; 4])> {
             0,
         ]);
     }
-    Some((stored, calculated))
+    Some((stored, chunks))
 }
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
