@@ -497,23 +497,41 @@ fn append_init_error(out: &mut [u8; 256], len: &mut usize, error: InitError) {
 }
 
 
+/// Summary of a completed NAND/Dhara/LittleFS provisioning operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormatReport {
+    pub physical_blocks: u32,
+    pub bad_blocks: u16,
+    pub good_blocks: u32,
+    pub littlefs_blocks: u32,
+    pub littlefs_capacity_bytes: u32,
+}
+
 /// Initialize an unprovisioned NAND after explicit user confirmation.
-/// This erases every non-factory-bad physical block, creates a new Dhara
-/// journal and marker, then formats and verifies an empty LittleFS volume.
+/// This erases every non-bad physical block, creates a new Dhara journal,
+/// formats LittleFS, and verifies that the new filesystem can be mounted.
 pub fn initialize_nand_volume() -> Result<(), InitError> {
-    initialize_nand_volume_with_progress(|_, _| {})
+    initialize_nand_volume_with_progress(|_, _| {}).map(|_| ())
 }
 
 /// CDC variant: invoke progress after each physical block, allowing the
 /// caller to service USB/video between NAND erase operations.
 pub fn initialize_nand_volume_with_progress(
     progress: impl FnMut(u32, u32),
-) -> Result<(), InitError> {
+) -> Result<FormatReport, InitError> {
     let mut storage = ActiveStorage::initialize_new_volume_with_progress(progress)?;
     Filesystem::<ActiveStorage>::format(&mut storage)
         .map_err(|_| InitError::MountFailed)?;
     Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
-        .map_err(|_| InitError::MountFailed)
+        .map_err(|_| InitError::MountFailed)?;
+    let bad_blocks = storage.bad_block_count();
+    Ok(FormatReport {
+        physical_blocks: PHYSICAL_BLOCKS,
+        bad_blocks,
+        good_blocks: PHYSICAL_BLOCKS - bad_blocks as u32,
+        littlefs_blocks: 700,
+        littlefs_capacity_bytes: storage.logical_capacity() as u32,
+    })
 }
 
 /// Format only the LittleFS logical volume on an already-valid Dhara journal.
