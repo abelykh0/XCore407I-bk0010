@@ -196,13 +196,13 @@ fn report_storage_space(fs: &Filesystem<'_, ActiveStorage>, stage: &[u8]) {
     write_status(stage);
     write_status(b" LittleFS free space: ");
     match fs.available_space() {
-        Some(bytes) => {
+        Ok(bytes) => {
             write_decimal(bytes);
             write_status(b" bytes (");
             write_decimal(bytes / crate::nand_fs::ERASE_BLOCK_SIZE);
             write_status(b" whole blocks)");
         }
-        None => write_status(b"unavailable"),
+        Err(error) => { write_status(b"unavailable (LittleFS error 0x"); write_hex_u32(error.code() as u32); write_status(b")"); },
     }
     write_status(b"; total: ");
     write_decimal(fs.total_space());
