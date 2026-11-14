@@ -225,6 +225,24 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_status(b"\r\n");
 
     report_storage_space(fs, b"Allocator snapshot at failure:");
+    let alloc = crate::dhara_fs::littlefs_alloc_diagnostic();
+    write_status(b"LittleFS allocator at NOSPC: captured=");
+    write_decimal(alloc[7] as usize);
+    write_status(b" block_count=");
+    write_decimal(alloc[0] as usize);
+    write_status(b" lookahead_start=");
+    write_decimal(alloc[1] as usize);
+    write_status(b" next=");
+    write_decimal(alloc[2] as usize);
+    write_status(b" size=");
+    write_decimal(alloc[3] as usize);
+    write_status(b" checkpoint=");
+    write_decimal(alloc[4] as usize);
+    write_status(b" used_bits=");
+    write_decimal(alloc[5] as usize);
+    write_status(b" lookahead_bytes=");
+    write_decimal(alloc[6] as usize);
+    write_status(b"\\r\\n");
     let (operation, location, storage_error) = crate::dhara_fs::storage_io_diagnostic();
     write_status(b"Dhara operation: 0x");
     write_hex_u32(operation);
@@ -283,6 +301,7 @@ fn storage_test(
     }
 
     crate::dhara_fs::clear_storage_io_diagnostic();
+    crate::dhara_fs::clear_littlefs_alloc_diagnostic();
     crate::nand_fs::clear_nand_read_diagnostic();
     write_status(b"WRITE: opening test file...\r\n");
     service_usb_only();
