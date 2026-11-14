@@ -67,8 +67,8 @@ pub(crate) fn clear_littlefs_alloc_diagnostic() {
     unsafe { xcore_lfs_alloc_diag_clear(); }
 }
 
-pub(crate) fn littlefs_alloc_diagnostic() -> [u32; 8] {
-    let mut values = [0u32; 8];
+pub(crate) fn littlefs_alloc_diagnostic() -> [u32; 10] {
+    let mut values = [0u32; 10];
     unsafe { xcore_lfs_alloc_diag_read(values.as_mut_ptr()); }
     values
 }
