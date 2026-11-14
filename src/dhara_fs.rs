@@ -56,6 +56,34 @@ static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_ERROR: AtomicU32 = AtomicU32::new(0);
 
+// LittleFS Storage-trait callback telemetry for the failing operation.
+static STORAGE_CALLBACK_COUNTS: [AtomicU32; 4] =
+    [const { AtomicU32::new(0) }; 4];
+static STORAGE_CALLBACK_LAST_OPERATION: AtomicU32 = AtomicU32::new(0);
+static STORAGE_CALLBACK_LAST_OFFSET: AtomicU32 = AtomicU32::new(0);
+static STORAGE_CALLBACK_LAST_LENGTH: AtomicU32 = AtomicU32::new(0);
+
+fn record_storage_callback(operation: u32, offset: usize, length: usize) {
+    if (1..=4).contains(&operation) {
+        STORAGE_CALLBACK_COUNTS[(operation - 1) as usize].fetch_add(1, Ordering::Relaxed);
+    }
+    STORAGE_CALLBACK_LAST_OFFSET.store(offset as u32, Ordering::Relaxed);
+    STORAGE_CALLBACK_LAST_LENGTH.store(length as u32, Ordering::Relaxed);
+    STORAGE_CALLBACK_LAST_OPERATION.store(operation, Ordering::Release);
+}
+
+pub(crate) fn storage_callback_diagnostic() -> [u32; 7] {
+    [
+        STORAGE_CALLBACK_COUNTS[0].load(Ordering::Acquire),
+        STORAGE_CALLBACK_COUNTS[1].load(Ordering::Acquire),
+        STORAGE_CALLBACK_COUNTS[2].load(Ordering::Acquire),
+        STORAGE_CALLBACK_COUNTS[3].load(Ordering::Acquire),
+        STORAGE_CALLBACK_LAST_OPERATION.load(Ordering::Acquire),
+        STORAGE_CALLBACK_LAST_OFFSET.load(Ordering::Acquire),
+        STORAGE_CALLBACK_LAST_LENGTH.load(Ordering::Acquire),
+    ]
+}
+
 // Counts Dhara-to-NAND callbacks during one storage operation. These counters
 // distinguish ordinary reads from bad-block scans and recovery/GC activity.
 static DHARA_NAND_COUNTS: [AtomicU32; 7] = [
@@ -157,6 +185,12 @@ pub(crate) fn littlefs_alloc_trace_diagnostic() -> ([u32; 7], [u32; 112]) {
 
 pub(crate) fn clear_storage_io_diagnostic() {
     clear_dhara_nand_diagnostic();
+    for count in &STORAGE_CALLBACK_COUNTS {
+        count.store(0, Ordering::Release);
+    }
+    STORAGE_CALLBACK_LAST_OPERATION.store(0, Ordering::Release);
+    STORAGE_CALLBACK_LAST_OFFSET.store(0, Ordering::Release);
+    STORAGE_CALLBACK_LAST_LENGTH.store(0, Ordering::Release);
     STORAGE_IO_OPERATION.store(0, Ordering::Release);
     STORAGE_IO_LOCATION.store(0, Ordering::Release);
     STORAGE_IO_ERROR.store(0, Ordering::Release);
@@ -550,6 +584,7 @@ impl Storage for DharaStorage {
     const BLOCK_CYCLES: isize = 100;
 
     fn read(&mut self, off: usize, buf: &mut [u8]) -> LfsResult<usize> {
+        record_storage_callback(1, off, buf.len());
         if off % PAGE_SIZE != 0 || buf.len() % PAGE_SIZE != 0 {
             record_storage_io_error(1, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
@@ -573,6 +608,7 @@ impl Storage for DharaStorage {
     }
 
     fn write(&mut self, off: usize, data: &[u8]) -> LfsResult<usize> {
+        record_storage_callback(2, off, data.len());
         if off % PAGE_SIZE != 0 || data.is_empty() || data.len() % PAGE_SIZE != 0 {
             record_storage_io_error(2, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
@@ -600,6 +636,7 @@ impl Storage for DharaStorage {
     }
 
     fn erase(&mut self, off: usize, len: usize) -> LfsResult<usize> {
+        record_storage_callback(3, off, len);
         if off % ERASE_BLOCK_SIZE != 0 || len == 0 || len % ERASE_BLOCK_SIZE != 0 {
             record_storage_io_error(4, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
@@ -627,6 +664,7 @@ impl Storage for DharaStorage {
     }
 
     fn sync(&mut self) -> LfsResult<()> {
+        record_storage_callback(4, 0, 0);
         let before_sync = dhara_nand_counts_snapshot();
         let mut error = 0i32;
         let result = unsafe { xcore_dhara_map_sync(&mut error) };
