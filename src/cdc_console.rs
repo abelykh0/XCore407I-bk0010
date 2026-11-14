@@ -366,6 +366,12 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
         write_status(b" after=0x");
         write_hex_u32(ecc[13]);
     }
+    write_status(b"\r\nLast page calculated ECC by 512-byte chunk: ");
+    for index in 0..4 {
+        if index != 0 { write_status(b" "); }
+        write_hex_u32(ecc[14 + index]);
+    }
+    write_status(b"\\r\\n");
     write_status(b"\r\nRecent LittleFS allocator events (oldest first):\\r\\n");
     let trace_count = alloc_stats[5].min(16) as usize;
     let trace_head = (alloc_stats[6] as usize) % 16;
