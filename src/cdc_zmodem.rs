@@ -164,7 +164,7 @@ fn append_file(
     fs: &Filesystem<'_, ActiveStorage>,
     data: &[u8],
 ) -> Result<(), i32> {
-    let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::INVAL.code())?;
+    let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::IO.code())?;
     fs.open_file_with_options_and_then(
         |options| options.write(true).append(true),
         path,
