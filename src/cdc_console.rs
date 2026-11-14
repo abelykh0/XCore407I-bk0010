@@ -10,11 +10,13 @@ const LINE_CAPACITY: usize = 80;
 
 static mut LINE: [u8; LINE_CAPACITY] = [0; LINE_CAPACITY];
 static mut LINE_LEN: usize = 0;
+static mut ZMODEM_PROBE: [u8; 6] = [0; 6];
+static mut ZMODEM_PROBE_LEN: usize = 0;
 static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  VERSION    Show firmware target\r\n  RECV       Receive a file with ZMODEM\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n> ";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n> ";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -139,10 +141,12 @@ pub fn service(
         let connected = tusb::tud_cdc_n_connected(0);
         if connected && !WAS_CONNECTED {
             LINE_LEN = 0;
+            ZMODEM_PROBE_LEN = 0;
             write_status(BANNER);
         }
         if !connected {
             LINE_LEN = 0;
+            ZMODEM_PROBE_LEN = 0;
             WAS_CONNECTED = false;
             STORAGE_ERROR_REPORTED = false;
             cdc_zmodem::cancel(zmodem, fs);
@@ -159,6 +163,49 @@ pub fn service(
 
         let mut byte = 0u8;
         while tusb::tud_cdc_n_read(0, (&mut byte as *mut u8).cast::<c_void>(), 1) != 0 {
+            // ZMODEM senders initiate a session with a ZRQINIT hex header:
+            // "**" + ZDLE + "B00". Hold this short prefix out of the console
+            // parser until it either matches or proves to be ordinary text.
+            const ZRQINIT_PREFIX: &[u8; 6] = b"**\\x18B00";
+            if ZMODEM_PROBE_LEN != 0 || byte == b'*' {
+                ZMODEM_PROBE[ZMODEM_PROBE_LEN] = byte;
+                ZMODEM_PROBE_LEN += 1;
+                if ZRQINIT_PREFIX.starts_with(&ZMODEM_PROBE[..ZMODEM_PROBE_LEN]) {
+                    if ZMODEM_PROBE_LEN == ZRQINIT_PREFIX.len() {
+                        let started = if fs.is_some()
+                            && cdc_zmodem::start(zmodem, true, now_ms).is_ok()
+                        {
+                            cdc_zmodem::seed_input(zmodem, &ZMODEM_PROBE[..ZMODEM_PROBE_LEN])
+                        } else {
+                            false
+                        };
+                        ZMODEM_PROBE_LEN = 0;
+                        if started {
+                            // Leave remaining CDC OUT bytes queued for the
+                            // protocol receiver on the next foreground pass.
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // Not a ZMODEM startup header. Replay held printable bytes
+                // as console input, then process the current byte normally.
+                for index in 0..ZMODEM_PROBE_LEN {
+                    let held = ZMODEM_PROBE[index];
+                    if (0x20..=0x7e).contains(&held) && LINE_LEN < LINE_CAPACITY {
+                        LINE[LINE_LEN] = held;
+                        LINE_LEN += 1;
+                        write_status(&[held]);
+                    }
+                }
+                ZMODEM_PROBE_LEN = 0;
+                if byte == b'*' {
+                    ZMODEM_PROBE[0] = byte;
+                    ZMODEM_PROBE_LEN = 1;
+                    continue;
+                }
+            }
             match byte {
                 b'\r' | b'\n' => {
                     write_status(b"\r\n");
@@ -176,14 +223,6 @@ pub fn service(
                         });
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
-                    } else if command_is(line, b"RECV") {
-                        if fs.is_none() {
-                            write_status(b"Storage unavailable; ZMODEM receive disabled.\r\n> ");
-                        } else if cdc_zmodem::start(zmodem, true, now_ms).is_ok() {
-                            write_status(b"ZMODEM receiver ready. In Tera Term choose Transfer > ZMODEM > Send.\r\n");
-                        } else {
-                            write_status(b"Unable to start ZMODEM receiver.\r\n> ");
-                        }
                     } else if command_is(line, b"FORMAT") {
                         write_status(
                             b"WARNING: FORMAT YES erases the NAND and creates a new Dhara/LittleFS volume.\r\nType FORMAT YES to confirm.\r\n> ",
