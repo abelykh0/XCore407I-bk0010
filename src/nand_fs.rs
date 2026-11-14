@@ -53,8 +53,8 @@ static NAND_READ_FAILURE_DETAIL: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_PAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_STORED_ECC: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_CALCULATED_ECC: AtomicU32 = AtomicU32::new(0);
-static ECC_READ_COUNTS: [AtomicU32; 4] = [
-    AtomicU32::new(0), AtomicU32::new(0),
+static ECC_READ_COUNTS: [AtomicU32; 5] = [
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
     AtomicU32::new(0), AtomicU32::new(0),
 ];
 // Last completed ECC page read: page, tag class (1=valid, 2=legacy),
@@ -133,12 +133,13 @@ pub(crate) fn clear_nand_read_diagnostic() {
 }
 
 
-pub(crate) fn ecc_read_diagnostic() -> [u32; 13] {
+pub(crate) fn ecc_read_diagnostic() -> [u32; 14] {
     [
         ECC_READ_COUNTS[0].load(Ordering::Acquire),
         ECC_READ_COUNTS[1].load(Ordering::Acquire),
         ECC_READ_COUNTS[2].load(Ordering::Acquire),
         ECC_READ_COUNTS[3].load(Ordering::Acquire),
+        ECC_READ_COUNTS[4].load(Ordering::Acquire),
         ECC_LAST_PAGE.load(Ordering::Acquire),
         ECC_LAST_TAG.load(Ordering::Acquire),
         ECC_LAST_CHUNK.load(Ordering::Acquire),
@@ -344,6 +345,26 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
 /// encode the data-bit position; the remaining nine encode the byte address.
 /// A data-bit error has 01 or 10 in every pair. A one-bit syndrome is an
 /// ECC-bit error and does not require changing the data.
+fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
+    let mut bit_index = 0usize;
+    for bit in 0..3 {
+        match (syndrome >> (bit * 2)) & 0x03 {
+            0b01 => {}
+            0b10 => bit_index |= 1 << bit,
+            _ => return None,
+        }
+    }
+    let mut byte_index = 0usize;
+    for bit in 0..9 {
+        match (syndrome >> (6 + bit * 2)) & 0x03 {
+            0b01 => {}
+            0b10 => byte_index |= 1 << bit,
+            _ => return None,
+        }
+    }
+    Some((byte_index, bit_index))
+}
+
 fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     if data.len() != FSMC_ECC_CHUNK_SIZE {
         return false;
@@ -459,20 +480,17 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
                 ECC_READ_COUNTS[3].fetch_add(1, Ordering::Relaxed);
             }
         }
-        // Capture the actual correction, if any, without changing the decoder.
+        // Decode the candidate correction for telemetry; the actual decoder
+        // below remains the sole code that mutates the page buffer.
         let mut changed_byte = u32::MAX;
         let mut before = 0u32;
         let mut after = 0u32;
         if syndrome != 0 && syndrome.count_ones() != 1 {
-            let mut probe = [0u8; FSMC_ECC_CHUNK_SIZE];
-            probe.copy_from_slice(chunk);
-            if correct_ecc_chunk(&mut probe, stored_ecc, calculated_ecc) {
-                if let Some(index) = chunk.iter().zip(probe.iter()).position(|(a, b)| a != b) {
-                    changed_byte = index as u32;
-                    before = chunk[index] as u32;
-                    after = probe[index] as u32;
-                    ECC_READ_COUNTS[2].fetch_add(0, Ordering::Relaxed);
-                    ECC_READ_COUNTS[3].fetch_add(0, Ordering::Relaxed);
+            if let Some((byte_index, bit_index)) = ecc_error_location(syndrome) {
+                if byte_index < chunk.len() {
+                    changed_byte = byte_index as u32;
+                    before = chunk[byte_index] as u32;
+                    after = (chunk[byte_index] ^ (1 << bit_index)) as u32;
                 }
             }
         }
@@ -481,7 +499,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             return false;
         }
         if changed_byte != u32::MAX {
-            ECC_READ_COUNTS[2].fetch_add(0, Ordering::Relaxed);
+            ECC_READ_COUNTS[4].fetch_add(1, Ordering::Relaxed);
             ECC_LAST_BYTE.store(changed_byte, Ordering::Relaxed);
             ECC_LAST_BEFORE.store(before, Ordering::Relaxed);
             ECC_LAST_AFTER.store(after, Ordering::Relaxed);
