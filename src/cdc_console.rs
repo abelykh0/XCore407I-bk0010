@@ -724,6 +724,21 @@ fn ecc_diagnostic_read(
         if index != 0 { write_status(b" "); }
         write_hex_u32(ecc[22 + index]);
     }
+    write_status(b"\\r\\nFirst nonzero syndrome: ");
+    if ecc[28] == 0 {
+        write_status(b"none");
+    } else {
+        write_status(b"page=0x");
+        write_hex_u32(ecc[26]);
+        write_status(b" chunk=");
+        write_decimal(ecc[27] as usize);
+        write_status(b" syndrome=0x");
+        write_hex_u32(ecc[28]);
+        write_status(b" stored=0x");
+        write_hex_u32(ecc[29]);
+        write_status(b" calculated=0x");
+        write_hex_u32(ecc[30]);
+    }
     let (calls, iterations, timeouts) = crate::nand_fs::nand_rb_wait_diagnostic();
     write_status(b"\\r\\nNAND R/B waits: calls=");
     write_decimal(calls as usize);
