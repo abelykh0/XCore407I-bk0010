@@ -39,7 +39,8 @@ use alloc::{string::String, vec, vec::Vec};
 
 use core::{
     convert::AsRef,
-    iter::{self, Iterator},
+    iter::{self, ExactSizeIterator, Iterator},
+    marker::Sized,
     option::{Option, Option::{None, Some}},
     result::{Result, Result::{Err, Ok}},
 };
