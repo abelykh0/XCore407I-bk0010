@@ -8,18 +8,81 @@
 #include "lfs.h"
 
 /* XCore allocator diagnostics, captured only when lfs_alloc reports NOSPC. */
+#define XCORE_LFS_ALLOC_TRACE_COUNT 16U
+#define XCORE_LFS_ALLOC_TRACE_FIELDS 7U
+
 static volatile uint32_t xcore_lfs_alloc_diag[10];
 static volatile uint32_t xcore_lfs_alloc_scans;
 static volatile uint32_t xcore_lfs_traversed_blocks;
+static volatile uint32_t xcore_lfs_alloc_calls;
+static volatile uint32_t xcore_lfs_alloc_successes;
+static volatile uint32_t xcore_lfs_checkpoint_resets;
+static volatile uint32_t xcore_lfs_trace[XCORE_LFS_ALLOC_TRACE_COUNT][XCORE_LFS_ALLOC_TRACE_FIELDS];
+static volatile uint32_t xcore_lfs_trace_head;
+static volatile uint32_t xcore_lfs_trace_count;
+
+static void xcore_lfs_alloc_trace_record(lfs_t *lfs, uint32_t event) {
+    uint32_t used = 0;
+    for (lfs_size_t i = 0; i < lfs->lookahead.size; i++) {
+        used += !!(lfs->lookahead.buffer[i / 8]
+                & (1U << (i % 8)));
+    }
+
+    uint32_t slot = xcore_lfs_trace_head;
+    xcore_lfs_trace[slot][0] = event;
+    xcore_lfs_trace[slot][1] = lfs->lookahead.start;
+    xcore_lfs_trace[slot][2] = lfs->lookahead.next;
+    xcore_lfs_trace[slot][3] = lfs->lookahead.size;
+    xcore_lfs_trace[slot][4] = (uint32_t)lfs->lookahead.ckpoint;
+    xcore_lfs_trace[slot][5] = used;
+    xcore_lfs_trace[slot][6] = xcore_lfs_alloc_scans;
+
+    xcore_lfs_trace_head = (slot + 1U) % XCORE_LFS_ALLOC_TRACE_COUNT;
+    if (xcore_lfs_trace_count < XCORE_LFS_ALLOC_TRACE_COUNT) {
+        xcore_lfs_trace_count++;
+    }
+}
+
 void xcore_lfs_alloc_diag_clear(void) {
     for (unsigned i = 0; i < 10; i++) xcore_lfs_alloc_diag[i] = 0;
+    for (unsigned i = 0; i < XCORE_LFS_ALLOC_TRACE_COUNT; i++) {
+        for (unsigned j = 0; j < XCORE_LFS_ALLOC_TRACE_FIELDS; j++) {
+            xcore_lfs_trace[i][j] = 0;
+        }
+    }
     xcore_lfs_alloc_scans = 0;
     xcore_lfs_traversed_blocks = 0;
+    xcore_lfs_alloc_calls = 0;
+    xcore_lfs_alloc_successes = 0;
+    xcore_lfs_checkpoint_resets = 0;
+    xcore_lfs_trace_head = 0;
+    xcore_lfs_trace_count = 0;
 }
+
 void xcore_lfs_alloc_diag_read(uint32_t *out) {
     if (!out) return;
     for (unsigned i = 0; i < 10; i++) out[i] = xcore_lfs_alloc_diag[i];
 }
+
+void xcore_lfs_alloc_trace_read(uint32_t *out, uint32_t *stats) {
+    if (out) {
+        for (unsigned i = 0; i < XCORE_LFS_ALLOC_TRACE_COUNT; i++) {
+            for (unsigned j = 0; j < XCORE_LFS_ALLOC_TRACE_FIELDS; j++) {
+                out[i * XCORE_LFS_ALLOC_TRACE_FIELDS + j] = xcore_lfs_trace[i][j];
+            }
+        }
+    }
+    if (stats) {
+        stats[0] = xcore_lfs_alloc_calls;
+        stats[1] = xcore_lfs_alloc_successes;
+        stats[2] = xcore_lfs_checkpoint_resets;
+        stats[3] = xcore_lfs_alloc_scans;
+        stats[4] = xcore_lfs_traversed_blocks;
+        stats[5] = xcore_lfs_trace_count;
+        stats[6] = xcore_lfs_trace_head;
+    }
+}
+
 static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
     uint32_t used = 0;
     for (lfs_size_t i = 0; i < lfs->lookahead.size; i++) {
@@ -631,6 +694,8 @@ static int lfs_unmount_(lfs_t *lfs);
 // after a checkpoint, the block allocator may realloc any untracked blocks
 static void lfs_alloc_ckpoint(lfs_t *lfs) {
     lfs->lookahead.ckpoint = lfs->block_count;
+    xcore_lfs_checkpoint_resets++;
+    xcore_lfs_alloc_trace_record(lfs, 1); // checkpoint reset
 }
 
 // drop the lookahead buffer, this is done during mounting and failed
@@ -639,6 +704,7 @@ static void lfs_alloc_drop(lfs_t *lfs) {
     lfs->lookahead.size = 0;
     lfs->lookahead.next = 0;
     lfs_alloc_ckpoint(lfs);
+    xcore_lfs_alloc_trace_record(lfs, 2); // allocator state dropped
 }
 
 #ifndef LFS_READONLY
@@ -674,16 +740,19 @@ static int lfs_alloc_scan(lfs_t *lfs) {
     memset(lfs->lookahead.buffer, 0, lfs->cfg->lookahead_size);
     int err = lfs_fs_traverse_(lfs, lfs_alloc_lookahead, lfs, true);
     if (err) {
+        xcore_lfs_alloc_trace_record(lfs, 3); // lookahead scan failed
         lfs_alloc_drop(lfs);
         return err;
     }
 
+    xcore_lfs_alloc_trace_record(lfs, 3); // lookahead scan completed
     return 0;
 }
 #endif
 
 #ifndef LFS_READONLY
 static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
+    xcore_lfs_alloc_calls++;
     while (true) {
         // scan our lookahead buffer for free blocks
         while (lfs->lookahead.next < lfs->lookahead.size) {
@@ -702,6 +771,8 @@ static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
                     if (lfs->lookahead.next >= lfs->lookahead.size
                             || !(lfs->lookahead.buffer[lfs->lookahead.next / 8]
                                 & (1U << (lfs->lookahead.next % 8)))) {
+                        xcore_lfs_alloc_successes++;
+                        xcore_lfs_alloc_trace_record(lfs, 4); // allocation returned
                         return 0;
                     }
                 }
@@ -723,6 +794,7 @@ static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
                     (lfs->lookahead.start + lfs->lookahead.next)
                         % lfs->block_count);
             xcore_lfs_alloc_diag_capture(lfs);
+            xcore_lfs_alloc_trace_record(lfs, 5); // NOSPC
             return LFS_ERR_NOSPC;
         }
 
