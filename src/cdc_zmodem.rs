@@ -410,27 +410,6 @@ pub fn service(
                 if state.wire_pos < state.wire_len {
                     let input = &state.wire[state.wire_pos..state.wire_len];
 
-                    // A ZMODEM cancel is five or more consecutive raw CAN
-                    // bytes. Keep a shorter CAN suffix buffered across CDC
-                    // reads so a sequence split at the buffer boundary is
-                    // recognized rather than discarded by the header parser.
-                    const CAN_COUNT: usize = 5;
-                    let cancel_at = input
-                        .windows(CAN_COUNT)
-                        .position(|window| window.iter().all(|byte| *byte == 0x18));
-                    if cancel_at == Some(0) {
-                        state.wire_pos = state.wire_len;
-                        let _ = receiver.abort();
-                        continue;
-                    }
-
-                    let submit_len = if let Some(index) = cancel_at {
-                        index
-                    } else {
-                        let trailing_can = input.iter().rev().take_while(|byte| **byte == 0x18).count();
-                        input.len() - trailing_can.min(CAN_COUNT - 1)
-                    };
-                    let input = &input[..submit_len];
                     match receiver.submit_wire(input) {
                         Ok(consumed) if consumed != 0 => {
                             state.input_accepted = true;
