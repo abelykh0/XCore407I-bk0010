@@ -21,7 +21,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG    Read retained test data and report ECC registers (no writes)\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -612,14 +612,30 @@ fn report_storage_phase_counters(stage: &[u8]) {
 
 fn ecc_diagnostic_read(
     fs: &Filesystem<'_, ActiveStorage>,
+    path_bytes: &[u8],
+    check_test_pattern: bool,
     service_usb_only: &mut impl FnMut(),
 ) {
-    let Ok(path) = Path::from_bytes_with_nul(STORAGE_TEST_PATH) else {
-        write_status(b"\\r\\nECCDIAG: invalid test path.\\r\\n> ");
+    if path_bytes.is_empty() || path_bytes.len() >= LINE_CAPACITY || path_bytes[0] != b'/' {
+        write_status(b"\\r\\nECCDIAG: expected an absolute file path.\\r\\n> ");
+        return;
+    }
+    if path_bytes.iter().any(|byte| *byte == 0 || *byte < 0x20 || *byte > 0x7e) {
+        write_status(b"\\r\\nECCDIAG: path contains invalid characters.\\r\\n> ");
+        return;
+    }
+
+    let mut path_buffer = [0u8; LINE_CAPACITY];
+    path_buffer[..path_bytes.len()].copy_from_slice(path_bytes);
+    path_buffer[path_bytes.len()] = 0;
+    let Ok(path) = Path::from_bytes_with_nul(&path_buffer[..=path_bytes.len()]) else {
+        write_status(b"\\r\\nECCDIAG: invalid file path.\\r\\n> ");
         return;
     };
 
-    write_status(b"\\r\\nECCDIAG: read-only scan of /.storage-test; no NAND writes.\\r\\n");
+    write_status(b"\\r\\nECCDIAG: read-only scan of ");
+    write_status(path_bytes);
+    write_status(b"; no NAND writes.\\r\\n");
     crate::nand_fs::clear_nand_read_diagnostic();
     crate::nand_fs::clear_nand_rb_wait_diagnostic();
 
@@ -634,10 +650,12 @@ fn ecc_diagnostic_read(
                 service_usb_only();
                 let count = file.read(&mut buffer)?;
                 if count == 0 { break; }
-                for (index, actual) in buffer[..count].iter().copied().enumerate() {
-                    let expected = storage_test_byte(total + index);
-                    if actual != expected && mismatch.is_none() {
-                        mismatch = Some((total + index, expected, actual));
+                if check_test_pattern {
+                    for (index, actual) in buffer[..count].iter().copied().enumerate() {
+                        let expected = storage_test_byte(total + index);
+                        if actual != expected && mismatch.is_none() {
+                            mismatch = Some((total + index, expected, actual));
+                        }
                     }
                 }
                 total += count;
@@ -651,16 +669,20 @@ fn ecc_diagnostic_read(
             write_status(b"Read bytes: ");
             write_decimal(total);
             write_status(b"\\r\\n");
-            if let Some((offset, expected, actual)) = mismatch {
-                write_status(b"Pattern mismatch at byte ");
-                write_decimal(offset);
-                write_status(b": expected 0x");
-                write_hex_u32(expected as u32);
-                write_status(b", actual 0x");
-                write_hex_u32(actual as u32);
-                write_status(b"\\r\\n");
+            if check_test_pattern {
+                if let Some((offset, expected, actual)) = mismatch {
+                    write_status(b"Pattern mismatch at byte ");
+                    write_decimal(offset);
+                    write_status(b": expected 0x");
+                    write_hex_u32(expected as u32);
+                    write_status(b", actual 0x");
+                    write_hex_u32(actual as u32);
+                    write_status(b"\\r\\n");
+                } else {
+                    write_status(b"Pattern check: no mismatch in bytes read.\\r\\n");
+                }
             } else {
-                write_status(b"Pattern check: no mismatch in bytes read.\\r\\n");
+                write_status(b"Pattern check: skipped (arbitrary file).\\r\\n");
             }
         }
         Err(error) => {
@@ -1147,9 +1169,21 @@ pub fn service(
                         } else {
                             write_status(b"Storage unavailable.\r\n> ");
                         }
-                    } else if command_is(line, b"ECCDIAG") {
+                    } else if line.len() >= 7
+                        && line[..7].iter().zip(b"ECCDIAG").all(|(a, b)| a.to_ascii_uppercase() == *b)
+                        && (line.len() == 7 || line[7] == b' ')
+                    {
                         if let Some(fs) = fs {
-                            ecc_diagnostic_read(fs, _service_background);
+                            let mut path_start = 7;
+                            while path_start < line.len() && line[path_start] == b' ' {
+                                path_start += 1;
+                            }
+                            let supplied_path = &line[path_start..];
+                            let default_path = b"/.storage-test";
+                            let path_bytes = if supplied_path.is_empty() { default_path.as_slice() } else { supplied_path };
+                            let check_pattern = supplied_path.is_empty()
+                                || path_bytes == b"/.storage-test";
+                            ecc_diagnostic_read(fs, path_bytes, check_pattern, _service_background);
                         } else {
                             write_status(b"Storage unavailable.\\r\\n> ");
                         }
