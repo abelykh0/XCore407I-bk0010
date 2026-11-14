@@ -69,6 +69,14 @@ fn record_ecc_read_failure(page: u32, chunk: u32, stored: u32, calculated: u32) 
     }
 }
 
+pub(crate) fn clear_nand_read_diagnostic() {
+    NAND_READ_FAILURE_STAGE.store(0, Ordering::Release);
+    NAND_READ_FAILURE_DETAIL.store(0, Ordering::Release);
+    NAND_READ_FAILURE_PAGE.store(0, Ordering::Release);
+    NAND_READ_FAILURE_STORED_ECC.store(0, Ordering::Release);
+    NAND_READ_FAILURE_CALCULATED_ECC.store(0, Ordering::Release);
+}
+
 pub(crate) fn nand_read_diagnostic() -> (u32, u32, u32, u32, u32) {
     let stage = NAND_READ_FAILURE_STAGE.load(Ordering::Acquire);
     (
