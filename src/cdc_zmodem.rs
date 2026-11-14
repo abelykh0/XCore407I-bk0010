@@ -363,7 +363,35 @@ pub fn service(
                     let input = &state.wire[state.wire_pos..state.wire_len];
                     match receiver.submit_wire(input) {
                         Ok(consumed) if consumed != 0 => state.wire_pos += consumed,
-                        Ok(_) => break,
+                        Ok(_) => {
+                            // The decoder may need more bytes before it can
+                            // consume an incomplete header or packet. Preserve
+                            // the unconsumed bytes and append more CDC input;
+                            // otherwise the seeded ZRQINIT prefix can stall
+                            // the receiver before the rest of the header arrives.
+                            if state.wire_len == WIRE_CAPACITY {
+                                break;
+                            }
+                            let remaining = state.wire_len - state.wire_pos;
+                            state.wire.copy_within(
+                                state.wire_pos..state.wire_len,
+                                0,
+                            );
+                            state.wire_pos = 0;
+                            state.wire_len = remaining;
+                            let count = unsafe {
+                                tusb::tud_cdc_n_read(
+                                    0,
+                                    state.wire[state.wire_len..].as_mut_ptr().cast::<c_void>(),
+                                    (WIRE_CAPACITY - state.wire_len) as u32,
+                                )
+                            } as usize;
+                            if count == 0 {
+                                break;
+                            }
+                            state.wire_len += count;
+                            state.last_activity_ms = now_ms;
+                        },
                         Err(error) => {
                             state.transfer_failed = true;
                             let message: &[u8] = match error {
