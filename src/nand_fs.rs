@@ -50,6 +50,9 @@ pub type ActiveStorage = crate::dhara_fs::DharaStorage;
 // 3=invalid ECC tag, 4=uncorrectable ECC syndrome.
 static NAND_READ_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_DETAIL: AtomicU32 = AtomicU32::new(0);
+static NAND_READ_FAILURE_PAGE: AtomicU32 = AtomicU32::new(0);
+static NAND_READ_FAILURE_STORED_ECC: AtomicU32 = AtomicU32::new(0);
+static NAND_READ_FAILURE_CALCULATED_ECC: AtomicU32 = AtomicU32::new(0);
 
 fn record_nand_read_failure(stage: u32, detail: u32) {
     if NAND_READ_FAILURE_STAGE.compare_exchange(0, stage, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
@@ -57,8 +60,24 @@ fn record_nand_read_failure(stage: u32, detail: u32) {
     }
 }
 
-pub(crate) fn nand_read_diagnostic() -> (u32, u32) {
-    (NAND_READ_FAILURE_STAGE.load(Ordering::Acquire), NAND_READ_FAILURE_DETAIL.load(Ordering::Acquire))
+fn record_ecc_read_failure(page: u32, chunk: u32, stored: u32, calculated: u32) {
+    if NAND_READ_FAILURE_STAGE.compare_exchange(0, 4, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+        NAND_READ_FAILURE_PAGE.store(page, Ordering::Relaxed);
+        NAND_READ_FAILURE_STORED_ECC.store(stored, Ordering::Relaxed);
+        NAND_READ_FAILURE_CALCULATED_ECC.store(calculated, Ordering::Relaxed);
+        NAND_READ_FAILURE_DETAIL.store((chunk << 24) | ((stored ^ calculated) & 0x00FF_FFFF), Ordering::Release);
+    }
+}
+
+pub(crate) fn nand_read_diagnostic() -> (u32, u32, u32, u32, u32) {
+    let stage = NAND_READ_FAILURE_STAGE.load(Ordering::Acquire);
+    (
+        stage,
+        NAND_READ_FAILURE_DETAIL.load(Ordering::Acquire),
+        NAND_READ_FAILURE_PAGE.load(Ordering::Relaxed),
+        NAND_READ_FAILURE_STORED_ECC.load(Ordering::Relaxed),
+        NAND_READ_FAILURE_CALCULATED_ECC.load(Ordering::Relaxed),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -301,8 +320,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             0,
         ]);
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
-            let syndrome = stored_ecc ^ calculated_ecc;
-            record_nand_read_failure(4, ((chunk_index as u32) << 24) | (syndrome & 0x00FF_FFFF));
+            record_ecc_read_failure(page, chunk_index as u32, stored_ecc, calculated_ecc);
             return false;
         }
     }
