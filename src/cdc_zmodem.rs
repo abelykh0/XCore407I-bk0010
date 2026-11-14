@@ -10,7 +10,7 @@ use littlefs2::{
     io::{Error as LfsError, Write},
     path::Path,
 };
-use zmodem2::{Action, Event, Receiver};
+use zmodem2::{Action, Error as ZmodemError, Event, Receiver};
 
 use crate::{camera, nand_fs::ActiveStorage, tusb};
 
@@ -311,8 +311,24 @@ pub fn service(
                     match receiver.submit_wire(input) {
                         Ok(consumed) if consumed != 0 => state.wire_pos += consumed,
                         Ok(_) => break,
-                        Err(_) => {
+                        Err(error) => {
                             state.transfer_failed = true;
+                            let message: &[u8] = match error {
+                                ZmodemError::MalformedEncoding(_) => b"\\r\\nZMODEM input: malformed encoding\\r\\n",
+                                ZmodemError::MalformedFileSize => b"\\r\\nZMODEM input: malformed file size\\r\\n",
+                                ZmodemError::MalformedFileName => b"\\r\\nZMODEM input: malformed filename\\r\\n",
+                                ZmodemError::MalformedFrame(_) => b"\\r\\nZMODEM input: malformed frame\\r\\n",
+                                ZmodemError::MalformedHeader => b"\\r\\nZMODEM input: malformed header\\r\\n",
+                                ZmodemError::MalformedPacket(_) => b"\\r\\nZMODEM input: malformed packet\\r\\n",
+                                ZmodemError::InvalidState => b"\\r\\nZMODEM input: invalid state\\r\\n",
+                                ZmodemError::Backpressure => b"\\r\\nZMODEM input: backpressure\\r\\n",
+                                ZmodemError::OutOfMemory => b"\\r\\nZMODEM input: buffer exhausted\\r\\n",
+                                ZmodemError::UnexpectedCrc16 => b"\\r\\nZMODEM input: CRC-16 mismatch\\r\\n",
+                                ZmodemError::UnexpectedCrc32 => b"\\r\\nZMODEM input: CRC-32 mismatch\\r\\n",
+                                ZmodemError::UnexpectedEof => b"\\r\\nZMODEM input: unexpected EOF\\r\\n",
+                                ZmodemError::UnsupportedFeature => b"\\r\\nZMODEM input: unsupported feature\\r\\n",
+                            };
+                            super::cdc_console::write_status(message);
                             let _ = receiver.abort();
                             break;
                         }
