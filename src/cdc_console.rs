@@ -738,14 +738,14 @@ struct RawNandTestModeGuard;
 
 impl RawNandTestModeGuard {
     fn enable() -> Self {
-        crate::nand_fs::set_raw_nand_test_mode(true);
+        crate::nand_fs::set_ecc_write_raw_read_test_mode(true);
         Self
     }
 }
 
 impl Drop for RawNandTestModeGuard {
     fn drop(&mut self) {
-        crate::nand_fs::set_raw_nand_test_mode(false);
+        crate::nand_fs::set_ecc_write_raw_read_test_mode(false);
     }
 }
 
@@ -761,7 +761,7 @@ fn storage_test(
     // Bypass ECC for every NAND read/program during this isolated test,
     // including Dhara cleanup, relocation, flush, and readback.
     let _raw_nand_mode = RawNandTestModeGuard::enable();
-    write_status(b"\r\nSTORAGETEST starting; RAW NAND mode (ECC bypassed); UVC/video servicing is paused.\r\n");
+    write_status(b"\r\nSTORAGETEST starting; ECC WRITE enabled, ECC READ correction bypassed; UVC/video servicing is paused.\r\n");
     service_usb_only();
     // Keep allocator history from the start of the test, including cleanup
     // and free-space traversal, rather than clearing it just before writes.
