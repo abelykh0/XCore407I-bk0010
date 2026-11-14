@@ -7,7 +7,7 @@
  */
 #include "lfs.h"
 
-/* XCore allocator diagnostics, captured only when lfs_alloc reports NOSPC. */
+/* XCore allocator diagnostics and a bounded trace of allocator state transitions. */
 #define XCORE_LFS_ALLOC_TRACE_COUNT 16U
 #define XCORE_LFS_ALLOC_TRACE_FIELDS 7U
 
