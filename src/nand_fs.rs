@@ -137,17 +137,38 @@ pub(crate) fn wait_ready_status() -> bool {
     false
 }
 
+static NAND_RB_WAIT_CALLS: AtomicU32 = AtomicU32::new(0);
+static NAND_RB_WAIT_ITERATIONS: AtomicU32 = AtomicU32::new(0);
+static NAND_RB_WAIT_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn clear_nand_rb_wait_diagnostic() {
+    NAND_RB_WAIT_CALLS.store(0, Ordering::Release);
+    NAND_RB_WAIT_ITERATIONS.store(0, Ordering::Release);
+    NAND_RB_WAIT_TIMEOUTS.store(0, Ordering::Release);
+}
+
+pub(crate) fn nand_rb_wait_diagnostic() -> (u32, u32, u32) {
+    (NAND_RB_WAIT_CALLS.load(Ordering::Acquire), NAND_RB_WAIT_ITERATIONS.load(Ordering::Acquire), NAND_RB_WAIT_TIMEOUTS.load(Ordering::Acquire))
+}
+
 pub(crate) fn wait_ready_rb() -> bool {
     let mut busy_seen = false;
+    let mut iterations = 0u32;
     for _ in 0..TIMEOUT {
+        iterations += 1;
         let ready = unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0;
         if !ready {
             busy_seen = true;
         } else if busy_seen {
+            NAND_RB_WAIT_CALLS.fetch_add(1, Ordering::Relaxed);
+            NAND_RB_WAIT_ITERATIONS.fetch_add(iterations, Ordering::Relaxed);
             return true;
         }
         core::hint::spin_loop();
     }
+    NAND_RB_WAIT_CALLS.fetch_add(1, Ordering::Relaxed);
+    NAND_RB_WAIT_ITERATIONS.fetch_add(iterations, Ordering::Relaxed);
+    NAND_RB_WAIT_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
     false
 }
 
