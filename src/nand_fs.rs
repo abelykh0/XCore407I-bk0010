@@ -88,6 +88,13 @@ static ECC_LAST_CHUNK: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_SYNDROME: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_STORED: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_CALCULATED: AtomicU32 = AtomicU32::new(0);
+// Preserve the first nonzero syndrome in a scan; the "last" values otherwise
+// tend to describe an unrelated clean page by the time ECCDIAG finishes.
+static ECC_FIRST_PAGE: AtomicU32 = AtomicU32::new(0);
+static ECC_FIRST_CHUNK: AtomicU32 = AtomicU32::new(0);
+static ECC_FIRST_SYNDROME: AtomicU32 = AtomicU32::new(0);
+static ECC_FIRST_STORED: AtomicU32 = AtomicU32::new(0);
+static ECC_FIRST_CALCULATED: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_BYTE: AtomicU32 = AtomicU32::new(u32::MAX);
 static ECC_LAST_BEFORE: AtomicU32 = AtomicU32::new(0);
 static ECC_LAST_AFTER: AtomicU32 = AtomicU32::new(0);
@@ -161,6 +168,11 @@ pub(crate) fn clear_nand_read_diagnostic() {
     ECC_LAST_SYNDROME.store(0, Ordering::Release);
     ECC_LAST_STORED.store(0, Ordering::Release);
     ECC_LAST_CALCULATED.store(0, Ordering::Release);
+    ECC_FIRST_PAGE.store(0, Ordering::Release);
+    ECC_FIRST_CHUNK.store(0, Ordering::Release);
+    ECC_FIRST_SYNDROME.store(0, Ordering::Release);
+    ECC_FIRST_STORED.store(0, Ordering::Release);
+    ECC_FIRST_CALCULATED.store(0, Ordering::Release);
     ECC_LAST_BYTE.store(u32::MAX, Ordering::Release);
     ECC_LAST_BEFORE.store(0, Ordering::Release);
     ECC_LAST_AFTER.store(0, Ordering::Release);
@@ -171,7 +183,7 @@ pub(crate) fn clear_nand_read_diagnostic() {
 }
 
 
-pub(crate) fn ecc_read_diagnostic() -> [u32; 26] {
+pub(crate) fn ecc_read_diagnostic() -> [u32; 31] {
     [
         ECC_READ_COUNTS[0].load(Ordering::Acquire),
         ECC_READ_COUNTS[1].load(Ordering::Acquire),
@@ -199,6 +211,11 @@ pub(crate) fn ecc_read_diagnostic() -> [u32; 26] {
         ECC_LAST_PCR_CAPTURE[1].load(Ordering::Acquire),
         ECC_LAST_PCR_CAPTURE[2].load(Ordering::Acquire),
         ECC_LAST_PCR_CAPTURE[3].load(Ordering::Acquire),
+        ECC_FIRST_PAGE.load(Ordering::Acquire),
+        ECC_FIRST_CHUNK.load(Ordering::Acquire),
+        ECC_FIRST_SYNDROME.load(Ordering::Acquire),
+        ECC_FIRST_STORED.load(Ordering::Acquire),
+        ECC_FIRST_CALCULATED.load(Ordering::Acquire),
     ]
 }
 
@@ -563,7 +580,13 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         ECC_LAST_CALCULATED.store(calculated_ecc, Ordering::Relaxed);
         ECC_LAST_BYTE.store(u32::MAX, Ordering::Relaxed);
         if syndrome != 0 {
-            ECC_READ_COUNTS[2].fetch_add(1, Ordering::Relaxed);
+            if ECC_READ_COUNTS[2].fetch_add(1, Ordering::Relaxed) == 0 {
+                ECC_FIRST_PAGE.store(page, Ordering::Relaxed);
+                ECC_FIRST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
+                ECC_FIRST_SYNDROME.store(syndrome, Ordering::Relaxed);
+                ECC_FIRST_STORED.store(stored_ecc, Ordering::Relaxed);
+                ECC_FIRST_CALCULATED.store(calculated_ecc, Ordering::Relaxed);
+            }
             if syndrome.count_ones() == 1 {
                 ECC_READ_COUNTS[3].fetch_add(1, Ordering::Relaxed);
             }
