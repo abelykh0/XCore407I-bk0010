@@ -1196,6 +1196,27 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
+                    } else if command_is(line, b"ECCRAW") {
+                        write_status(b"\\r\\nECCRAW: direct physical NAND read; bypasses Dhara/LittleFS; no NAND writes. Page=0x");
+                        write_hex_u32(0x0000_2391);
+                        write_status(b"\\r\\n");
+                        match crate::nand_fs::ecc_standalone_read(0x0000_2391) {
+                            Some((stored, calculated)) => {
+                                for index in 0..4 {
+                                    write_status(b"chunk ");
+                                    write_decimal(index);
+                                    write_status(b": stored=0x");
+                                    write_hex_u32(stored[index]);
+                                    write_status(b" calculated=0x");
+                                    write_hex_u32(calculated[index]);
+                                    write_status(b" syndrome=0x");
+                                    write_hex_u32(stored[index] ^ calculated[index]);
+                                    write_status(b"\\r\\n");
+                                }
+                            }
+                            None => write_status(b"Direct NAND read failed (ready/busy timeout or OOB read failure).\\r\\n"),
+                        }
+                        write_status(b"> ");
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
                             list_files(fs);
