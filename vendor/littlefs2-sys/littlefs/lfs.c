@@ -26,6 +26,13 @@ static volatile uint32_t xcore_lfs_file_relocate_calls;
 static volatile uint32_t xcore_lfs_alloc_caller;
 static volatile uint32_t xcore_lfs_alloc_caller_counts[5];
 static volatile uint32_t xcore_lfs_alloc_last_caller;
+static volatile uint32_t xcore_lfs_bd_cmp_mismatches;
+static volatile uint32_t xcore_lfs_bd_cmp_last_block;
+static volatile uint32_t xcore_lfs_bd_cmp_last_off;
+static volatile uint32_t xcore_lfs_bd_cmp_last_index;
+static volatile uint32_t xcore_lfs_bd_cmp_last_expected;
+static volatile uint32_t xcore_lfs_bd_cmp_last_actual;
+static volatile uint32_t xcore_lfs_bd_prog_errors;
 static volatile uint32_t xcore_lfs_last_ctz_head;
 static volatile uint32_t xcore_lfs_last_ctz_size;
 static volatile uint32_t xcore_lfs_last_relocate_block;
@@ -81,6 +88,13 @@ void xcore_lfs_alloc_diag_clear(void) {
     xcore_lfs_alloc_caller = 0;
     xcore_lfs_alloc_last_caller = 0;
     for (unsigned i = 0; i < 5; i++) xcore_lfs_alloc_caller_counts[i] = 0;
+    xcore_lfs_bd_cmp_mismatches = 0;
+    xcore_lfs_bd_cmp_last_block = 0;
+    xcore_lfs_bd_cmp_last_off = 0;
+    xcore_lfs_bd_cmp_last_index = 0;
+    xcore_lfs_bd_cmp_last_expected = 0;
+    xcore_lfs_bd_cmp_last_actual = 0;
+    xcore_lfs_bd_prog_errors = 0;
     xcore_lfs_last_ctz_head = 0;
     xcore_lfs_last_ctz_size = 0;
     xcore_lfs_last_relocate_block = 0;
@@ -129,6 +143,13 @@ void xcore_lfs_alloc_diag_read(uint32_t *out) {
     out[149] = xcore_lfs_last_compact_off;
     for (unsigned i = 0; i < 5; i++) out[150 + i] = xcore_lfs_alloc_caller_counts[i];
     out[155] = xcore_lfs_alloc_last_caller;
+    out[156] = xcore_lfs_bd_cmp_mismatches;
+    out[157] = xcore_lfs_bd_cmp_last_block;
+    out[158] = xcore_lfs_bd_cmp_last_off;
+    out[159] = xcore_lfs_bd_cmp_last_index;
+    out[160] = xcore_lfs_bd_cmp_last_expected;
+    out[161] = xcore_lfs_bd_cmp_last_actual;
+    out[162] = xcore_lfs_bd_prog_errors;
 }
 
 static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
@@ -286,6 +307,17 @@ static int lfs_bd_cmp(lfs_t *lfs,
 
         int res = memcmp(dat, data + i, diff);
         if (res) {
+            for (lfs_size_t j = 0; j < diff; j++) {
+                if (dat[j] != data[i + j]) {
+                    xcore_lfs_bd_cmp_mismatches++;
+                    xcore_lfs_bd_cmp_last_block = block;
+                    xcore_lfs_bd_cmp_last_off = off + i;
+                    xcore_lfs_bd_cmp_last_index = j;
+                    xcore_lfs_bd_cmp_last_expected = data[i + j];
+                    xcore_lfs_bd_cmp_last_actual = dat[j];
+                    break;
+                }
+            }
             return res < 0 ? LFS_CMP_LT : LFS_CMP_GT;
         }
     }
@@ -324,6 +356,7 @@ static int lfs_bd_flush(lfs_t *lfs,
                 pcache->off, pcache->buffer, diff);
         LFS_ASSERT(err <= 0);
         if (err) {
+            xcore_lfs_bd_prog_errors++;
             return err;
         }
 
