@@ -19,7 +19,7 @@ const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
 /// Print the exact non-destructive storage initialization or mount failure.
-pub(crate) fn report_storage_error(error: crate::nand_fs::FsAccessError) {
+pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
     use crate::nand_fs::{FsAccessError, InitError};
 
     match error {
