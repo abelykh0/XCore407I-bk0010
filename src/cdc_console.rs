@@ -69,7 +69,7 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
                 write_hex_u32(detail);
                 write_status(b"\r\n");
             }
-            let (stage, detail) = crate::nand_fs::nand_read_diagnostic();
+            let (stage, detail, page, stored_ecc, calculated_ecc) = crate::nand_fs::nand_read_diagnostic();
             if stage != 0 {
                 let description: &[u8] = match stage {
                     1 => b"NAND data-page ready/busy timeout; physical page 0x",
@@ -81,6 +81,15 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
                 write_status(description);
                 write_hex_u32(detail);
                 write_status(b"\r\n");
+                if stage == 4 {
+                    write_status(b"Failing physical page: 0x");
+                    write_hex_u32(page);
+                    write_status(b"\r\nStored ECC: 0x");
+                    write_hex_u32(stored_ecc);
+                    write_status(b"\r\nCalculated ECC: 0x");
+                    write_hex_u32(calculated_ecc);
+                    write_status(b"\r\n");
+                }
             } else {
                 write_status(b"No lower-level NAND read stage was recorded.\r\n");
             }
