@@ -175,14 +175,15 @@ pub(crate) fn littlefs_alloc_diagnostic() -> [u32; 10] {
     values
 }
 
-pub(crate) fn littlefs_alloc_trace_diagnostic() -> ([u32; 34], [u32; 112]) {
-    let mut combined = [0u32; 156];
+pub(crate) fn littlefs_alloc_trace_diagnostic() -> ([u32; 41], [u32; 112]) {
+    let mut combined = [0u32; 163];
     unsafe { xcore_lfs_alloc_diag_read(combined.as_mut_ptr()); }
-    let mut stats = [0u32; 34];
+    let mut stats = [0u32; 41];
     stats[..7].copy_from_slice(&combined[10..17]);
     stats[7..16].copy_from_slice(&combined[129..138]);
     stats[16..28].copy_from_slice(&combined[138..150]);
     stats[28..34].copy_from_slice(&combined[150..156]);
+    stats[34..41].copy_from_slice(&combined[156..163]);
     let mut trace = [0u32; 112];
     trace.copy_from_slice(&combined[17..129]);
     (stats, trace)
