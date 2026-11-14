@@ -507,8 +507,9 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
 pub(crate) fn ecc_standalone_read(page: u32) -> Option<([u32; 4], [u32; 4])> {
     let mut data = [0u8; PAGE_SIZE];
 
-    // Keep ECC enabled before READ0 and through the NAND read cycle.
-    let _ = ecc_begin_chunk();
+    // Complete NAND command/address/read-cycle setup before enabling ECC.
+    // RM0090's ECC procedure enables ECC immediately before the data transfer;
+    // command and address accesses must not be part of the ECC window.
     command(0x00);
     address(0);
     address(0);
@@ -516,17 +517,21 @@ pub(crate) fn ecc_standalone_read(page: u32) -> Option<([u32; 4], [u32; 4])> {
     address((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
-        let _ = ecc_end_chunk();
         return None;
     }
 
     let mut calculated = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        if index != 0 {
-            let _ = ecc_begin_chunk();
-        }
+        let _ = ecc_begin_chunk();
         for byte in chunk {
             *byte = read_data();
+        }
+        // Follow the reference sequence used by the STM32 NAND ECC example:
+        // drain the FSMC FIFO before reading ECCR2, then disable ECC to reset
+        // the accumulator before the next 512-byte chunk.
+        if !wait_fsmc_fifo_empty() {
+            let _ = ecc_end_chunk();
+            return None;
         }
         calculated[index] = ecc_end_chunk().0 & 0x00FF_FFFF;
     }
