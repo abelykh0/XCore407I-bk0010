@@ -118,8 +118,8 @@ fn write_hex_u32(value: u32) {
 
 fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     write_status(b"\r\nLittleFS root:\r\n");
-    let Ok(root) = Path::from_bytes_with_nul(b"/\\0") else {
-        write_status(b"Cannot construct root path.\\r\\n> ");
+    let Ok(root) = Path::from_bytes_with_nul(b"/\0") else {
+        write_status(b"Cannot construct root path.\r\n> ");
         return;
     };
 
@@ -132,13 +132,13 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
             if entry.file_type().is_dir() {
                 write_status(b" [DIR]");
             }
-            write_status(b"\\r\\n");
+            write_status(b"\r\n");
         }
         Ok(())
     });
 
     if result.is_err() {
-        write_status(b"Directory read failed.\\r\\n");
+        write_status(b"Directory read failed.\r\n");
     }
     write_status(b"> ");
 }
@@ -284,7 +284,7 @@ pub fn service(
                         if let Some(fs) = fs {
                             list_files(fs);
                         } else {
-                            write_status(b"Storage unavailable.\\r\\n> ");
+                            write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"VERSION") {
                         write_status(VERSION);
