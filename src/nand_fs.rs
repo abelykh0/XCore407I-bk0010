@@ -521,7 +521,9 @@ pub fn initialize_nand_volume() -> Result<(), InitError> {
 /// caller to service USB/video between NAND erase operations.
 pub fn initialize_nand_volume_with_progress(
     progress: impl FnMut(u32, u32),
-) -> Result<FormatReport, InitError> {
+ ) -> Result<FormatReport, InitError> {
+    crate::dhara_fs::clear_storage_io_diagnostic();
+    clear_nand_read_diagnostic();
     let mut storage = ActiveStorage::initialize_new_volume_with_progress(progress)?;
     Filesystem::<ActiveStorage>::format(&mut storage)
         .map_err(|_| InitError::MountFailed)?;
@@ -535,7 +537,7 @@ pub fn initialize_nand_volume_with_progress(
         page_size_bytes: PAGE_SIZE as u32,
         pages_per_block: PAGES_PER_BLOCK,
         erase_block_bytes: ERASE_BLOCK_SIZE as u32,
-        littlefs_blocks: 700,
+        littlefs_blocks: crate::dhara_fs::LITTLEFS_BLOCK_COUNT as u32,
         littlefs_capacity_bytes: storage.logical_capacity() as u32,
     })
 }
