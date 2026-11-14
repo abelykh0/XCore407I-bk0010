@@ -20,9 +20,9 @@
 
 /* Hard limits prevent corrupted NAND/journal state from trapping the MCU
  * in recovery or garbage-collection loops forever. */
-#define XCORE_DHARA_MAX_RECOVERY_STEPS 8192U
-#define XCORE_DHARA_MAX_WRITE_RETRIES 64U
-#define XCORE_DHARA_MAX_MAINTENANCE_STEPS 8192U
+#define XCORE_DHARA_MAX_RECOVERY_STEPS 256U
+#define XCORE_DHARA_MAX_WRITE_RETRIES 32U
+#define XCORE_DHARA_MAX_MAINTENANCE_STEPS 256U
 
 #define DHARA_RADIX_DEPTH	(sizeof(dhara_sector_t) << 3)
 
