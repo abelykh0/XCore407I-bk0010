@@ -239,6 +239,8 @@ fn storage_test(
     write_status(b"\r\nSTORAGETEST starting; UVC/video servicing is paused.\r\n");
     service_usb_only();
 
+    write_status(b"CLEANUP: checking previous test file...\r\n");
+    service_usb_only();
     if fs.exists(path) && fs.remove(path).is_err() {
         write_status(b"STORAGETEST: cannot remove previous test file.\r\n> ");
         return;
