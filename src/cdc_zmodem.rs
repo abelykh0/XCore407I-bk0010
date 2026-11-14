@@ -38,6 +38,11 @@ pub struct State {
     append_storage_operation: u32,
     append_storage_location: u32,
     append_storage_error: u32,
+    append_nand_stage: u32,
+    append_nand_detail: u32,
+    append_nand_page: u32,
+    append_nand_stored_ecc: u32,
+    append_nand_calculated_ecc: u32,
 }
 
 impl State {
@@ -61,6 +66,11 @@ impl State {
             append_storage_operation: 0,
             append_storage_location: 0,
             append_storage_error: 0,
+            append_nand_stage: 0,
+            append_nand_detail: 0,
+            append_nand_page: 0,
+            append_nand_stored_ecc: 0,
+            append_nand_calculated_ecc: 0,
         }
     }
 
@@ -76,12 +86,17 @@ impl State {
         self.last_error
     }
 
-    pub fn append_failure_details(&self) -> (i32, u32, u32, u32) {
+    pub fn append_failure_details(&self) -> (i32, u32, u32, u32, u32, u32, u32, u32, u32) {
         (
             self.append_lfs_error,
             self.append_storage_operation,
             self.append_storage_location,
             self.append_storage_error,
+            self.append_nand_stage,
+            self.append_nand_detail,
+            self.append_nand_page,
+            self.append_nand_stored_ecc,
+            self.append_nand_calculated_ecc,
         )
     }
 }
@@ -235,6 +250,11 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.append_storage_operation = 0;
     state.append_storage_location = 0;
     state.append_storage_error = 0;
+    state.append_nand_stage = 0;
+    state.append_nand_detail = 0;
+    state.append_nand_page = 0;
+    state.append_nand_stored_ecc = 0;
+    state.append_nand_calculated_ecc = 0;
     state.receiver = Some(receiver);
     Ok(())
 }
@@ -315,6 +335,7 @@ pub fn service(
                     break;
                 }
                 crate::dhara_fs::clear_storage_io_diagnostic();
+                crate::nand_fs::clear_nand_read_diagnostic();
                 if let Err(lfs_error) = append_file(fs, bytes) {
                     state.last_error = 2;
                     let (operation, location, storage_error) =
@@ -323,6 +344,13 @@ pub fn service(
                     state.append_storage_operation = operation;
                     state.append_storage_location = location;
                     state.append_storage_error = storage_error;
+                    let (stage, detail, page, stored_ecc, calculated_ecc) =
+                        crate::nand_fs::nand_read_diagnostic();
+                    state.append_nand_stage = stage;
+                    state.append_nand_detail = detail;
+                    state.append_nand_page = page;
+                    state.append_nand_stored_ecc = stored_ecc;
+                    state.append_nand_calculated_ecc = calculated_ecc;
                     state.transfer_failed = true;
                     let _ = receiver.abort();
                     break;
