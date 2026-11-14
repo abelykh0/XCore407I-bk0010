@@ -198,6 +198,17 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     Ok(())
 }
 
+/// Preserve the ZMODEM startup header detected by the CDC console.
+pub fn seed_input(state: &mut State, bytes: &[u8]) -> bool {
+    if state.receiver.is_none() || bytes.len() > WIRE_CAPACITY || state.wire_len != 0 {
+        return false;
+    }
+    state.wire[..bytes.len()].copy_from_slice(bytes);
+    state.wire_len = bytes.len();
+    state.wire_pos = 0;
+    true
+}
+
 /// Advance the receiver state machine in the CDC foreground loop.
 pub fn service(
     fs: &Filesystem<'_, ActiveStorage>,
