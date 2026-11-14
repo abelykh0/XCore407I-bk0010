@@ -289,7 +289,7 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
         write_decimal(phase[5] as usize);
         write_status(b" copy=");
         write_decimal(phase[6] as usize);
-        write_status(b"\\r\\n");
+        write_status(b"\r\n");
     }
     write_status(b"\r\n");
     let (operation, location, storage_error) = crate::dhara_fs::storage_io_diagnostic();
