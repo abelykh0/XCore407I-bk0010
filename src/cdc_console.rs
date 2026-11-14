@@ -192,17 +192,39 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
 
 
 
+fn report_storage_space(fs: &Filesystem<'_, ActiveStorage>, stage: &[u8]) {
+    write_status(stage);
+    write_status(b" LittleFS free space: ");
+    match fs.available_space() {
+        Some(bytes) => {
+            write_decimal(bytes);
+            write_status(b" bytes (");
+            write_decimal(bytes / crate::nand_fs::ERASE_BLOCK_SIZE);
+            write_status(b" whole blocks)");
+        }
+        None => write_status(b"unavailable"),
+    }
+    write_status(b"; total: ");
+    write_decimal(fs.total_space());
+    write_status(b" bytes; configured blocks: ");
+    write_decimal(crate::dhara_fs::LITTLEFS_BLOCK_COUNT);
+    write_status(b"; block size: ");
+    write_decimal(crate::nand_fs::ERASE_BLOCK_SIZE);
+    write_status(b" bytes; lookahead: 256 blocks\r\n");
+}
+
 fn storage_test_byte(offset: usize) -> u8 {
     (offset.wrapping_mul(37) ^ (offset >> 3) ^ 0xA5) as u8
 }
 
-fn report_storage_test_io_failure(stage: &[u8], lfs_error: i32) {
+fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u8], lfs_error: i32) {
     write_status(b"\r\nSTORAGETEST ");
     write_status(stage);
     write_status(b" failed; LittleFS error: 0x");
     write_hex_u32(lfs_error as u32);
     write_status(b"\r\n");
 
+    report_storage_space(fs, b"Allocator snapshot at failure:");
     let (operation, location, storage_error) = crate::dhara_fs::storage_io_diagnostic();
     write_status(b"Dhara operation: 0x");
     write_hex_u32(operation);
@@ -252,6 +274,7 @@ fn storage_test(
     write_status(b"\r\nSTORAGETEST starting; UVC/video servicing is paused.\r\n");
     service_usb_only();
 
+    report_storage_space(fs, b"Before test:");
     write_status(b"CLEANUP: checking previous test file...\r\n");
     service_usb_only();
     if fs.exists(path) && fs.remove(path).is_err() {
@@ -292,6 +315,7 @@ fn storage_test(
                     written += amount;
                 }
                 offset += count;
+                report_storage_space(fs, b"After successful write chunk:");
             }
             write_status(b"FLUSH: committing file...\r\n");
             service_usb_only();
@@ -300,7 +324,7 @@ fn storage_test(
     );
 
     if let Err(error) = write_result {
-        report_storage_test_io_failure(b"write/flush", error.code());
+        report_storage_test_io_failure(fs, b"write/flush", error.code());
         return;
     }
 
@@ -353,7 +377,7 @@ fn storage_test(
     );
 
     if let Err(error) = read_result {
-        report_storage_test_io_failure(b"read", error.code());
+        report_storage_test_io_failure(fs, b"read", error.code());
         return;
     }
 
