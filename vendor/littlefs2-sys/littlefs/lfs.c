@@ -772,7 +772,12 @@ static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
                             || !(lfs->lookahead.buffer[lfs->lookahead.next / 8]
                                 & (1U << (lfs->lookahead.next % 8)))) {
                         xcore_lfs_alloc_successes++;
-                        xcore_lfs_alloc_trace_record(lfs, 4); // allocation returned
+                        // Preserve checkpoint/scan events in the bounded trace;
+                        // sample successful allocations rather than flooding it.
+                        if (xcore_lfs_alloc_successes <= 4U
+                                || (xcore_lfs_alloc_successes % 64U) == 0U) {
+                            xcore_lfs_alloc_trace_record(lfs, 4); // allocation returned
+                        }
                         return 0;
                     }
                 }
