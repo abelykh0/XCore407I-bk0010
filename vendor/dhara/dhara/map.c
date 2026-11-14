@@ -367,7 +367,7 @@ int dhara_map_write(struct dhara_map *m, dhara_sector_t dst,
 			return -1;
 
 		if (!dhara_journal_enqueue(&m->journal, data, meta, &my_err))
-			break;
+			return 0;
 
 		m->count = old_count;
 
@@ -393,7 +393,7 @@ int dhara_map_copy_page(struct dhara_map *m, dhara_page_t src,
 			return -1;
 
 		if (!dhara_journal_copy(&m->journal, src, meta, &my_err))
-			break;
+			return 0;
 
 		m->count = old_count;
 
@@ -489,7 +489,7 @@ int dhara_map_trim(struct dhara_map *m, dhara_sector_t s, dhara_error_t *err)
 			return -1;
 
 		if (!try_delete(m, s, &my_err))
-			break;
+			return 0;
 
 		if (try_recover(m, my_err, err) < 0)
 			return -1;
