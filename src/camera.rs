@@ -137,7 +137,7 @@ pub(crate) fn claim_cdc_receiver_storage() -> Option<(*mut u8, usize)> {
     CDC_RECEIVER_STORAGE_IN_USE
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .ok()?;
-    let ptr = core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>();
+    let ptr = unsafe { core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>() };
     Some((ptr, CANVAS_TAIL_BYTES))
 }
 
