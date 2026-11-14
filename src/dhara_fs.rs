@@ -8,6 +8,7 @@
 
 use core::ffi::c_int;
 use core::slice;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use littlefs2::{
     consts::{U2048, U32},
@@ -48,6 +49,31 @@ unsafe extern "C" {
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
     [0; PAGE_SIZE + SPARE_SIZE];
 static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
+
+static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
+static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
+static STORAGE_IO_ERROR: AtomicU32 = AtomicU32::new(0);
+
+fn record_storage_io_error(operation: u32, location: u32, error: i32) {
+    if STORAGE_IO_OPERATION.compare_exchange(0, operation, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+        STORAGE_IO_LOCATION.store(location, Ordering::Release);
+        STORAGE_IO_ERROR.store(error as u32, Ordering::Release);
+    }
+}
+
+pub(crate) fn clear_storage_io_diagnostic() {
+    STORAGE_IO_OPERATION.store(0, Ordering::Release);
+    STORAGE_IO_LOCATION.store(0, Ordering::Release);
+    STORAGE_IO_ERROR.store(0, Ordering::Release);
+}
+
+pub(crate) fn storage_io_diagnostic() -> (u32, u32, u32) {
+    (
+        STORAGE_IO_OPERATION.load(Ordering::Acquire),
+        STORAGE_IO_LOCATION.load(Ordering::Acquire),
+        STORAGE_IO_ERROR.load(Ordering::Acquire),
+    )
+}
 
 fn valid_nand(nand: *const DharaNand) -> bool {
     if nand.is_null() {
@@ -409,17 +435,21 @@ impl Storage for DharaStorage {
 
     fn read(&mut self, off: usize, buf: &mut [u8]) -> LfsResult<usize> {
         if off % PAGE_SIZE != 0 || buf.len() % PAGE_SIZE != 0 {
+            record_storage_io_error(1, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
         }
         let capacity = Self::BLOCK_COUNT * ERASE_BLOCK_SIZE;
         if off.checked_add(buf.len()).filter(|&end| end <= capacity).is_none() {
+            record_storage_io_error(1, (off / PAGE_SIZE) as u32, -1002);
             return Err(LfsError::IO);
         }
 
         for (index, page) in buf.chunks_exact_mut(PAGE_SIZE).enumerate() {
             let sector = (off / PAGE_SIZE + index) as u32;
             let mut error = 0i32;
-            if unsafe { xcore_dhara_map_read(sector, page.as_mut_ptr(), &mut error) } != 0 {
+            let result = unsafe { xcore_dhara_map_read(sector, page.as_mut_ptr(), &mut error) };
+            if result != 0 {
+                record_storage_io_error(1, sector, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
         }
@@ -428,17 +458,21 @@ impl Storage for DharaStorage {
 
     fn write(&mut self, off: usize, data: &[u8]) -> LfsResult<usize> {
         if off % PAGE_SIZE != 0 || data.is_empty() || data.len() % PAGE_SIZE != 0 {
+            record_storage_io_error(2, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
         }
         let capacity = Self::BLOCK_COUNT * ERASE_BLOCK_SIZE;
         if off.checked_add(data.len()).filter(|&end| end <= capacity).is_none() {
+            record_storage_io_error(2, (off / PAGE_SIZE) as u32, -1002);
             return Err(LfsError::IO);
         }
 
         for (index, page) in data.chunks_exact(PAGE_SIZE).enumerate() {
             let sector = (off / PAGE_SIZE + index) as u32;
             let mut error = 0i32;
-            if unsafe { xcore_dhara_map_write(sector, page.as_ptr(), &mut error) } != 0 {
+            let result = unsafe { xcore_dhara_map_write(sector, page.as_ptr(), &mut error) };
+            if result != 0 {
+                record_storage_io_error(2, sector, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
         }
@@ -446,7 +480,9 @@ impl Storage for DharaStorage {
         // LittleFS has no separate sync callback in this Storage trait.
         // Commit each completed write call before reporting success.
         let mut error = 0i32;
-        if unsafe { xcore_dhara_map_sync(&mut error) } != 0 {
+        let result = unsafe { xcore_dhara_map_sync(&mut error) };
+        if result != 0 {
+            record_storage_io_error(3, 0, if error != 0 { error } else { result });
             return Err(LfsError::IO);
         }
         Ok(data.len())
@@ -454,10 +490,12 @@ impl Storage for DharaStorage {
 
     fn erase(&mut self, off: usize, len: usize) -> LfsResult<usize> {
         if off % ERASE_BLOCK_SIZE != 0 || len == 0 || len % ERASE_BLOCK_SIZE != 0 {
+            record_storage_io_error(4, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
         }
         let capacity = Self::BLOCK_COUNT * ERASE_BLOCK_SIZE;
         if off.checked_add(len).filter(|&end| end <= capacity).is_none() {
+            record_storage_io_error(4, (off / PAGE_SIZE) as u32, -1002);
             return Err(LfsError::IO);
         }
 
@@ -465,12 +503,16 @@ impl Storage for DharaStorage {
         let sector_count = len / PAGE_SIZE;
         for sector in first_sector..(first_sector + sector_count) {
             let mut error = 0i32;
-            if unsafe { xcore_dhara_map_trim(sector as u32, &mut error) } != 0 {
+            let result = unsafe { xcore_dhara_map_trim(sector as u32, &mut error) };
+            if result != 0 {
+                record_storage_io_error(4, sector as u32, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
         }
         let mut error = 0i32;
-        if unsafe { xcore_dhara_map_sync(&mut error) } != 0 {
+        let result = unsafe { xcore_dhara_map_sync(&mut error) };
+        if result != 0 {
+            record_storage_io_error(5, 0, if error != 0 { error } else { result });
             return Err(LfsError::IO);
         }
         Ok(len)
