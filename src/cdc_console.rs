@@ -273,6 +273,24 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
     write_decimal(dhara_nand[7] as usize);
     write_status(b" last_location=0x");
     write_hex_u32(dhara_nand[8]);
+    let phases = crate::dhara_fs::dhara_phase_diagnostic();
+    for (index, phase) in phases.iter().enumerate() {
+        let label: &[u8] = match index {
+            0 => b"map_write callbacks: ",
+            1 => b"map_trim callbacks: ",
+            _ => b"map_sync callbacks: ",
+        };
+        write_status(label);
+        write_status(b"erase=");
+        write_decimal(phase[2] as usize);
+        write_status(b" program=");
+        write_decimal(phase[3] as usize);
+        write_status(b" read=");
+        write_decimal(phase[5] as usize);
+        write_status(b" copy=");
+        write_decimal(phase[6] as usize);
+        write_status(b"\\r\\n");
+    }
     write_status(b"\r\n");
     let (operation, location, storage_error) = crate::dhara_fs::storage_io_diagnostic();
     write_status(b"Dhara operation: 0x");
