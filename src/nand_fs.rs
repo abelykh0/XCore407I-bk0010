@@ -46,6 +46,13 @@ static ECC_WRITE_RAW_READ_TEST_MODE: AtomicBool = AtomicBool::new(false);
 pub(crate) fn set_ecc_write_raw_read_test_mode(enabled: bool) {
     ECC_WRITE_RAW_READ_TEST_MODE.store(enabled, Ordering::SeqCst);
 }
+
+// Diagnostic mode: calculate/compare ECC on reads, but never mutate page data.
+static ECC_CHECK_NO_CORRECT_TEST_MODE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_ecc_check_no_correct_test_mode(enabled: bool) {
+    ECC_CHECK_NO_CORRECT_TEST_MODE.store(enabled, Ordering::SeqCst);
+}
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
 pub(crate) const RB_MASK: u32 = 1 << 6;
@@ -574,6 +581,10 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
                     after = (chunk[byte_index] ^ (1 << bit_index)) as u32;
                 }
             }
+        }
+        if ECC_CHECK_NO_CORRECT_TEST_MODE.load(Ordering::SeqCst) {
+            // Preserve raw data while collecting ECC syndromes for comparison.
+            continue;
         }
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
             record_ecc_read_failure(page, chunk_index as u32, stored_ecc, calculated_ecc);
