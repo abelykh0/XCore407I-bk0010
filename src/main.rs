@@ -285,16 +285,16 @@ fn main() -> ! {
                         while prepare_next_video_batch(&mut video_renderer) {}
                         if completed == total || completed >= last_reported + 32 {
                             last_reported = completed;
-                            xcore407i_blinker::cdc_console::report_format_status(b"Format progress checkpoint.\r\n");
+                            xcore407i_blinker::cdc_console::report_format_status(b".");
                         }
                     },
                 );
             match format_result {
                 Ok(()) => xcore407i_blinker::cdc_console::report_format_status(
-                    b"NAND format complete. Reboot the device to mount the new volume.\r\n",
+                    b"\r\nNAND format complete. Reboot the device to mount the new volume.\r\n",
                 ),
                 Err(_) => xcore407i_blinker::cdc_console::report_format_status(
-                    b"NAND format failed. Check NAND diagnostics and reboot.\r\n",
+                    b"\r\nNAND format failed. Check NAND diagnostics and reboot.\r\n",
                 ),
             }
             loop {
