@@ -54,6 +54,34 @@ static NAND_READ_FAILURE_PAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_STORED_ECC: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_CALCULATED_ECC: AtomicU32 = AtomicU32::new(0);
 
+// First raw NAND command failure during a storage operation.
+// Stages: 1=page-read timeout, 2=block-erase timeout, 3=block-erase
+// status failure, 4=page-program timeout, 5=page-program status failure.
+static NAND_DEVICE_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
+static NAND_DEVICE_FAILURE_LOCATION: AtomicU32 = AtomicU32::new(0);
+static NAND_DEVICE_FAILURE_STATUS: AtomicU32 = AtomicU32::new(0);
+
+fn record_nand_device_failure(stage: u32, location: u32, status: u32) {
+    if NAND_DEVICE_FAILURE_STAGE.compare_exchange(0, stage, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+        NAND_DEVICE_FAILURE_LOCATION.store(location, Ordering::Relaxed);
+        NAND_DEVICE_FAILURE_STATUS.store(status, Ordering::Release);
+    }
+}
+
+pub(crate) fn clear_nand_device_diagnostic() {
+    NAND_DEVICE_FAILURE_STAGE.store(0, Ordering::Release);
+    NAND_DEVICE_FAILURE_LOCATION.store(0, Ordering::Release);
+    NAND_DEVICE_FAILURE_STATUS.store(0, Ordering::Release);
+}
+
+pub(crate) fn nand_device_diagnostic() -> (u32, u32, u32) {
+    (
+        NAND_DEVICE_FAILURE_STAGE.load(Ordering::Acquire),
+        NAND_DEVICE_FAILURE_LOCATION.load(Ordering::Acquire),
+        NAND_DEVICE_FAILURE_STATUS.load(Ordering::Acquire),
+    )
+}
+
 fn record_nand_read_failure(stage: u32, detail: u32) {
     if NAND_READ_FAILURE_STAGE.compare_exchange(0, stage, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
         NAND_READ_FAILURE_DETAIL.store(detail, Ordering::Release);
@@ -75,6 +103,7 @@ pub(crate) fn clear_nand_read_diagnostic() {
     NAND_READ_FAILURE_PAGE.store(0, Ordering::Release);
     NAND_READ_FAILURE_STORED_ECC.store(0, Ordering::Release);
     NAND_READ_FAILURE_CALCULATED_ECC.store(0, Ordering::Release);
+    clear_nand_device_diagnostic();
 }
 
 pub(crate) fn nand_read_diagnostic() -> (u32, u32, u32, u32, u32) {
@@ -182,7 +211,10 @@ pub(crate) fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
     address(page as u8);
     address((page >> 8) as u8);
     command(0x30);
-    if !wait_ready_rb() { return false; }
+    if !wait_ready_rb() {
+        record_nand_device_failure(1, page, 0);
+        return false;
+    }
     for byte in out { *byte = read_data(); }
     true
 }
@@ -193,9 +225,17 @@ pub(crate) fn erase_physical_block(block: u16) -> bool {
     address(first_page as u8);
     address((first_page >> 8) as u8);
     command(0xD0);
-    if !wait_ready_rb() { return false; }
+    if !wait_ready_rb() {
+        record_nand_device_failure(2, block as u32, 0);
+        return false;
+    }
     command(0x70);
-    read_data() & 0x01 == 0
+    let status = read_data();
+    if status & 0x01 != 0 {
+        record_nand_device_failure(3, block as u32, status as u32);
+        return false;
+    }
+    true
 }
 
 // OOB bytes 0..1 are reserved for the NAND factory bad-block marker.
@@ -237,9 +277,17 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     for &byte in &ECC_TAG { write_data(byte); }
 
     command(0x10);
-    if !wait_ready_rb() { return false; }
+    if !wait_ready_rb() {
+        record_nand_device_failure(4, page, 0);
+        return false;
+    }
     command(0x70);
-    read_data() & 0x01 == 0
+    let status = read_data();
+    if status & 0x01 != 0 {
+        record_nand_device_failure(5, page, status as u32);
+        return false;
+    }
+    true
 }
 
 /// Read a full data page, computing ECC as the four 512-byte chunks are read.
