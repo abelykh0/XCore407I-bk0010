@@ -8,13 +8,17 @@
 #include "lfs.h"
 
 /* XCore allocator diagnostics, captured only when lfs_alloc reports NOSPC. */
-static volatile uint32_t xcore_lfs_alloc_diag[8];
+static volatile uint32_t xcore_lfs_alloc_diag[10];
+static volatile uint32_t xcore_lfs_alloc_scans;
+static volatile uint32_t xcore_lfs_traversed_blocks;
 void xcore_lfs_alloc_diag_clear(void) {
-    for (unsigned i = 0; i < 8; i++) xcore_lfs_alloc_diag[i] = 0;
+    for (unsigned i = 0; i < 10; i++) xcore_lfs_alloc_diag[i] = 0;
+    xcore_lfs_alloc_scans = 0;
+    xcore_lfs_traversed_blocks = 0;
 }
 void xcore_lfs_alloc_diag_read(uint32_t *out) {
     if (!out) return;
-    for (unsigned i = 0; i < 8; i++) out[i] = xcore_lfs_alloc_diag[i];
+    for (unsigned i = 0; i < 10; i++) out[i] = xcore_lfs_alloc_diag[i];
 }
 static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
     uint32_t used = 0;
@@ -30,6 +34,8 @@ static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
     xcore_lfs_alloc_diag[5] = used;
     xcore_lfs_alloc_diag[6] = lfs->cfg->lookahead_size;
     xcore_lfs_alloc_diag[7] = 1;
+    xcore_lfs_alloc_diag[8] = xcore_lfs_alloc_scans;
+    xcore_lfs_alloc_diag[9] = xcore_lfs_traversed_blocks;
 }
 #include "lfs_util.h"
 
@@ -638,6 +644,7 @@ static void lfs_alloc_drop(lfs_t *lfs) {
 #ifndef LFS_READONLY
 static int lfs_alloc_lookahead(void *p, lfs_block_t block) {
     lfs_t *lfs = (lfs_t*)p;
+    xcore_lfs_traversed_blocks++;
     lfs_block_t off = ((block - lfs->lookahead.start)
             + lfs->block_count) % lfs->block_count;
 
@@ -651,6 +658,7 @@ static int lfs_alloc_lookahead(void *p, lfs_block_t block) {
 
 #ifndef LFS_READONLY
 static int lfs_alloc_scan(lfs_t *lfs) {
+    xcore_lfs_alloc_scans++;
     // move lookahead buffer to the first unused block
     //
     // note we limit the lookahead buffer to at most the amount of blocks
