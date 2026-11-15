@@ -264,7 +264,9 @@ pub extern "C" fn tuh_hid_report_received_cb(
     if KEYBOARD_DEVICE.load(Ordering::Acquire) == dev_addr
         && KEYBOARD_INSTANCE.load(Ordering::Acquire) == instance
     {
-        unsafe { tusb::tuh_hid_receive_report(dev_addr, instance); }
+        if !unsafe { tusb::tuh_hid_receive_report(dev_addr, instance) } {
+            KEYBOARD_REARM_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
