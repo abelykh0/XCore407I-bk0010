@@ -123,7 +123,7 @@ fn draw_keyboard_unavailable_screen() {
     show_file_browser_line(10, &line, false);
 
     line.fill(b' ');
-    line[..15].copy_from_slice(b"BOOT KEYBOARDS");
+    line[..14].copy_from_slice(b"BOOT KEYBOARDS");
     let digits = decimal(boot, &mut number);
     line[16..16 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(11, &line, false);
@@ -151,7 +151,7 @@ fn draw_keyboard_unavailable_screen() {
     if protocol == 0xff {
         line[9..13].copy_from_slice(b"NONE");
     } else if protocol == 0xfe {
-        line[9..20].copy_from_slice(b"SET PROTO FAIL");
+        line[9..23].copy_from_slice(b"SET PROTO FAIL");
     } else {
         let digits = decimal(protocol as u32, &mut number);
         line[9..9 + digits.len()].copy_from_slice(digits);
