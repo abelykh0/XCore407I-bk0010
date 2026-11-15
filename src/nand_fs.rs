@@ -999,6 +999,6 @@ pub fn format_existing_littlefs() -> Result<(), InitError> {
     let mut storage = ActiveStorage::new()?;
     Filesystem::<ActiveStorage>::format(&mut storage)
         .map_err(|_| InitError::MountFailed)?;
-    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
+    mount_with_shared_allocation(&mut storage, |_| Ok(()))
         .map_err(|_| InitError::MountFailed)
 }
