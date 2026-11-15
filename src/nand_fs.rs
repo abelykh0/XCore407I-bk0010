@@ -533,7 +533,7 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
 
 
 /// Read-only classification helpers used by the whole-device ECC scan.
-pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<bool> {
+pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<[u8; 2]> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
     let mut marker = [0xFFu8; 2];
 
@@ -562,7 +562,7 @@ pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<bool> {
     NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
 
     if !read_ok { return None; }
-    Some(marker != [0xFF, 0xFF])
+    Some(marker)
 }
 
 pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
