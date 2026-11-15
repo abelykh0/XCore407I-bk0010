@@ -453,7 +453,7 @@ fn main() -> ! {
     let mut browser_open = false;
     // Real-time emulator pacing uses the PDP cycle counter.
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
-    let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
+    let mut pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
     let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
     let mut init_screen_state = INIT_IDLE;
@@ -759,7 +759,7 @@ fn main() -> ! {
             || INIT_STATE.load(Ordering::Acquire) != INIT_IDLE;
         if emulator_paused != emulator_was_paused {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
-            pacing_start_cycles = unsafe { bk_timing_cycles() };
+            pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
             emulator_was_paused = emulator_paused;
         }
 
@@ -776,6 +776,7 @@ fn main() -> ! {
             let now_dwt = read_dwt_cycle_count();
             let elapsed_dwt = now_dwt.wrapping_sub(diagnostic_last_dwt);
             if elapsed_dwt >= DWT_CYCLES_PER_SECOND {
+                if !emulator_enabled { continue; }
                 let now_pdp = unsafe { bk_timing_cycles() };
                 let elapsed_pdp = now_pdp.wrapping_sub(diagnostic_last_pdp);
                 let pdp_cycles_per_second =
