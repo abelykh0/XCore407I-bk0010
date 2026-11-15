@@ -1201,7 +1201,7 @@ pub fn service(
                         write_hex_u32(0x0000_2391);
                         write_status(b"\\r\\n");
                         match crate::nand_fs::ecc_standalone_read(0x0000_2391) {
-                            Some((stored, chunks, calculated_256)) => {
+                            Some((stored, chunks, calculated_256, calculated_2048)) => {
                                 for index in 0..4 {
                                     let chunk = chunks[index];
                                     write_status(b"512[");
@@ -1232,6 +1232,9 @@ pub fn service(
                                     write_hex_u32(calculated_256[index]);
                                     write_status(b"\\r\\n");
                                 }
+                                write_status(b"2048-byte ECCPS=011 single-window probe: 0x");
+                                write_hex_u32(calculated_2048);
+                                write_status(b"\\r\\n");
                             }
                             None => write_status(b"Direct NAND read failed (ready/busy timeout or OOB read failure).\\r\\n"),
                         }
