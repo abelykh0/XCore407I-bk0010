@@ -44,10 +44,6 @@ unsafe extern "C" {
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_trim(sector: u32, error: *mut i32) -> c_int;
     fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
-    fn xcore_dhara_diag_clear();
-    fn xcore_dhara_diag_read(out: *mut u32);
-    fn xcore_lfs_alloc_diag_clear();
-    fn xcore_lfs_alloc_diag_read(out: *mut u32);
 }
 
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
@@ -58,106 +54,6 @@ static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_ERROR: AtomicU32 = AtomicU32::new(0);
 
-// LittleFS Storage-trait callback telemetry for the failing operation.
-static STORAGE_CALLBACK_COUNTS: [AtomicU32; 4] =
-    [const { AtomicU32::new(0) }; 4];
-static STORAGE_CALLBACK_LAST_OPERATION: AtomicU32 = AtomicU32::new(0);
-static STORAGE_CALLBACK_LAST_OFFSET: AtomicU32 = AtomicU32::new(0);
-static STORAGE_CALLBACK_LAST_LENGTH: AtomicU32 = AtomicU32::new(0);
-
-fn record_storage_callback(operation: u32, offset: usize, length: usize) {
-    if (1..=4).contains(&operation) {
-        STORAGE_CALLBACK_COUNTS[(operation - 1) as usize].fetch_add(1, Ordering::Relaxed);
-    }
-    STORAGE_CALLBACK_LAST_OFFSET.store(offset as u32, Ordering::Relaxed);
-    STORAGE_CALLBACK_LAST_LENGTH.store(length as u32, Ordering::Relaxed);
-    STORAGE_CALLBACK_LAST_OPERATION.store(operation, Ordering::Release);
-}
-
-pub(crate) fn storage_callback_diagnostic() -> [u32; 7] {
-    [
-        STORAGE_CALLBACK_COUNTS[0].load(Ordering::Acquire),
-        STORAGE_CALLBACK_COUNTS[1].load(Ordering::Acquire),
-        STORAGE_CALLBACK_COUNTS[2].load(Ordering::Acquire),
-        STORAGE_CALLBACK_COUNTS[3].load(Ordering::Acquire),
-        STORAGE_CALLBACK_LAST_OPERATION.load(Ordering::Acquire),
-        STORAGE_CALLBACK_LAST_OFFSET.load(Ordering::Acquire),
-        STORAGE_CALLBACK_LAST_LENGTH.load(Ordering::Acquire),
-    ]
-}
-
-// Counts Dhara-to-NAND callbacks during one storage operation. These counters
-// distinguish ordinary reads from bad-block scans and recovery/GC activity.
-static DHARA_NAND_COUNTS: [AtomicU32; 7] = [
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0),
-];
-static DHARA_NAND_LAST_OPERATION: AtomicU32 = AtomicU32::new(0);
-static DHARA_NAND_LAST_LOCATION: AtomicU32 = AtomicU32::new(0);
-
-// Attribute NAND callbacks to the Dhara API call that caused them. This
-// distinguishes GC performed by map_write/map_trim from work deferred to
-// map_sync, without changing synchronization or recovery behavior.
-static DHARA_WRITE_COUNTS: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
-static DHARA_TRIM_COUNTS: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
-static DHARA_SYNC_COUNTS: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
-
-fn dhara_nand_counts_snapshot() -> [u32; 7] {
-    core::array::from_fn(|i| DHARA_NAND_COUNTS[i].load(Ordering::Acquire))
-}
-
-fn accumulate_dhara_phase(target: &[AtomicU32; 7], before: [u32; 7]) {
-    for (i, counter) in target.iter().enumerate() {
-        let after = DHARA_NAND_COUNTS[i].load(Ordering::Acquire);
-        counter.fetch_add(after.wrapping_sub(before[i]), Ordering::Relaxed);
-    }
-}
-
-pub(crate) fn dhara_phase_diagnostic() -> [[u32; 7]; 3] {
-    core::array::from_fn(|phase| {
-        let counters = match phase {
-            0 => &DHARA_WRITE_COUNTS,
-            1 => &DHARA_TRIM_COUNTS,
-            _ => &DHARA_SYNC_COUNTS,
-        };
-        core::array::from_fn(|i| counters[i].load(Ordering::Acquire))
-    })
-}
-
-fn record_dhara_nand_call(operation: usize, location: u32) {
-    DHARA_NAND_COUNTS[operation - 1].fetch_add(1, Ordering::Relaxed);
-    DHARA_NAND_LAST_LOCATION.store(location, Ordering::Relaxed);
-    DHARA_NAND_LAST_OPERATION.store(operation as u32, Ordering::Release);
-}
-
-pub(crate) fn clear_dhara_nand_diagnostic() {
-    for count in &DHARA_NAND_COUNTS {
-        count.store(0, Ordering::Release);
-    }
-    DHARA_NAND_LAST_OPERATION.store(0, Ordering::Release);
-    DHARA_NAND_LAST_LOCATION.store(0, Ordering::Release);
-    for counters in [&DHARA_WRITE_COUNTS, &DHARA_TRIM_COUNTS, &DHARA_SYNC_COUNTS] {
-        for count in counters {
-            count.store(0, Ordering::Release);
-        }
-    }
-}
-
-pub(crate) fn dhara_nand_diagnostic() -> [u32; 9] {
-    [
-        DHARA_NAND_COUNTS[0].load(Ordering::Acquire),
-        DHARA_NAND_COUNTS[1].load(Ordering::Acquire),
-        DHARA_NAND_COUNTS[2].load(Ordering::Acquire),
-        DHARA_NAND_COUNTS[3].load(Ordering::Acquire),
-        DHARA_NAND_COUNTS[4].load(Ordering::Acquire),
-        DHARA_NAND_COUNTS[5].load(Ordering::Acquire),
-        DHARA_NAND_COUNTS[6].load(Ordering::Acquire),
-        DHARA_NAND_LAST_OPERATION.load(Ordering::Acquire),
-        DHARA_NAND_LAST_LOCATION.load(Ordering::Acquire),
-    ]
-}
-
 fn record_storage_io_error(operation: u32, location: u32, error: i32) {
     if STORAGE_IO_OPERATION.compare_exchange(0, operation, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
         STORAGE_IO_LOCATION.store(location, Ordering::Release);
@@ -165,45 +61,7 @@ fn record_storage_io_error(operation: u32, location: u32, error: i32) {
     }
 }
 
-pub(crate) fn clear_littlefs_alloc_diagnostic() {
-    unsafe { xcore_lfs_alloc_diag_clear(); }
-}
-
-pub(crate) fn littlefs_alloc_diagnostic() -> [u32; 10] {
-    let mut values = [0u32; 10];
-    unsafe { xcore_lfs_alloc_diag_read(values.as_mut_ptr()); }
-    values
-}
-
-pub(crate) fn littlefs_alloc_trace_diagnostic() -> ([u32; 41], [u32; 112]) {
-    let mut combined = [0u32; 163];
-    unsafe { xcore_lfs_alloc_diag_read(combined.as_mut_ptr()); }
-    let mut stats = [0u32; 41];
-    stats[..7].copy_from_slice(&combined[10..17]);
-    stats[7..16].copy_from_slice(&combined[129..138]);
-    stats[16..28].copy_from_slice(&combined[138..150]);
-    stats[28..34].copy_from_slice(&combined[150..156]);
-    stats[34..41].copy_from_slice(&combined[156..163]);
-    let mut trace = [0u32; 112];
-    trace.copy_from_slice(&combined[17..129]);
-    (stats, trace)
-}
-
-pub(crate) fn dhara_limit_diagnostic() -> [u32; 20] {
-    let mut values = [0u32; 20];
-    unsafe { xcore_dhara_diag_read(values.as_mut_ptr()); }
-    values
-}
-
 pub(crate) fn clear_storage_io_diagnostic() {
-    unsafe { xcore_dhara_diag_clear(); }
-    clear_dhara_nand_diagnostic();
-    for count in &STORAGE_CALLBACK_COUNTS {
-        count.store(0, Ordering::Release);
-    }
-    STORAGE_CALLBACK_LAST_OPERATION.store(0, Ordering::Release);
-    STORAGE_CALLBACK_LAST_OFFSET.store(0, Ordering::Release);
-    STORAGE_CALLBACK_LAST_LENGTH.store(0, Ordering::Release);
     STORAGE_IO_OPERATION.store(0, Ordering::Release);
     STORAGE_IO_LOCATION.store(0, Ordering::Release);
     STORAGE_IO_ERROR.store(0, Ordering::Release);
@@ -281,7 +139,6 @@ unsafe fn set_error(error: *mut i32, value: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> c_int {
-    record_dhara_nand_call(1, block);
     if !valid_nand(nand) {
         return 1;
     }
@@ -294,7 +151,6 @@ pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> c_int
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_mark_bad(nand: *const DharaNand, block: u32) {
-    record_dhara_nand_call(2, block);
     if valid_nand(nand) {
         let _ = mark_block_bad(block);
     }
@@ -306,7 +162,6 @@ pub extern "C" fn dhara_nand_erase(
     block: u32,
     error: *mut i32,
 ) -> c_int {
-    record_dhara_nand_call(3, block);
     if !valid_nand(nand) || block >= PHYSICAL_BLOCKS {
         unsafe { set_error(error, DHARA_E_BAD_BLOCK); }
         return -1;
@@ -327,7 +182,6 @@ pub extern "C" fn dhara_nand_prog(
     data: *const u8,
     error: *mut i32,
 ) -> c_int {
-    record_dhara_nand_call(4, page);
     if !valid_nand(nand)
         || page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
         || data.is_null()
@@ -347,7 +201,6 @@ pub extern "C" fn dhara_nand_prog(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> c_int {
-    record_dhara_nand_call(5, page);
     if !valid_nand(nand) || page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK {
         return 0;
     }
@@ -367,7 +220,6 @@ pub extern "C" fn dhara_nand_read(
     data: *mut u8,
     error: *mut i32,
 ) -> c_int {
-    record_dhara_nand_call(6, page);
     if !valid_nand(nand)
         || page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
         || offset > PAGE_SIZE
@@ -399,7 +251,6 @@ pub extern "C" fn dhara_nand_copy(
     destination: u32,
     error: *mut i32,
 ) -> c_int {
-    record_dhara_nand_call(7, source);
     if !valid_nand(nand)
         || source >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
         || destination >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK
@@ -597,7 +448,6 @@ impl Storage for DharaStorage {
     const BLOCK_CYCLES: isize = 100;
 
     fn read(&mut self, off: usize, buf: &mut [u8]) -> LfsResult<usize> {
-        record_storage_callback(1, off, buf.len());
         if off % PAGE_SIZE != 0 || buf.len() % PAGE_SIZE != 0 {
             record_storage_io_error(1, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
@@ -621,7 +471,6 @@ impl Storage for DharaStorage {
     }
 
     fn write(&mut self, off: usize, data: &[u8]) -> LfsResult<usize> {
-        record_storage_callback(2, off, data.len());
         if off % PAGE_SIZE != 0 || data.is_empty() || data.len() % PAGE_SIZE != 0 {
             record_storage_io_error(2, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
@@ -632,24 +481,20 @@ impl Storage for DharaStorage {
             return Err(LfsError::IO);
         }
 
-        let before_write = dhara_nand_counts_snapshot();
         for (index, page) in data.chunks_exact(PAGE_SIZE).enumerate() {
             let sector = (off / PAGE_SIZE + index) as u32;
             let mut error = 0i32;
             let result = unsafe { xcore_dhara_map_write(sector, page.as_ptr(), &mut error) };
             if result != 0 {
-                accumulate_dhara_phase(&DHARA_WRITE_COUNTS, before_write);
                 record_storage_io_error(2, sector, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
         }
-        accumulate_dhara_phase(&DHARA_WRITE_COUNTS, before_write);
 
         Ok(data.len())
     }
 
     fn erase(&mut self, off: usize, len: usize) -> LfsResult<usize> {
-        record_storage_callback(3, off, len);
         if off % ERASE_BLOCK_SIZE != 0 || len == 0 || len % ERASE_BLOCK_SIZE != 0 {
             record_storage_io_error(4, (off / PAGE_SIZE) as u32, -1001);
             return Err(LfsError::IO);
@@ -662,26 +507,20 @@ impl Storage for DharaStorage {
 
         let first_sector = off / PAGE_SIZE;
         let sector_count = len / PAGE_SIZE;
-        let before_trim = dhara_nand_counts_snapshot();
         for sector in first_sector..(first_sector + sector_count) {
             let mut error = 0i32;
             let result = unsafe { xcore_dhara_map_trim(sector as u32, &mut error) };
             if result != 0 {
-                accumulate_dhara_phase(&DHARA_TRIM_COUNTS, before_trim);
                 record_storage_io_error(4, sector as u32, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
         }
-        accumulate_dhara_phase(&DHARA_TRIM_COUNTS, before_trim);
         Ok(len)
     }
 
     fn sync(&mut self) -> LfsResult<()> {
-        record_storage_callback(4, 0, 0);
-        let before_sync = dhara_nand_counts_snapshot();
         let mut error = 0i32;
         let result = unsafe { xcore_dhara_map_sync(&mut error) };
-        accumulate_dhara_phase(&DHARA_SYNC_COUNTS, before_sync);
         if result != 0 {
             record_storage_io_error(3, 0, if error != 0 { error } else { result });
             return Err(LfsError::IO);
