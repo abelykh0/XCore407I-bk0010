@@ -26,43 +26,6 @@
 
 #define DHARA_RADIX_DEPTH	(sizeof(dhara_sector_t) << 3)
 
-/* Last bounded-loop exit, for diagnosing persistent sync/recovery failures. */
-static uint32_t xcore_dhara_limit_diag[20];
-static uint32_t xcore_dhara_sync_diag[8];
-
-static void record_limit_failure(uint32_t stage, uint32_t steps,
-				 uint32_t restarts, const struct dhara_map *m)
-{
-	const struct dhara_journal *j = &m->journal;
-
-	xcore_dhara_limit_diag[0] = stage;
-	xcore_dhara_limit_diag[1] = steps;
-	xcore_dhara_limit_diag[2] = restarts;
-	xcore_dhara_limit_diag[3] = j->head;
-	xcore_dhara_limit_diag[4] = j->tail;
-	xcore_dhara_limit_diag[5] = j->tail_sync;
-	xcore_dhara_limit_diag[6] = j->root;
-	xcore_dhara_limit_diag[7] = j->recover_next;
-	xcore_dhara_limit_diag[8] = j->recover_root;
-	xcore_dhara_limit_diag[9] = j->recover_meta;
-	xcore_dhara_limit_diag[10] = j->flags;
-	xcore_dhara_limit_diag[11] = dhara_journal_size(j);
-	memcpy(&xcore_dhara_limit_diag[12], xcore_dhara_sync_diag,
-	       sizeof(xcore_dhara_sync_diag));
-}
-
-void dhara_map_diag_clear(void)
-{
-	memset(xcore_dhara_limit_diag, 0, sizeof(xcore_dhara_limit_diag));
-	memset(xcore_dhara_sync_diag, 0, sizeof(xcore_dhara_sync_diag));
-}
-
-void dhara_map_diag_read(uint32_t *out)
-{
-	if (out)
-		memcpy(out, xcore_dhara_limit_diag, sizeof(xcore_dhara_limit_diag));
-}
-
 static inline dhara_sector_t d_bit(int depth)
 {
 	return ((dhara_sector_t)1) << (DHARA_RADIX_DEPTH - depth - 1);
@@ -319,7 +282,6 @@ static int try_recover(struct dhara_map *m, dhara_error_t cause,
 
 	while (dhara_journal_in_recovery(&m->journal)) {
 		if (++steps > XCORE_DHARA_MAX_RECOVERY_STEPS) {
-			record_limit_failure(2, steps, restart_count, m);
 			dhara_set_error(err, DHARA_E_TOO_BAD);
 			return -1;
 		}
@@ -340,7 +302,6 @@ static int try_recover(struct dhara_map *m, dhara_error_t cause,
 			}
 
 			if (restart_count >= DHARA_MAX_RETRIES) {
-				record_limit_failure(3, steps, restart_count, m);
 				dhara_set_error(err, DHARA_E_TOO_BAD);
 				return -1;
 			}
@@ -547,18 +508,9 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 	const dhara_page_t max_steps = dhara_journal_size(&m->journal) + 1;
 
 	/* Capture queue position and work performed if the bounded sync fails. */
-	xcore_dhara_sync_diag[0] = m->journal.tail;
-	xcore_dhara_sync_diag[1] = m->journal.tail_sync;
-	xcore_dhara_sync_diag[2] = m->journal.head;
-	xcore_dhara_sync_diag[3] = DHARA_PAGE_NONE;
-	xcore_dhara_sync_diag[4] = 0; /* successfully processed data pages */
-	xcore_dhara_sync_diag[5] = 0; /* padding operations */
-	xcore_dhara_sync_diag[6] = 0; /* raw GC failures */
-	xcore_dhara_sync_diag[7] = 0; /* recovery attempts */
 
 	while (!dhara_journal_is_clean(&m->journal)) {
 		if (++steps > max_steps) {
-			record_limit_failure(1, steps, 0, m);
 			dhara_set_error(err, DHARA_E_TOO_BAD);
 			return -1;
 		}
@@ -566,22 +518,17 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 		dhara_error_t my_err;
 		int ret;
 
-		xcore_dhara_sync_diag[3] = p;
 		if (p == DHARA_PAGE_NONE) {
-			xcore_dhara_sync_diag[5]++;
 			ret = pad_queue(m, &my_err);
 		} else {
 			ret = raw_gc(m, p, &my_err);
 			if (!ret) {
 				dhara_journal_dequeue(&m->journal);
-				xcore_dhara_sync_diag[4]++;
 			} else {
-				xcore_dhara_sync_diag[6]++;
 			}
 		}
 
 		if (ret < 0) {
-			xcore_dhara_sync_diag[7]++;
 			if (try_recover(m, my_err, err) < 0)
 				return -1;
 		}
