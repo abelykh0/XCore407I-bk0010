@@ -803,7 +803,11 @@ fn storage_test(
     report_storage_phase_counters(b"Before test write (init + preparation):\r\n");
     crate::dhara_fs::clear_storage_io_diagnostic();
     crate::nand_fs::clear_nand_read_diagnostic();
+    crate::nand_fs::clear_write_ecc_compare_diagnostic();
     crate::nand_fs::clear_nand_rb_wait_diagnostic();
+    // Compare the FSMC-generated ECC against the software implementation
+    // for every 512-byte chunk programmed while creating and flushing the file.
+    crate::nand_fs::set_software_ecc_compare_test_mode(true);
     write_status(b"WRITE: opening test file...\r\n");
     service_usb_only();
 
@@ -846,6 +850,7 @@ fn storage_test(
         },
     );
 
+    crate::nand_fs::set_software_ecc_compare_test_mode(false);
     if let Err(error) = write_result {
         let stage = if file_opened { b"write/flush" as &[u8] } else { b"open" };
         report_storage_test_io_failure(fs, stage, error.code());
@@ -963,7 +968,7 @@ fn storage_test(
     write_status(b"\r\n");
 
     let write_ecc = crate::nand_fs::write_ecc_compare_diagnostic();
-    write_status(b"WRITE-PATH ECC comparison (same 512-byte source data): chunks=");
+    write_status(b"WRITE-PATH ECC during file creation (same 512-byte source chunk): chunks=");
     write_decimal(write_ecc[0] as usize);
     write_status(b" mismatches=");
     write_decimal(write_ecc[1] as usize);
@@ -1004,6 +1009,18 @@ fn storage_test(
 
     if ecc[0] == 0 {
         write_status(b"\r\nSTORAGETEST INCOMPLETE: no tagged pages were checked by hardware ECC. Data readback succeeded, but ECC verification is not established. File retained as /.storage-test.\r\n> ");
+        return;
+    }
+    if write_ecc[0] == 0 {
+        write_status(b"\r\nSTORAGETEST INCOMPLETE: no page-program ECC comparisons were captured during file creation. File retained as /.storage-test.\r\n> ");
+        return;
+    }
+    if write_ecc[1] != 0 {
+        write_status(b"\r\nSTORAGETEST FAILED: FSMC write ECC differed from software ECC in ");
+        write_decimal(write_ecc[1] as usize);
+        write_status(b" of ");
+        write_decimal(write_ecc[0] as usize);
+        write_status(b" programmed chunks. File retained as /.storage-test.\r\n> ");
         return;
     }
     if ecc[2] != 0 {
