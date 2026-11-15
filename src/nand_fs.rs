@@ -56,6 +56,11 @@ static SOFTWARE_ECC_FIRST_PAGE: AtomicU32 = AtomicU32::new(0);
 static SOFTWARE_ECC_FIRST_CHUNK: AtomicU32 = AtomicU32::new(0);
 static SOFTWARE_ECC_FIRST_STORED: AtomicU32 = AtomicU32::new(0);
 static SOFTWARE_ECC_FIRST_CALCULATED: AtomicU32 = AtomicU32::new(0);
+static WRITE_ECC_COMPARE_COUNTS: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+static WRITE_ECC_FIRST_PAGE: AtomicU32 = AtomicU32::new(0);
+static WRITE_ECC_FIRST_CHUNK: AtomicU32 = AtomicU32::new(0);
+static WRITE_ECC_FIRST_HARDWARE: AtomicU32 = AtomicU32::new(0);
+static WRITE_ECC_FIRST_SOFTWARE: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn set_ecc_check_no_correct_test_mode(enabled: bool) {
     ECC_CHECK_NO_CORRECT_TEST_MODE.store(enabled, Ordering::SeqCst);
@@ -78,6 +83,16 @@ pub(crate) fn software_ecc_compare_diagnostic() -> [u32; 6] {
 
 pub(crate) fn set_software_ecc_test_mode(enabled: bool) {
     SOFTWARE_ECC_TEST_MODE.store(enabled, Ordering::SeqCst);
+}
+pub(crate) fn write_ecc_compare_diagnostic() -> [u32; 6] {
+    [
+        WRITE_ECC_COMPARE_COUNTS[0].load(Ordering::Acquire),
+        WRITE_ECC_COMPARE_COUNTS[1].load(Ordering::Acquire),
+        WRITE_ECC_FIRST_PAGE.load(Ordering::Acquire),
+        WRITE_ECC_FIRST_CHUNK.load(Ordering::Acquire),
+        WRITE_ECC_FIRST_HARDWARE.load(Ordering::Acquire),
+        WRITE_ECC_FIRST_SOFTWARE.load(Ordering::Acquire),
+    ]
 }
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
@@ -189,6 +204,11 @@ pub(crate) fn clear_nand_read_diagnostic() {
     NAND_READ_FAILURE_CALCULATED_ECC.store(0, Ordering::Release);
     for count in &ECC_READ_COUNTS { count.store(0, Ordering::Release); }
     for count in &SOFTWARE_ECC_COMPARE_COUNTS { count.store(0, Ordering::Release); }
+    for count in &WRITE_ECC_COMPARE_COUNTS { count.store(0, Ordering::Release); }
+    WRITE_ECC_FIRST_PAGE.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_HARDWARE.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_SOFTWARE.store(0, Ordering::Release);
     SOFTWARE_ECC_FIRST_PAGE.store(0, Ordering::Release);
     SOFTWARE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
     SOFTWARE_ECC_FIRST_STORED.store(0, Ordering::Release);
@@ -584,6 +604,21 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             } else {
                 ecc_end_chunk().0
             };
+            // Compare both algorithms over the exact same source bytes during
+            // the NAND program operation. This isolates write-path ECC capture
+            // from later NAND reads and historical pages.
+            if !software_ecc && SOFTWARE_ECC_COMPARE_TEST_MODE.load(Ordering::SeqCst) {
+                let software_ecc = ecc_software_512(chunk);
+                WRITE_ECC_COMPARE_COUNTS[0].fetch_add(1, Ordering::Relaxed);
+                if software_ecc != chunk_ecc {
+                    if WRITE_ECC_COMPARE_COUNTS[1].fetch_add(1, Ordering::Relaxed) == 0 {
+                        WRITE_ECC_FIRST_PAGE.store(page, Ordering::Relaxed);
+                        WRITE_ECC_FIRST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
+                        WRITE_ECC_FIRST_HARDWARE.store(chunk_ecc & 0x00FF_FFFF, Ordering::Relaxed);
+                        WRITE_ECC_FIRST_SOFTWARE.store(software_ecc, Ordering::Release);
+                    }
+                }
+            }
             encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
         }
     }
