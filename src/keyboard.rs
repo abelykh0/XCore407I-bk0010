@@ -173,24 +173,30 @@ pub extern "C" fn tuh_hid_report_received_cb(
 
         let selection = BOOT_SELECTION.load(Ordering::Acquire);
         if selection == BOOT_SELECTION_WAITING {
-            let selected = if bytes[2..8].contains(&0x43) {
-                BOOT_SELECTION_CDC
-            } else {
-                BOOT_SELECTION_NORMAL
-            };
-            if BOOT_SELECTION.compare_exchange(
-                BOOT_SELECTION_WAITING,
-                selected,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ).is_ok() {
-                // Do not forward the boot-selection report. In particular, F10
-                // must not become an emulator key when normal mode is selected.
-                unsafe {
-                    let mut keys = [0u8; 6];
-                    keys.copy_from_slice(&bytes[2..8]);
-                    PREVIOUS_KEYS = keys;
-                    PREVIOUS_MODIFIERS = bytes[0];
+            // Some boot keyboards send an all-zero "no keys pressed" report
+            // immediately after enumeration. It is not a mode-selection
+            // keystroke: keep waiting so the user can still press F10.
+            let has_key = bytes[2..8].iter().any(|key| *key != 0);
+            if has_key {
+                let selected = if bytes[2..8].contains(&0x43) {
+                    BOOT_SELECTION_CDC
+                } else {
+                    BOOT_SELECTION_NORMAL
+                };
+                if BOOT_SELECTION.compare_exchange(
+                    BOOT_SELECTION_WAITING,
+                    selected,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ).is_ok() {
+                    // Do not forward the boot-selection report. In particular,
+                    // F10 must not become an emulator key in normal mode.
+                    unsafe {
+                        let mut keys = [0u8; 6];
+                        keys.copy_from_slice(&bytes[2..8]);
+                        PREVIOUS_KEYS = keys;
+                        PREVIOUS_MODIFIERS = bytes[0];
+                    }
                 }
             }
         } else if selection == BOOT_SELECTION_NORMAL
