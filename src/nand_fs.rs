@@ -50,9 +50,30 @@ pub(crate) fn set_ecc_write_raw_read_test_mode(enabled: bool) {
 // Diagnostic mode: calculate/compare ECC on reads, but never mutate page data.
 static ECC_CHECK_NO_CORRECT_TEST_MODE: AtomicBool = AtomicBool::new(false);
 static SOFTWARE_ECC_TEST_MODE: AtomicBool = AtomicBool::new(false);
+static SOFTWARE_ECC_COMPARE_TEST_MODE: AtomicBool = AtomicBool::new(false);
+static SOFTWARE_ECC_COMPARE_COUNTS: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+static SOFTWARE_ECC_FIRST_PAGE: AtomicU32 = AtomicU32::new(0);
+static SOFTWARE_ECC_FIRST_CHUNK: AtomicU32 = AtomicU32::new(0);
+static SOFTWARE_ECC_FIRST_STORED: AtomicU32 = AtomicU32::new(0);
+static SOFTWARE_ECC_FIRST_CALCULATED: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn set_ecc_check_no_correct_test_mode(enabled: bool) {
     ECC_CHECK_NO_CORRECT_TEST_MODE.store(enabled, Ordering::SeqCst);
+}
+
+pub(crate) fn set_software_ecc_compare_test_mode(enabled: bool) {
+    SOFTWARE_ECC_COMPARE_TEST_MODE.store(enabled, Ordering::SeqCst);
+}
+
+pub(crate) fn software_ecc_compare_diagnostic() -> [u32; 6] {
+    [
+        SOFTWARE_ECC_COMPARE_COUNTS[0].load(Ordering::Acquire),
+        SOFTWARE_ECC_COMPARE_COUNTS[1].load(Ordering::Acquire),
+        SOFTWARE_ECC_FIRST_PAGE.load(Ordering::Acquire),
+        SOFTWARE_ECC_FIRST_CHUNK.load(Ordering::Acquire),
+        SOFTWARE_ECC_FIRST_STORED.load(Ordering::Acquire),
+        SOFTWARE_ECC_FIRST_CALCULATED.load(Ordering::Acquire),
+    ]
 }
 
 pub(crate) fn set_software_ecc_test_mode(enabled: bool) {
@@ -167,6 +188,11 @@ pub(crate) fn clear_nand_read_diagnostic() {
     NAND_READ_FAILURE_STORED_ECC.store(0, Ordering::Release);
     NAND_READ_FAILURE_CALCULATED_ECC.store(0, Ordering::Release);
     for count in &ECC_READ_COUNTS { count.store(0, Ordering::Release); }
+    for count in &SOFTWARE_ECC_COMPARE_COUNTS { count.store(0, Ordering::Release); }
+    SOFTWARE_ECC_FIRST_PAGE.store(0, Ordering::Release);
+    SOFTWARE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
+    SOFTWARE_ECC_FIRST_STORED.store(0, Ordering::Release);
+    SOFTWARE_ECC_FIRST_CALCULATED.store(0, Ordering::Release);
     ECC_LAST_PAGE.store(0, Ordering::Release);
     ECC_LAST_TAG.store(0, Ordering::Release);
     ECC_LAST_CHUNK.store(0, Ordering::Release);
@@ -930,6 +956,18 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             0,
         ]);
         let syndrome = (stored_ecc ^ calculated_ecc) & 0x00FF_FFFF;
+        if SOFTWARE_ECC_COMPARE_TEST_MODE.load(Ordering::SeqCst) {
+            let software_calculated = ecc_software_512(chunk);
+            SOFTWARE_ECC_COMPARE_COUNTS[0].fetch_add(1, Ordering::Relaxed);
+            if software_calculated != stored_ecc {
+                if SOFTWARE_ECC_COMPARE_COUNTS[1].fetch_add(1, Ordering::Relaxed) == 0 {
+                    SOFTWARE_ECC_FIRST_PAGE.store(page, Ordering::Relaxed);
+                    SOFTWARE_ECC_FIRST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
+                    SOFTWARE_ECC_FIRST_STORED.store(stored_ecc, Ordering::Relaxed);
+                    SOFTWARE_ECC_FIRST_CALCULATED.store(software_calculated, Ordering::Release);
+                }
+            }
+        }
         ECC_LAST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
         ECC_LAST_SYNDROME.store(syndrome, Ordering::Relaxed);
         ECC_LAST_STORED.store(stored_ecc, Ordering::Relaxed);
