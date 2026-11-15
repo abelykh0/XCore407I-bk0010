@@ -68,10 +68,13 @@ fn service_file_browser_io() {
         USB_HOST_TASK_PENDING.store(false, Ordering::Release);
     }
 
+    // A NAND wait hook must remain bounded. Prepare at most one video
+    // batch per invocation; draining the renderer here can monopolize the
+    // foreground while the NAND is busy and starve CDC/UVC servicing.
     let renderer = FILE_BROWSER_VIDEO_RENDERER.load(Ordering::Acquire);
     if !renderer.is_null() {
         unsafe {
-            while prepare_next_video_batch(&mut *renderer) {}
+            let _ = prepare_next_video_batch(&mut *renderer);
         }
     }
 }
