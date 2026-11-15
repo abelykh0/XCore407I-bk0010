@@ -723,6 +723,16 @@ fn main() -> ! {
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
             keyboard_queue_discard();
 
+            // Enter the browser visibly before any NAND/Dhara/LittleFS work.
+            // If mounting stalls or faults, the user can distinguish that
+            // from a failure to receive F2.
+            clear_demo_canvas(0);
+            show_file_browser_line(0, b"NAND FILES - SELECT PROGRAM", false);
+            show_file_browser_line(3, b"OPENING NAND STORAGE...", true);
+            show_file_browser_line(5, b"MOUNTING LITTLEFS", false);
+            show_file_browser_line(27, b"PLEASE WAIT", false);
+
+
             // NAND/LittleFS operations are synchronous. Install a narrowly
             // scoped hook so USB and the UVC producer continue running even
             // inside NAND ready/FSMC wait loops and ECC page processing.
