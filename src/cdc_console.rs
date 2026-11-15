@@ -1294,7 +1294,7 @@ pub fn service(
                         write_status(b"> ");
                     } else if command_is(line, b"ECCPROBE") {
                         const page: u32 = 1;
-                        write_status(b"\r\nECCPROBE: read-only ECCPS window test; page=0x");
+                        write_status(b"\r\nECCPROBE: read-only ECCPS and access-width test; page=0x");
                         write_hex_u32(page);
                         write_status(b"\r\n");
                         match crate::nand_fs::ecc_probe_chunk0(page) {
@@ -1319,6 +1319,10 @@ pub fn service(
                                 write_decimal(r[8] as usize);
                                 write_status(b" checksum=0x");
                                 write_hex_u32(r[9]);
+                                write_status(b"\r\nECC512-word=0x");
+                                write_hex_u32(r[10]);
+                                write_status(b" word-checksum=0x");
+                                write_hex_u32(r[11]);
                                 write_status(b"\r\n");
                             }
                             None => write_status(b"ECCPROBE failed: NAND read timeout\r\n"),
