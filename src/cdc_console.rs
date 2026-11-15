@@ -1544,7 +1544,7 @@ pub fn service(
                                 }
                             }
                             None => {
-                                write_status(b"ECCNANDTEST could not read a tagged ECC page at 0x0000FFC2. Run ECCTEST first; it erases one good physical block.\r\n");
+                                write_status(b"ECCNANDTEST could not read a tagged ECC page at 0x0000FFC2 (tag absent or NAND read failure). No NAND writes were performed; do not rerun ECCTEST yet.\r\n");
                             }
                         }
                         write_status(b"> ");
