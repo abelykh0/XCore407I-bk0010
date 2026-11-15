@@ -1489,7 +1489,7 @@ pub fn service(
                         }
                         write_status(b"(expected 00FFFFFF 00FFFFFF 00AAAAAA 00695659)\r\n");
                         match crate::nand_fs::ecc_standalone_read(0x0000_233F) {
-                            Some((stored, chunks, calculated_256, calculated_2048, calculated_software)) => {
+                            Some((stored, chunks, calculated_256, calculated_2048, calculated_software, _calculated_software_256)) => {
                                 for index in 0..4 {
                                     let chunk = chunks[index];
                                     write_status(b"512[");
