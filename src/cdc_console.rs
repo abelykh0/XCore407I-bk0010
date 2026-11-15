@@ -1297,8 +1297,10 @@ pub fn service(
                         let mut tagged_pages = 0u32;
                         let mut hardware_mismatch_chunks = 0u32;
                         let mut software_mismatch_chunks = 0u32;
-                        let mut first_mismatch = [0u32; 7];
-                        let mut first_mismatch_page = u32::MAX;
+                        let mut first_hardware_mismatch = [0u32; 7];
+                        let mut first_hardware_mismatch_page = u32::MAX;
+                        let mut first_software_mismatch = [0u32; 7];
+                        let mut first_software_mismatch_page = u32::MAX;
                         write_status(b"\r\nECCSCAN: read-only physical NAND scan; Dhara/LittleFS bypassed; no NAND writes. Pages=");
                         write_decimal(total_pages as usize);
                         write_status(b"\r\n");
@@ -1310,9 +1312,13 @@ pub fn service(
                                         tagged_pages += 1;
                                         hardware_mismatch_chunks += record[1];
                                         software_mismatch_chunks += record[2];
-                                        if first_mismatch_page == u32::MAX && record[3] != u32::MAX {
-                                            first_mismatch_page = page;
-                                            first_mismatch = record;
+                                        if record[1] != 0 && first_hardware_mismatch_page == u32::MAX {
+                                            first_hardware_mismatch_page = page;
+                                            first_hardware_mismatch = record;
+                                        }
+                                        if record[2] != 0 && first_software_mismatch_page == u32::MAX {
+                                            first_software_mismatch_page = page;
+                                            first_software_mismatch = record;
                                         }
                                     }
                                 }
@@ -1346,18 +1352,31 @@ pub fn service(
                         } else {
                             write_status(b"ECCSCAN completed.\r\n");
                         }
-                        if first_mismatch_page != u32::MAX {
-                            write_status(b"First mismatch: page=0x");
-                            write_hex_u32(first_mismatch_page);
+                        if first_hardware_mismatch_page != u32::MAX {
+                            write_status(b"First hardware mismatch: page=0x");
+                            write_hex_u32(first_hardware_mismatch_page);
                             write_status(b" chunk=");
-                            write_decimal(first_mismatch[3] as usize);
+                            write_decimal(first_hardware_mismatch[3] as usize);
                             write_status(b" stored=0x");
-                            write_hex_u32(first_mismatch[4]);
+                            write_hex_u32(first_hardware_mismatch[4]);
                             write_status(b" FSMC=0x");
-                            write_hex_u32(first_mismatch[5]);
+                            write_hex_u32(first_hardware_mismatch[5]);
                             write_status(b" software=0x");
-                            write_hex_u32(first_mismatch[6]);
-                            write_status(b"\r\n");
+                            write_hex_u32(first_hardware_mismatch[6]);
+                            write_status(b"\\r\\n");
+                        }
+                        if first_software_mismatch_page != u32::MAX {
+                            write_status(b"First software mismatch: page=0x");
+                            write_hex_u32(first_software_mismatch_page);
+                            write_status(b" chunk=");
+                            write_decimal(first_software_mismatch[3] as usize);
+                            write_status(b" stored=0x");
+                            write_hex_u32(first_software_mismatch[4]);
+                            write_status(b" FSMC=0x");
+                            write_hex_u32(first_software_mismatch[5]);
+                            write_status(b" software=0x");
+                            write_hex_u32(first_software_mismatch[6]);
+                            write_status(b"\\r\\n");
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCRAW") {
