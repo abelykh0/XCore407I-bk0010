@@ -540,6 +540,27 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
     ]
 }
 
+
+/// Read-only classification helpers used by the whole-device ECC scan.
+pub(crate) fn ecc_scan_block_bad(block: u32) -> Option<bool> {
+    if block >= PHYSICAL_BLOCKS { return None; }
+    let mut marker = [0xFFu8; 2];
+    for page in [block * PAGES_PER_BLOCK, block * PAGES_PER_BLOCK + 1] {
+        if !read_page(page, PAGE_SIZE as u16, &mut marker) { return None; }
+        if marker != [0xFF, 0xFF] { return Some(true); }
+    }
+    Some(false)
+}
+
+pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
+    let mut tag = [0u8; 2];
+    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16, &mut tag) {
+        return None;
+    }
+    Some(tag == ECC_TAG)
+}
+
 /// Read one tagged physical page and compare OOB, FSMC, and software ECC.
 /// This bypasses Dhara/LittleFS and never writes or alters NAND contents.
 pub(crate) struct EccPageComparison {
