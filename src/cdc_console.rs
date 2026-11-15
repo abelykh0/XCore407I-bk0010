@@ -945,7 +945,18 @@ fn storage_test(
         return;
     }
 
-    write_status(b"\r\nSTORAGETEST PASSED: wrote, flushed, reopened, and verified ");
+    if ecc[0] == 0 {
+        write_status(b"\r\nSTORAGETEST INCOMPLETE: no tagged pages were checked by software ECC. Data readback succeeded, but ECC verification is not established. File retained as /.storage-test.\r\n> ");
+        return;
+    }
+    if ecc[2] != 0 {
+        write_status(b"\r\nSTORAGETEST FAILED: data readback succeeded, but software ECC found mismatches in ");
+        write_decimal(ecc[2] as usize);
+        write_status(b" chunks. File retained as /.storage-test.\r\n> ");
+        return;
+    }
+
+    write_status(b"\r\nSTORAGETEST PASSED: data readback and software ECC verification succeeded for ");
     write_decimal(STORAGE_TEST_LENGTH);
     write_status(b" bytes. File retained as /.storage-test.\r\n> ");
 }
