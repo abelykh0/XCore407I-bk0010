@@ -125,9 +125,9 @@ fn block_is_bad(block: u32) -> Result<bool, ()> {
     let second_read = nand_fs::read_page(first_page + 1, PAGE_SIZE as u16, &mut marker);
     let second_bad = second_read && marker[0] != 0xFF;
 
-    // Either factory marker is sufficient. If either marker page cannot be
-    // read, conservatively retire the whole erase block instead of allowing
-    // Dhara/LittleFS to allocate or erase it.
+    // Either factory marker is sufficient. A marker read failure is not
+    // evidence of a physically bad block: it may be a transient bus/ECC
+    // failure. Never program NAND from this read-only query path.
     if first_bad || second_bad {
         return Ok(true);
     }
@@ -143,10 +143,10 @@ fn block_is_bad(block: u32) -> Result<bool, ()> {
         u32::MAX, block, Ordering::AcqRel, Ordering::Relaxed,
     ).ok();
 
-    // Best effort: write the standard factory/grown-bad marker to both
-    // marker pages and verify it. Even if the NAND refuses the marker write,
-    // this boot must still treat the unreadable block as bad.
-    let _ = mark_block_bad(block);
+    // Dhara's is_bad callback has no error channel. Conservatively report
+    // this block unavailable for the current operation, but leave its
+    // physical marker pages untouched. The format path propagates Err and
+    // aborts instead of silently retiring blocks after a read failure.
     Ok(true)
 }
 
