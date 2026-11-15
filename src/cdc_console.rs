@@ -853,6 +853,8 @@ fn storage_test(
     write_status(b"WRITE complete. Reopening file for readback...\r\n");
     service_usb_only();
     crate::dhara_fs::clear_storage_io_diagnostic();
+    // Exclude NAND reads performed during allocation, relocation, and flush.
+    // Count ECC comparisons only for the subsequent file readback.
     crate::nand_fs::clear_nand_read_diagnostic();
 
     let mut mismatch: Option<(usize, u8, u8)> = None;
@@ -910,7 +912,20 @@ fn storage_test(
     write_decimal(ecc[1] as usize);
     write_status(b" chunks with ECC mismatch=");
     write_decimal(ecc[2] as usize);
-    write_status(b"\r\nLast comparison: page=0x");
+    if ecc[2] != 0 {
+        write_status(b"First mismatch: page=0x");
+        write_hex_u32(ecc[26]);
+        write_status(b" chunk=");
+        write_decimal(ecc[27] as usize);
+        write_status(b" stored=0x");
+        write_hex_u32(ecc[29]);
+        write_status(b" calculated=0x");
+        write_hex_u32(ecc[30]);
+        write_status(b" syndrome=0x");
+        write_hex_u32(ecc[28]);
+        write_status(b"\r\n");
+    }
+    write_status(b"Last comparison: page=0x");
     write_hex_u32(ecc[5]);
     write_status(b" chunk=");
     write_decimal(ecc[7] as usize);
