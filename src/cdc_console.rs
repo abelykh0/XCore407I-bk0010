@@ -21,7 +21,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -1290,6 +1290,74 @@ pub fn service(
                             write_status(b" calculated ECC: 0x");
                             write_hex_u32(nand_calculated_ecc);
                             write_status(b"\r\n");
+                        }
+                        write_status(b"> ");
+                    } else if command_is(line, b"ECCSCAN") {
+                        const total_pages = crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK;
+                        let mut tagged_pages = 0u32;
+                        let mut hardware_mismatch_chunks = 0u32;
+                        let mut software_mismatch_chunks = 0u32;
+                        let mut first_mismatch = [0u32; 7];
+                        let mut first_mismatch_page = u32::MAX;
+                        write_status(b"\\r\\nECCSCAN: read-only physical NAND scan; Dhara/LittleFS bypassed; no NAND writes. Pages=");
+                        write_decimal(total_pages as usize);
+                        write_status(b"\\r\\n");
+                        let mut failed_page = u32::MAX;
+                        for page in 0..total_pages {
+                            match crate::nand_fs::ecc_scan_physical_page(page) {
+                                Some(record) => {
+                                    if record[0] != 0 {
+                                        tagged_pages += 1;
+                                        hardware_mismatch_chunks += record[1];
+                                        software_mismatch_chunks += record[2];
+                                        if first_mismatch_page == u32::MAX && record[3] != u32::MAX {
+                                            first_mismatch_page = page;
+                                            first_mismatch = record;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    failed_page = page;
+                                    break;
+                                }
+                            }
+                            if page != 0 && (page & 0x0FFF) == 0 {
+                                write_status(b"ECCSCAN progress: page ");
+                                write_decimal(page as usize);
+                                write_status(b" / ");
+                                write_decimal(total_pages as usize);
+                                write_status(b"\\r\\n");
+                            }
+                            if (page & 0x3F) == 0 {
+                                _service_background();
+                            }
+                        }
+                        write_status(b"ECCSCAN tagged pages=");
+                        write_decimal(tagged_pages as usize);
+                        write_status(b" hardware mismatch chunks=");
+                        write_decimal(hardware_mismatch_chunks as usize);
+                        write_status(b" software mismatch chunks=");
+                        write_decimal(software_mismatch_chunks as usize);
+                        write_status(b"\\r\\n");
+                        if failed_page != u32::MAX {
+                            write_status(b"ECCSCAN stopped: direct NAND read failed at page 0x");
+                            write_hex_u32(failed_page);
+                            write_status(b"\\r\\n");
+                        } else {
+                            write_status(b"ECCSCAN completed.\\r\\n");
+                        }
+                        if first_mismatch_page != u32::MAX {
+                            write_status(b"First mismatch: page=0x");
+                            write_hex_u32(first_mismatch_page);
+                            write_status(b" chunk=");
+                            write_decimal(first_mismatch[3] as usize);
+                            write_status(b" stored=0x");
+                            write_hex_u32(first_mismatch[4]);
+                            write_status(b" FSMC=0x");
+                            write_hex_u32(first_mismatch[5]);
+                            write_status(b" software=0x");
+                            write_hex_u32(first_mismatch[6]);
+                            write_status(b"\\r\\n");
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCRAW") {
