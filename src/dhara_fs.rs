@@ -443,6 +443,14 @@ impl DharaStorage {
     }
 
     pub fn new() -> Result<Self, crate::nand_fs::InitError> {
+        Self::new_with_progress(|_, _| {})
+    }
+
+    /// Initialize and validate the NAND volume, periodically returning control
+    /// to the caller while scanning physical bad-block markers.
+    pub fn new_with_progress(
+        mut progress: impl FnMut(u32, u32),
+    ) -> Result<Self, crate::nand_fs::InitError> {
         nand_fs::configure_fsmc();
         nand_fs::command(0xFF);
         if !nand_fs::wait_ready_status() {
@@ -498,6 +506,7 @@ impl DharaStorage {
                     Ok(false) => {}
                     Err(()) => return Err(crate::nand_fs::InitError::MarkerRead),
                 }
+                progress(block + 1, PHYSICAL_BLOCKS);
             }
         }
 
