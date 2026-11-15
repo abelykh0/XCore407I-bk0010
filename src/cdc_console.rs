@@ -1212,7 +1212,7 @@ pub fn service(
                             write_hex_u32(value);
                             write_status(b" ");
                         }
-                        write_status(b"(expected FFFFFF FFFFFF AAAAAA 695659)\r\n");
+                        write_status(b"(expected 00FFFFFF 00FFFFFF 00AAAAAA 00695659)\r\n");
                         match crate::nand_fs::ecc_standalone_read(0x0000_2391) {
                             Some((stored, chunks, calculated_256, calculated_2048, calculated_software)) => {
                                 for index in 0..4 {
