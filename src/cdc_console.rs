@@ -541,7 +541,7 @@ pub fn service(
                                 None => write_status(b"ECCCHECK could not read a tagged ECC page. Check page number, OOB tag, or NAND read status. No NAND writes were performed.\r\n"),
                             }
                         } else {
-                            write_status(b"\r\nUsage: ECCCHECK <hex physical page>, for example ECCCHECK 0x0000233F\r\n");
+                            write_status(b"\r\nUsage: ECCCHECK <hex physical page>, for example ECCCHECK 0x000039AB\r\n");
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"LIST") {
