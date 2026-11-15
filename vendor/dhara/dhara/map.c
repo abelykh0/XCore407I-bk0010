@@ -502,10 +502,12 @@ int dhara_map_trim(struct dhara_map *m, dhara_sector_t s, dhara_error_t *err)
 int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 {
 	unsigned int steps = 0;
-	/* The journal size is an upper bound on queued user pages. Unlike a
-	 * fixed small constant, this lets a healthy sync drain the current
-	 * backlog while keeping the loop bounded by the physical journal. */
-	const dhara_page_t max_steps = dhara_journal_size(&m->journal) + 1;
+	/* raw_gc() copies each live page to the head before dequeuing its
+	 * old location. The queue length therefore doesn't shrink until the
+	 * next checkpoint is written. Allow one full checkpoint interval in
+	 * addition to the initial queue size. */
+	const dhara_page_t max_steps = dhara_journal_size(&m->journal) +
+		(1U << m->journal.log2_ppc) + 1;
 
 	while (!dhara_journal_is_clean(&m->journal)) {
 		if (++steps > max_steps) {
