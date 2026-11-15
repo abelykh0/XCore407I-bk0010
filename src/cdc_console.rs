@@ -499,6 +499,29 @@ pub fn service(
                             _ => b"ZMODEM last failure: unknown stage.\r\n",
                         };
                         write_status(failure);
+                        if zmodem.last_error() == 6 {
+                            let (code, detail, received, consumed) = zmodem.protocol_diagnostics();
+                            let description: &[u8] = match code {
+                                1 => b"Malformed encoding", 2 => b"Malformed file size",
+                                3 => b"Malformed filename", 4 => b"Malformed frame",
+                                5 => b"Malformed header", 6 => b"Malformed packet",
+                                7 => b"Invalid receiver state", 8 => b"Backpressure",
+                                9 => b"Receiver buffer exhausted", 10 => b"CRC-16 mismatch",
+                                11 => b"CRC-32 mismatch", 12 => b"Unexpected EOF",
+                                13 => b"Unsupported feature", _ => b"Unclassified protocol error",
+                            };
+                            write_status(b"Protocol detail: ");
+                            write_status(description);
+                            write_status(b" (code 0x");
+                            write_hex_u32(code as u32);
+                            write_status(b", value 0x");
+                            write_hex_u32(detail as u32);
+                            write_status(b")\\r\\nCDC bytes received: 0x");
+                            write_hex_u32(received);
+                            write_status(b" parsed: 0x");
+                            write_hex_u32(consumed);
+                            write_status(b"\\r\\n");
+                        }
                         if zmodem.last_error() == 2 {
                             let (
                                 lfs_error, operation, location, storage_error,
