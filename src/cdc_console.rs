@@ -8,7 +8,7 @@ use crate::{cdc_zmodem, nand_fs::ActiveStorage, tusb};
 
 const LINE_CAPACITY: usize = 80;
 const STORAGE_TEST_PATH: &[u8] = b"/.storage-test\0";
-const STORAGE_TEST_LENGTH: usize = 1536;
+const STORAGE_TEST_LENGTH: usize = 1024 * 1024;
 const STORAGE_TEST_CHUNK: usize = 256;
 
 static mut LINE: [u8; LINE_CAPACITY] = [0; LINE_CAPACITY];
@@ -755,23 +755,6 @@ fn ecc_diagnostic_read(
     write_status(b"\\r\\n> ");
 }
 
-struct SoftwareEccTestModeGuard;
-
-impl SoftwareEccTestModeGuard {
-    fn enable() -> Self {
-        crate::nand_fs::set_software_ecc_test_mode(true);
-        crate::nand_fs::set_ecc_check_no_correct_test_mode(true);
-        Self
-    }
-}
-
-impl Drop for SoftwareEccTestModeGuard {
-    fn drop(&mut self) {
-        crate::nand_fs::set_ecc_check_no_correct_test_mode(false);
-        crate::nand_fs::set_software_ecc_test_mode(false);
-    }
-}
-
 fn storage_test(
     fs: &Filesystem<'_, ActiveStorage>,
     service_usb_only: &mut impl FnMut(),
@@ -781,11 +764,9 @@ fn storage_test(
         return;
     };
 
-    // Exercise the software Hamming implementation in both directions:
-    // generate OOB ECC on program, then recalculate it from NAND read data.
-    // Do not correct data during this experiment; report syndromes instead.
-    let _software_ecc_mode = SoftwareEccTestModeGuard::enable();
-    write_status(b"\r\nSTORAGETEST starting; SOFTWARE ECC WRITE + READ VERIFY, correction disabled; UVC/video servicing is paused.\r\n");
+    // Use the normal FSMC hardware ECC path for both programming and readback.
+    // This larger file spans many NAND pages and exercises ECC across them.
+    write_status(b"\r\nSTORAGETEST starting; 1 MiB file, FSMC hardware ECC; UVC/video servicing is paused.\r\n");
     service_usb_only();
     // Keep allocator history from the start of the test, including cleanup
     // and free-space traversal, rather than clearing it just before writes.
@@ -821,11 +802,13 @@ fn storage_test(
                     *byte = storage_test_byte(offset + index);
                 }
 
-                write_status(b"WRITE ");
-                write_decimal(offset);
-                write_status(b"/");
-                write_decimal(STORAGE_TEST_LENGTH);
-                write_status(b"\r\n");
+                if offset % (16 * 1024) == 0 {
+                    write_status(b"WRITE ");
+                    write_decimal(offset);
+                    write_status(b"/");
+                    write_decimal(STORAGE_TEST_LENGTH);
+                    write_status(b"\r\n");
+                }
                 service_usb_only();
 
                 let mut written = 0usize;
@@ -868,11 +851,13 @@ fn storage_test(
             let mut buffer = [0u8; STORAGE_TEST_CHUNK];
             while offset < STORAGE_TEST_LENGTH {
                 let requested = core::cmp::min(buffer.len(), STORAGE_TEST_LENGTH - offset);
-                write_status(b"READ ");
-                write_decimal(offset);
-                write_status(b"/");
-                write_decimal(STORAGE_TEST_LENGTH);
-                write_status(b"\r\n");
+                if offset % (16 * 1024) == 0 {
+                    write_status(b"READ ");
+                    write_decimal(offset);
+                    write_status(b"/");
+                    write_decimal(STORAGE_TEST_LENGTH);
+                    write_status(b"\r\n");
+                }
                 service_usb_only();
 
                 let count = file.read(&mut buffer[..requested])?;
@@ -906,14 +891,14 @@ fn storage_test(
     }
 
     let ecc = crate::nand_fs::ecc_read_diagnostic();
-    write_status(b"\r\nSOFTWARE ECC verification: tagged pages=");
+    write_status(b"\r\nHARDWARE ECC read diagnostics: tagged pages=");
     write_decimal(ecc[0] as usize);
     write_status(b" legacy pages=");
     write_decimal(ecc[1] as usize);
-    write_status(b" chunks with ECC mismatch=");
+    write_status(b" nonzero syndromes=");
     write_decimal(ecc[2] as usize);
     if ecc[2] != 0 {
-        write_status(b"First mismatch: page=0x");
+        write_status(b"First nonzero syndrome: page=0x");
         write_hex_u32(ecc[26]);
         write_status(b" chunk=");
         write_decimal(ecc[27] as usize);
@@ -961,17 +946,17 @@ fn storage_test(
     }
 
     if ecc[0] == 0 {
-        write_status(b"\r\nSTORAGETEST INCOMPLETE: no tagged pages were checked by software ECC. Data readback succeeded, but ECC verification is not established. File retained as /.storage-test.\r\n> ");
+        write_status(b"\r\nSTORAGETEST INCOMPLETE: no tagged pages were checked by hardware ECC. Data readback succeeded, but ECC verification is not established. File retained as /.storage-test.\r\n> ");
         return;
     }
     if ecc[2] != 0 {
-        write_status(b"\r\nSTORAGETEST FAILED: data readback succeeded, but software ECC found mismatches in ");
+        write_status(b"\r\nSTORAGETEST WARNING: data readback succeeded with nonzero hardware ECC syndromes in ");
         write_decimal(ecc[2] as usize);
-        write_status(b" chunks. File retained as /.storage-test.\r\n> ");
+        write_status(b" chunks; see correction counters above. File retained as /.storage-test.\r\n> ");
         return;
     }
 
-    write_status(b"\r\nSTORAGETEST PASSED: data readback and software ECC verification succeeded for ");
+    write_status(b"\r\nSTORAGETEST PASSED: data readback succeeded and hardware ECC reported zero syndromes for ");
     write_decimal(STORAGE_TEST_LENGTH);
     write_status(b" bytes. File retained as /.storage-test.\r\n> ");
 }
