@@ -548,48 +548,52 @@ pub fn service(
                         let mut first_stored = 0u32;
                         let mut first_hardware = 0u32;
                         let mut first_software = 0u32;
-                        write_status(b"Progress: one dot per 8 physical blocks (1024 blocks total).\r\n[");
+                        write_status(b"Progress: completed physical blocks (1024 total). Each line is one block.\r\n");
                         for block in 0..crate::nand_fs::PHYSICAL_BLOCKS {
-                            if block != 0 && block % 128 == 0 {
-                                write_status(b"]\r\n[");
-                            }
-                            if block % 8 == 0 {
-                                write_status(b".");
-                            }
+                            write_status(b"Block 0x");
+                            write_hex_u32(block);
+                            write_status(b": ");
                             match crate::nand_fs::ecc_scan_block_bad(block) {
-                                Some(true) => { bad_blocks += 1; continue; }
-                                Some(false) => { good_blocks += 1; }
-                                None => { block_read_errors += 1; write_status(b"Bad-block marker read failed at block 0x"); write_hex_u32(block); write_status(b"\r\n"); continue; }
-                            }
-                            let first = block * crate::nand_fs::PAGES_PER_BLOCK;
-                            for page in first..first + crate::nand_fs::PAGES_PER_BLOCK {
-                                match crate::nand_fs::ecc_scan_page_tagged(page) {
-                                    Some(false) => { untagged_pages += 1; continue; }
-                                    None => { page_read_errors += 1; continue; }
-                                    Some(true) => { tagged_pages += 1; }
-                                }
-                                match crate::nand_fs::ecc_software_compare_page(page) {
-                                    Some(result) => {
-                                        for chunk in 0..4 {
-                                            let stored = result.stored[chunk];
-                                            let hardware = result.hardware[chunk];
-                                            let software = result.software[chunk];
-                                            if stored == hardware && stored == software { matching_chunks += 1; }
-                                            else {
-                                                mismatching_chunks += 1;
-                                                if stored != hardware { stored_hardware_mismatches += 1; }
-                                                if stored != software { stored_software_mismatches += 1; }
-                                                if hardware != software { hardware_software_mismatches += 1; }
-                                                if first_mismatch {
-                                                    first_mismatch = false; first_page = page; first_chunk = chunk as u32;
-                                                    first_stored = stored; first_hardware = hardware; first_software = software;
+                                Some(true) => { bad_blocks += 1; write_status(b"bad\r\n"); }
+                                Some(false) => {
+                                    good_blocks += 1;
+                                    let first = block * crate::nand_fs::PAGES_PER_BLOCK;
+                                    for page in first..first + crate::nand_fs::PAGES_PER_BLOCK {
+                                        match crate::nand_fs::ecc_scan_page_tagged(page) {
+                                            Some(false) => { untagged_pages += 1; continue; }
+                                            None => { page_read_errors += 1; continue; }
+                                            Some(true) => { tagged_pages += 1; }
+                                        }
+                                        match crate::nand_fs::ecc_software_compare_page(page) {
+                                            Some(result) => {
+                                                for chunk in 0..4 {
+                                                    let stored = result.stored[chunk];
+                                                    let hardware = result.hardware[chunk];
+                                                    let software = result.software[chunk];
+                                                    if stored == hardware && stored == software { matching_chunks += 1; }
+                                                    else {
+                                                        mismatching_chunks += 1;
+                                                        if stored != hardware { stored_hardware_mismatches += 1; }
+                                                        if stored != software { stored_software_mismatches += 1; }
+                                                        if hardware != software { hardware_software_mismatches += 1; }
+                                                        if first_mismatch {
+                                                            first_mismatch = false; first_page = page; first_chunk = chunk as u32;
+                                                            first_stored = stored; first_hardware = hardware; first_software = software;
+                                                        }
+                                                    }
                                                 }
                                             }
+                                            None => { page_read_errors += 1; }
                                         }
                                     }
-                                    None => { page_read_errors += 1; }
+                                    write_status(b"complete\r\n");
+                                }
+                                None => {
+                                    block_read_errors += 1;
+                                    write_status(b"bad-block marker read failed\r\n");
                                 }
                             }
+                            _service_background();
                         }
                         write_status(b"]\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
                         write_status(b"  Bad blocks: "); write_decimal(bad_blocks as usize);
