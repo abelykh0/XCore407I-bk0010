@@ -1,19 +1,6 @@
 #include <stdint.h>
 #include "dhara/map.h"
 
-extern void dhara_map_diag_clear(void);
-extern void dhara_map_diag_read(uint32_t *out);
-
-void xcore_dhara_diag_clear(void)
-{
-	dhara_map_diag_clear();
-}
-
-void xcore_dhara_diag_read(uint32_t *out)
-{
-	dhara_map_diag_read(out);
-}
-
 #define XCORE_DHARA_PAGE_SIZE 2048
 #define XCORE_DHARA_LOG2_PAGE_SIZE 11
 #define XCORE_DHARA_LOG2_PAGES_PER_BLOCK 6
