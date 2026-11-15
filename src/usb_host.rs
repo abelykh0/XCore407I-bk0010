@@ -11,20 +11,27 @@ pub(crate) static USB_FS_STATUS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static USB_FS_READY: AtomicBool = AtomicBool::new(false);
 pub(crate) static USB_FS_RETRY_AT: AtomicU32 = AtomicU32::new(0);
 pub(crate) static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
+pub(crate) static USB_FS_LAST_ACTIVITY_TICK: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn note_usb_host_activity() {
+    USB_FS_LAST_ACTIVITY_TICK.store(crate::board::TICKS.load(Ordering::Relaxed), Ordering::Release);
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_enum_descriptor_device_cb(_dev_addr: u8, _desc: *const tusb::tusb_desc_device_t) {
     USB_FS_STATUS.store(7, Ordering::Release);
+    note_usb_host_activity();
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_enum_descriptor_configuration_cb(_dev_addr: u8, _cfg_index: u8, _desc: *const tusb::tusb_desc_configuration_t) -> bool {
     USB_FS_STATUS.store(8, Ordering::Release);
+    note_usb_host_activity();
     true
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn tuh_mount_cb(_dev_addr: u8) { USB_FS_STATUS.store(3, Ordering::Release); }
+pub extern "C" fn tuh_mount_cb(_dev_addr: u8) { USB_FS_STATUS.store(3, Ordering::Release); note_usb_host_activity(); }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_umount_cb(_dev_addr: u8) { USB_FS_STATUS.store(5, Ordering::Release); }
@@ -55,6 +62,7 @@ pub(crate) fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
 
     if unsafe { tusb::tuh_rhport_init(0, &rh_init) } {
         USB_FS_STATUS.store(1, Ordering::Release);
+        note_usb_host_activity();
         USB_FS_READY.store(true, Ordering::Release);
         USB_HOST_TASK_PENDING.store(false, Ordering::Release);
         unsafe {
