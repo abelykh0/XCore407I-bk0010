@@ -550,6 +550,12 @@ pub fn service(
                         let mut first_software = 0u32;
                         write_status(b"Progress: one dot per 8 physical blocks (1024 blocks total).\r\n[");
                         for block in 0..crate::nand_fs::PHYSICAL_BLOCKS {
+                            if block != 0 && block % 128 == 0 {
+                                write_status(b"]\r\n[");
+                            }
+                            if block % 8 == 0 {
+                                write_status(b".");
+                            }
                             match crate::nand_fs::ecc_scan_block_bad(block) {
                                 Some(true) => { bad_blocks += 1; continue; }
                                 Some(false) => { good_blocks += 1; }
@@ -583,12 +589,6 @@ pub fn service(
                                     }
                                     None => { page_read_errors += 1; }
                                 }
-                            }
-                            if block % 8 == 7 {
-                                write_status(b".");
-                            }
-                            if block % 128 == 127 {
-                                write_status(b"]\r\n[");
                             }
                         }
                         write_status(b"]\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
