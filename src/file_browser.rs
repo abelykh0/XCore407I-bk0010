@@ -100,7 +100,7 @@ pub(crate) fn list_root_files(
             }
             Ok(count)
         })
-    }, progress)
+    })
 }
 
 pub(crate) fn draw_file_browser(
