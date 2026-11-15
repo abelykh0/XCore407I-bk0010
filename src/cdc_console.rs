@@ -220,8 +220,10 @@ pub fn report_format_failure(error: crate::nand_fs::InitError) {
     write_status(reason);
     write_status(b".\r\n");
 
-    let (format_stage, format_location, format_detail, format_return) =
-        crate::dhara_fs::format_diagnostic();
+    let (
+        format_stage, format_location, format_detail, format_return,
+        provision_phase, bad_calls, first_bad_block, bad_reason, is_bad_calls,
+    ) = crate::dhara_fs::format_diagnostic();
     if format_stage != 0 {
         write_status(b"Format stage 0x");
         write_hex_u32(format_stage);
@@ -231,6 +233,17 @@ pub fn report_format_failure(error: crate::nand_fs::InitError) {
         write_hex_u32(format_detail);
         write_status(b", return 0x");
         write_hex_u32(format_return);
+        write_status(b"\r\n");
+        write_status(b"Provision phase (1=write, 2=sync): 0x");
+        write_hex_u32(provision_phase);
+        write_status(b", is_bad calls: 0x");
+        write_hex_u32(is_bad_calls);
+        write_status(b", bad results: 0x");
+        write_hex_u32(bad_calls);
+        write_status(b", first bad block: 0x");
+        write_hex_u32(first_bad_block);
+        write_status(b", bad reason: 0x");
+        write_hex_u32(bad_reason);
         write_status(b"\r\n");
     }
 
