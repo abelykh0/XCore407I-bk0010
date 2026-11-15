@@ -644,36 +644,14 @@ pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[
 /// Read-only classification helpers used by the whole-device ECC scan.
 pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<u8> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
-    // K9F1G08U0E factory/grown-bad marker is spare-area byte zero.
-    // Match Dhara's block_is_bad() exactly; spare byte one is not part of
-    // the marker and must not be used to classify a block.
+
+    // Use exactly the same marker read as Dhara's block_is_bad(): one byte
+    // at spare-area column PAGE_SIZE. Do not change FSMC timing or the NAND
+    // service hook here; the diagnostic must not use a different bus path.
     let mut marker = [0xFFu8; 1];
-
-    // ECCSCAN is a standalone diagnostic. Do not run the USB/UVC/video service
-    // hook from inside this low-level marker read: it can obscure whether a
-    // NAND wait is actually returning. The caller services USB immediately
-    // before and after each marker read.
-    let hook = NAND_IO_SERVICE_HOOK.swap(core::ptr::null_mut(), Ordering::AcqRel);
-
-    // The FSMC NWAIT input is useful for normal NAND traffic, but it can
-    // stall a CPU load/store before the software ready/busy timeout gets a
-    // chance to run. For this diagnostic marker read, disable NWAIT and use
-    // the NAND R/B GPIO polling in read_page() as the sole readiness check.
-    // Restore the complete PCR2 value immediately after the bounded read.
-    let pcr = unsafe { read_volatile(FSMC_PCR2) };
-    unsafe {
-        write_volatile(FSMC_PCR2, pcr & !(1 << 1));
-        let _ = read_volatile(FSMC_PCR2);
+    if !read_page(page, PAGE_SIZE as u16, &mut marker) {
+        return None;
     }
-    let read_ok = read_page(page, PAGE_SIZE as u16, &mut marker);
-    unsafe {
-        write_volatile(FSMC_PCR2, pcr);
-        let _ = read_volatile(FSMC_PCR2);
-    }
-
-    NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
-
-    if !read_ok { return None; }
     Some(marker[0])
 }
 
