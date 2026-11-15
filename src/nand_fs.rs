@@ -906,7 +906,7 @@ pub(crate) fn ecc_standalone_read(
 /// Returns None on NAND I/O failure; untagged pages return an all-zero record.
 /// Record: tagged, hardware mismatches, software mismatches, first chunk,
 /// first stored ECC, first FSMC ECC, first software ECC.
-pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 7]> {
+pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 12]> {
     let mut tag = [0u8; 2];
     if !read_page(
         page,
@@ -923,6 +923,8 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 7]> {
     // for the data transfer. Retain the bytes for the independent SW result.
     let mut data = [0u8; PAGE_SIZE];
     let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    let mut pcr_enable = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    let mut pcr_capture = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     command(0x00);
     address(0);
     address(0);
@@ -933,7 +935,7 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 7]> {
         return None;
     }
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let _ = ecc_begin_chunk();
+        pcr_enable[index] = ecc_begin_chunk();
         for byte in chunk.iter_mut() {
             *byte = read_data();
         }
@@ -941,7 +943,9 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 7]> {
             let _ = ecc_end_chunk();
             return None;
         }
-        hardware[index] = ecc_end_chunk().0 & 0x00FF_FFFF;
+        let (calculated, capture) = ecc_end_chunk();
+        hardware[index] = calculated & 0x00FF_FFFF;
+        pcr_capture[index] = capture;
     }
 
     let mut stored_bytes = [0u8; ECC_OOB_BYTES];
@@ -949,7 +953,7 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 7]> {
         return None;
     }
 
-    let mut result = [0u32; 7];
+    let mut result = [0u32; 12];
     result[0] = 1;
     result[3] = u32::MAX;
     for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
@@ -971,6 +975,12 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 7]> {
             result[4] = stored;
             result[5] = hardware[index];
             result[6] = software;
+            let chunk_data = &data[index * FSMC_ECC_CHUNK_SIZE..(index + 1) * FSMC_ECC_CHUNK_SIZE];
+            result[7] = chunk_data.iter().filter(|&&byte| byte != 0xFF).count() as u32;
+            result[8] = chunk_data[0] as u32;
+            result[9] = chunk_data[chunk_data.len() - 1] as u32;
+            result[10] = pcr_enable[index];
+            result[11] = pcr_capture[index];
         }
     }
     Some(result)
