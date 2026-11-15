@@ -21,7 +21,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCPROBE       Probe FSMC ECC read timing on physical page 1; read-only\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCPROBE       Probe FSMC ECC read timing on physical page 1; read-only\r\n  ECCTEST        DESTRUCTIVE: erase one good block and test ECC\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -1329,8 +1329,8 @@ pub fn service(
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCTEST") {
-                        write_status(b"\\r\\nECCTEST: DESTRUCTIVE raw NAND test; Dhara/LittleFS bypassed.\\r\\n");
-                        write_status(b"Erasing the highest-numbered good physical block; its contents will be lost.\\r\\n");
+                        write_status(b"\r\nECCTEST: DESTRUCTIVE raw NAND test; Dhara/LittleFS bypassed.\r\n");
+                        write_status(b"Erasing the highest-numbered good physical block; its contents will be lost.\r\n");
                         match crate::nand_fs::ecc_destructive_test() {
                             Some(r) => {
                                 write_status(b"Block=0x");
@@ -1339,7 +1339,7 @@ pub fn service(
                                 write_hex_u32(r[1]);
                                 write_status(b" raw-data mismatches=");
                                 write_decimal(r[2] as usize);
-                                write_status(b"\\r\\nWrite ECC chunks=");
+                                write_status(b"\r\nWrite ECC chunks=");
                                 write_decimal(r[3] as usize);
                                 write_status(b" write/software mismatches=");
                                 write_decimal(r[4] as usize);
@@ -1347,7 +1347,7 @@ pub fn service(
                                 write_hex_u32(r[5]);
                                 write_status(b" SW=0x");
                                 write_hex_u32(r[6]);
-                                write_status(b"\\r\\nChunk  stored      read-HW     software\\r\\n");
+                                write_status(b"\r\nChunk  stored      read-HW     software\r\n");
                                 for i in 0..4 {
                                     write_status(b"  ");
                                     write_decimal(i);
@@ -1357,12 +1357,12 @@ pub fn service(
                                     write_hex_u32(r[11 + i]);
                                     write_status(b"  0x");
                                     write_hex_u32(r[15 + i]);
-                                    write_status(b"\\r\\n");
+                                    write_status(b"\r\n");
                                 }
                             }
-                            None => write_status(b"ECCTEST FAILED: NAND read/erase/program operation failed. Check NAND status and bad-block markers.\\r\\n"),
+                            None => write_status(b"ECCTEST FAILED: NAND read/erase/program operation failed. Check NAND status and bad-block markers.\r\n"),
                         }
-                        write_status(b"Dhara/LittleFS metadata was not updated; the tested block is outside their allocation protocol.\\r\\n> ");
+                        write_status(b"Dhara/LittleFS metadata was not updated; the tested block is outside their allocation protocol.\r\n> ");
                     } else if command_is(line, b"ECCSCAN") {
                         const total_pages: u32 = crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK;
                         let mut tagged_pages = 0u32;
@@ -1444,7 +1444,7 @@ pub fn service(
                             write_hex_u32(first_hardware_mismatch[10]);
                             write_status(b" PCR-capture=0x");
                             write_hex_u32(first_hardware_mismatch[11]);
-                            write_status(b"\\r\\n");
+                            write_status(b"\r\n");
                         }
                         if first_software_mismatch_page != u32::MAX {
                             write_status(b"First software mismatch: page=0x");
@@ -1457,7 +1457,7 @@ pub fn service(
                             write_hex_u32(first_software_mismatch[5]);
                             write_status(b" software=0x");
                             write_hex_u32(first_software_mismatch[6]);
-                            write_status(b"\\r\\n");
+                            write_status(b"\r\n");
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCRAW") {
