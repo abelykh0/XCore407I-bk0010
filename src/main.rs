@@ -747,7 +747,7 @@ fn main() -> ! {
                     } else if done == 1 || done % 32 == 0 || done == total {
                         let percent = done.saturating_mul(100) / total;
                         let mut line = [b' '; 32];
-                        line[..12].copy_from_slice(b"F2: NAND SCAN");
+                        line[..13].copy_from_slice(b"F2: NAND SCAN");
                         line[13] = b'0' + ((percent / 100) % 10) as u8;
                         line[14] = b'0' + ((percent / 10) % 10) as u8;
                         line[15] = b'0' + (percent % 10) as u8;
