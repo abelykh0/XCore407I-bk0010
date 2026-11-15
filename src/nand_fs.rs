@@ -663,7 +663,17 @@ pub enum FsAccessError {
 pub fn with_mounted_detailed<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
 ) -> Result<R, FsAccessError> {
-    let mut storage = ActiveStorage::new().map_err(FsAccessError::Init)?;
+    with_mounted_detailed_with_progress(service, |_, _| {})
+}
+
+/// Mount the active volume while periodically allowing time-critical services
+/// to run during the physical bad-block marker scan.
+pub fn with_mounted_detailed_with_progress<R>(
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
+    progress: impl FnMut(u32, u32),
+) -> Result<R, FsAccessError> {
+    let mut storage =
+        ActiveStorage::new_with_progress(progress).map_err(FsAccessError::Init)?;
     // Mount directly rather than using is_mountable(): the latter only
     // returns a bool and discards LittleFS's actual error code.
     // Nest the service result so a caller-operation error remains distinct.
