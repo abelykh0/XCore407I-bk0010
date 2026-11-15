@@ -755,19 +755,19 @@ fn ecc_diagnostic_read(
     write_status(b"\r\n> ");
 }
 
-struct EccNoCorrectionGuard;
+struct EccDiagnosticGuard;
 
-impl EccNoCorrectionGuard {
+impl EccDiagnosticGuard {
     fn enable() -> Self {
-        crate::nand_fs::set_ecc_check_no_correct_test_mode(true);
+        // Keep the independent software comparison enabled, but do not
+        // suppress the production correction path during STORAGETEST.
         crate::nand_fs::set_software_ecc_compare_test_mode(true);
         Self
     }
 }
 
-impl Drop for EccNoCorrectionGuard {
+impl Drop for EccDiagnosticGuard {
     fn drop(&mut self) {
-        crate::nand_fs::set_ecc_check_no_correct_test_mode(false);
         crate::nand_fs::set_software_ecc_compare_test_mode(false);
     }
 }
@@ -781,11 +781,10 @@ fn storage_test(
         return;
     };
 
-    // Keep hardware ECC generation enabled on writes and calculate ECC on reads,
-    // but suppress data correction during this stress test. Existing syndromes
-    // are still counted; read buffers remain unchanged by the ECC decoder.
-    let _no_ecc_correction = EccNoCorrectionGuard::enable();
-    write_status(b"\r\nSTORAGETEST starting; 1 MiB file, FSMC ECC generation/checking enabled, data correction disabled; UVC/video servicing is paused.\r\n");
+    // Exercise the normal production read-correction path while comparing
+    // write-time FSMC ECC against the independent software implementation.
+    let _ecc_diagnostics = EccDiagnosticGuard::enable();
+    write_status(b"\r\nSTORAGETEST starting; 1 MiB file, FSMC ECC generation/checking and data correction enabled; UVC/video servicing is paused.\r\n");
     service_usb_only();
     // Keep allocator history from the start of the test, including cleanup
     // and free-space traversal, rather than clearing it just before writes.
