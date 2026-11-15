@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -546,6 +546,35 @@ pub fn service(
                                 write_status(b"READ FAILED");
                             }
                             write_status(b"\\r\\n");
+                        }
+                        write_status(b"> ");
+                    } else if command_is(line, b"NANDRESETTEST") {
+                        write_status(b"\r\nNANDRESETTEST: three raw reads per location; NAND RESET + STATUS before each read. No NAND writes or erases.\r\n");
+                        let (reset_ok, read_ok, data) = crate::nand_fs::ecc_scan_reset_page_probe();
+                        let labels = [
+                            b"Page 0 col 0" as &[u8], b"Page 0 col 1",
+                            b"Page 0 col 512", b"Page 0 spare",
+                            b"Page 0x83 col 0", b"Page 0x83 col 1",
+                            b"Page 0x83 col 512", b"Page 0x83 spare",
+                        ];
+                        for i in 0..8 {
+                            for repeat in 0..3 {
+                                write_status(labels[i]);
+                                write_status(b" run ");
+                                write_decimal(repeat + 1);
+                                write_status(b": ");
+                                if !reset_ok[i][repeat] {
+                                    write_status(b"RESET/STATUS FAILED");
+                                } else if !read_ok[i][repeat] {
+                                    write_status(b"PAGE READ FAILED");
+                                } else {
+                                    for (j, byte) in data[i][repeat].iter().enumerate() {
+                                        if j != 0 { write_status(b" "); }
+                                        write_hex_u32(*byte as u32);
+                                    }
+                                }
+                                write_status(b"\r\n");
+                            }
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"NANDPROBE") {
