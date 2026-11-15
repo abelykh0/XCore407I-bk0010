@@ -1319,6 +1319,10 @@ pub fn service(
                                 write_decimal(r[8] as usize);
                                 write_status(b" checksum=0x");
                                 write_hex_u32(r[9]);
+                                write_status(b"\r\nPATT2-before=0x");
+                                write_hex_u32(r[10]);
+                                write_status(b" PATT2-ATTHOLD7=0x");
+                                write_hex_u32(r[11]);
                                 write_status(b"\r\n");
                             }
                             None => write_status(b"ECCPROBE failed: NAND read timeout\r\n"),
