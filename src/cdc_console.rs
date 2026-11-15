@@ -1370,6 +1370,11 @@ pub fn service(
                                 }
                                 write_status(b"\r\nECCPS=2048: 0x");
                                 write_hex_u32(r[29]);
+                                write_status(b"\r\nLinux software ECCPS=256:");
+                                for i in 0..8 {
+                                    write_status(b" 0x");
+                                    write_hex_u32(r[30 + i]);
+                                }
                                 write_status(b"\r\n");
                             }
                             None => write_status(b"ECCTEST FAILED: NAND read/erase/program operation failed. Check NAND status and bad-block markers.\r\n"),
