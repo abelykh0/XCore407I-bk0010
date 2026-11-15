@@ -368,16 +368,17 @@ impl DharaStorage {
         marker.fill(0xFF);
         marker[..VOLUME_MARKER.len()].copy_from_slice(VOLUME_MARKER);
         let mut error = 0i32;
-        if unsafe {
+        let provision_result = unsafe {
             xcore_dhara_map_provision(
                 VOLUME_MARKER_SECTOR,
                 marker.as_ptr(),
                 &mut error,
             )
-        } != 0 {
+        };
+        if provision_result != 0 {
             FORMAT_FAILURE_STAGE.store(2, Ordering::Release);
             FORMAT_FAILURE_DETAIL.store(error as u32, Ordering::Release);
-            FORMAT_FAILURE_RETURN.store(1, Ordering::Release);
+            FORMAT_FAILURE_RETURN.store(provision_result as u32, Ordering::Release);
             return Err(crate::nand_fs::InitError::ProvisionFailed);
         }
 
