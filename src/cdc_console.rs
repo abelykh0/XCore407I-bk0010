@@ -529,8 +529,13 @@ pub fn service(
                     } else if command_is(line, b"NANDPAGEPROBE") {
                         write_status(b"\\r\\nNANDPAGEPROBE: read-only raw page reads; no NAND writes or erases.\\r\\n");
                         let (ok, data) = crate::nand_fs::ecc_scan_page_probe();
-                        let labels = [b"Page 0 main: " as &[u8], b"Page 0 spare: ", b"Page 0x83 main: ", b"Page 0x83 spare: "];
-                        for i in 0..4 {
+                        let labels = [
+                            b"Page 0 col 0: " as &[u8], b"Page 0 col 1: ",
+                            b"Page 0 col 512: ", b"Page 0x83 col 0: ",
+                            b"Page 0x83 col 1: ", b"Page 0x83 col 512: ",
+                            b"Page 0 spare: ", b"Page 0x83 spare: ",
+                        ];
+                        for i in 0..8 {
                             write_status(labels[i]);
                             if ok[i] {
                                 for (j, byte) in data[i].iter().enumerate() {
