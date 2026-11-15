@@ -923,6 +923,87 @@ pub(crate) fn ecc_correction_selftest() -> [u32; 6] {
     ]
 }
 
+/// Validate correction against a real NAND page without modifying NAND.
+/// The page must contain the four tagged 512-byte ECC values written by ECCTEST.
+/// Returns [chunks checked, baseline ECC mismatches, single-bit tests,
+/// single-bit failures, ECC-bit tests, ECC-bit failures, double-bit tests,
+/// double-bit miscorrections].
+pub(crate) fn ecc_nand_correction_test(page: u32) -> Option<[u32; 8]> {
+    let mut original = [0u8; PAGE_SIZE];
+    if !read_page(page, 0, &mut original) {
+        return None;
+    }
+
+    // Refuse to treat arbitrary or legacy OOB contents as a valid ECC page.
+    let mut tag = [0u8; 2];
+    let tag_column = PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16;
+    if !read_page(page, tag_column, &mut tag) || tag != ECC_TAG {
+        return None;
+    }
+
+    // Capture the actual FSMC read ECC and stored OOB values independently.
+    let (stored, hardware_chunks, _, _, _, _) = ecc_standalone_read(page)?;
+    let mut result = [0u32; 8];
+
+    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+        let start = index * FSMC_ECC_CHUNK_SIZE;
+        let end = start + FSMC_ECC_CHUNK_SIZE;
+        let source = &original[start..end];
+        let software_ecc = ecc_software_512_fsmc(source);
+        result[0] += 1;
+        if stored[index] != software_ecc
+            || stored[index] != hardware_chunks[index].calculated
+        {
+            result[1] += 1;
+        }
+
+        // Inject one data-bit error in RAM, then require exact restoration.
+        let mut damaged = [0u8; FSMC_ECC_CHUNK_SIZE];
+        damaged.copy_from_slice(source);
+        let bit = (index * 977 + 13) % (FSMC_ECC_CHUNK_SIZE * 8);
+        damaged[bit / 8] ^= 1 << (bit % 8);
+        let damaged_ecc = ecc_software_512_fsmc(&damaged);
+        let corrected = correct_ecc_chunk(&mut damaged, stored[index], damaged_ecc);
+        result[2] += 1;
+        if !corrected || damaged.as_slice() != source {
+            result[3] += 1;
+        }
+
+        // Every ECC parity bit must be recognized without changing data.
+        for ecc_bit in 0..24 {
+            let mut unchanged = [0u8; FSMC_ECC_CHUNK_SIZE];
+            unchanged.copy_from_slice(source);
+            let accepted = correct_ecc_chunk(
+                &mut unchanged,
+                stored[index] ^ (1 << ecc_bit),
+                hardware_chunks[index].calculated,
+            );
+            result[4] += 1;
+            if !accepted || unchanged.as_slice() != source {
+                result[5] += 1;
+            }
+        }
+
+        // Two independent data-bit flips must not be "corrected" as one bit.
+        let mut double_damaged = [0u8; FSMC_ECC_CHUNK_SIZE];
+        double_damaged.copy_from_slice(source);
+        double_damaged[13] ^= 1 << 2;
+        double_damaged[201] ^= 1 << 5;
+        let double_ecc = ecc_software_512_fsmc(&double_damaged);
+        let accepted = correct_ecc_chunk(
+            &mut double_damaged,
+            stored[index],
+            double_ecc,
+        );
+        result[6] += 1;
+        if accepted || double_damaged.as_slice() != &source[..] {
+            result[7] += 1;
+        }
+    }
+
+    Some(result)
+}
+
 fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     if data.len() != FSMC_ECC_CHUNK_SIZE {
         return false;
