@@ -990,13 +990,17 @@ pub(crate) fn ecc_nand_correction_test(page: u32) -> Option<[u32; 8]> {
         double_damaged[13] ^= 1 << 2;
         double_damaged[201] ^= 1 << 5;
         let double_ecc = ecc_software_512_fsmc(&double_damaged);
+        // Rejection must leave the already-corrupted RAM buffer unchanged.
+        // Comparing against the pristine source would incorrectly count
+        // every correctly rejected double-bit error as a miscorrection.
+        let before_correction = double_damaged;
         let accepted = correct_ecc_chunk(
             &mut double_damaged,
             stored[index],
             double_ecc,
         );
         result[6] += 1;
-        if accepted || double_damaged.as_slice() != &source[..] {
+        if accepted || double_damaged != before_correction {
             result[7] += 1;
         }
     }
