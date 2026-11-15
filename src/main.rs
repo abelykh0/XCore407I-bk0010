@@ -44,7 +44,7 @@ use file_browser::{
 };
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
-    configure_usb_host_task_timer, try_init_usb_fs_host, USB_FS_READY,
+    configure_usb_host_task_timer, restart_usb_fs_host, try_init_usb_fs_host, USB_FS_READY,
     USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
     USB_FS_LAST_ACTIVITY_TICK,
 };
@@ -499,6 +499,22 @@ fn main() -> ! {
     let mut diagnostic_last_pdp = pacing_start_cycles;
 
     loop {
+        // If the host initialized but never discovered a boot keyboard,
+        // restart the complete TinyUSB/HCD instance periodically. A plain
+        // RCC reset is insufficient because TinyUSB otherwise still considers
+        // rhport 0 active and skips hcd_init() on the next tuh_rhport_init().
+        const USB_HOST_NO_KEYBOARD_RESTART_MS: u32 = 5_000;
+        if !cdc_enabled
+            && !keyboard::keyboard_is_mounted()
+            && USB_FS_READY.load(Ordering::Acquire)
+        {
+            let now = TICKS.load(Ordering::Relaxed);
+            let last_activity = USB_FS_LAST_ACTIVITY_TICK.load(Ordering::Acquire);
+            if now.wrapping_sub(last_activity) >= USB_HOST_NO_KEYBOARD_RESTART_MS {
+                let _ = restart_usb_fs_host(&device.RCC, &device.TIM3, &mut core.NVIC);
+            }
+        }
+
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
         if !USB_FS_READY.load(Ordering::Acquire) {
