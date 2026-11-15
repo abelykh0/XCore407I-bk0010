@@ -527,6 +527,7 @@ pub(crate) fn ecc_standalone_read(
     [u32; 4],
     [EccStandaloneChunk; FSMC_ECC_CHUNKS_PER_PAGE],
     [u32; 8],
+    u32,
 )> {
     let mut data = [0u8; PAGE_SIZE];
 
@@ -621,7 +622,30 @@ pub(crate) fn ecc_standalone_read(
     }
     debug_assert_eq!(remaining, 0);
 
-    Some((stored, chunks, calculated_256))
+    // Finally calculate ECC over the entire 2 KiB page in one window.
+    // ECCPS=011 selects 2048 bytes, so this avoids all per-512-byte
+    // accumulator resets. This is read-only and is not compared with OOB,
+    // whose current layout stores four independent 512-byte ECC values.
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb() {
+        return None;
+    }
+    let _ = ecc_begin_chunk_size(3);
+    for _ in 0..PAGE_SIZE {
+        let _ = read_data();
+    }
+    if !wait_fsmc_fifo_empty() {
+        let _ = ecc_end_chunk();
+        return None;
+    }
+    let calculated_2048 = ecc_end_chunk().0 & 0x0FFF_FFFF;
+
+    Some((stored, chunks, calculated_256, calculated_2048))
 }
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
