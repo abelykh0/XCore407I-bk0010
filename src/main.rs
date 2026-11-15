@@ -110,11 +110,43 @@ fn main() -> ! {
         );
     }
 
-    // Temporarily default to CDC mode. Boot-keyboard selection (F10) is
-    // bypassed until the USB host selection path is restored.
-    let boot_mode = keyboard::BOOT_SELECTION_CDC;
-    let cdc_enabled = true;
-    let emulator_enabled = false;
+    // Give the boot keyboard up to 10 seconds to select CDC mode with F10.
+    // Any other first report selects normal emulator mode; no keyboard also
+    // defaults to normal mode when the selection window expires.
+    const BOOT_SELECTION_TIMEOUT_MS: u32 = 10_000;
+    let selection_started = TICKS.load(Ordering::Acquire);
+    while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
+        if !USB_FS_READY.load(Ordering::Acquire) {
+            let now = TICKS.load(Ordering::Relaxed);
+            let retry_at = USB_FS_RETRY_AT.load(Ordering::Acquire);
+            if now.wrapping_sub(retry_at) as i32 >= 0 {
+                if !try_init_usb_fs_host(&device.RCC, &mut core.NVIC) {
+                    USB_FS_RETRY_AT.store(
+                        now.wrapping_add(USB_FS_RETRY_INTERVAL_MS),
+                        Ordering::Release,
+                    );
+                }
+            }
+        }
+
+        if USB_FS_READY.load(Ordering::Acquire)
+            && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+        {
+            unsafe { tusb::tuh_task_ext(0, false); }
+        } else {
+            USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        }
+
+        let now = TICKS.load(Ordering::Relaxed);
+        if now.wrapping_sub(selection_started) >= BOOT_SELECTION_TIMEOUT_MS {
+            keyboard::set_boot_default_normal();
+            break;
+        }
+    }
+
+    let boot_mode = keyboard::boot_selection();
+    let cdc_enabled = boot_mode == keyboard::BOOT_SELECTION_CDC;
+    let emulator_enabled = boot_mode == keyboard::BOOT_SELECTION_NORMAL;
 
     if emulator_enabled {
         unsafe {
@@ -126,22 +158,6 @@ fn main() -> ! {
         }
         keyboard::enable_emulator_input();
         clear_demo_canvas(0x10);
-    } else if boot_mode == keyboard::BOOT_SELECTION_TIMEOUT {
-        clear_demo_canvas(0x10);
-        show_usb_status(b"BOOT KEYBOARD TIMEOUT (10s)");
-        let host_status = USB_FS_STATUS.load(Ordering::Acquire);
-        let detail: &[u8] = match host_status {
-            0 => b"FS HOST: NOT STARTED",
-            1 => b"FS HOST: READY; NO DEVICE",
-            2 => b"FS HOST: INIT FAILED",
-            3 => b"FS KEYBOARD: MOUNTED",
-            5 => b"FS KEYBOARD: REMOVED",
-            7 => b"FS ENUM: DEVICE DESCRIPTOR",
-            8 => b"FS ENUM: CONFIG DESCRIPTOR",
-            _ => b"FS HOST: OTHER STATE",
-        };
-        show_file_browser_line(2, detail, false);
-        show_file_browser_line(3, b"USB HS DEVICE INIT FOLLOWS", false);
     }
 
     // The main loop owns the renderer; TinyUSB UVC completion callbacks
@@ -181,25 +197,6 @@ fn main() -> ! {
         core.NVIC.set_priority(interrupt::OTG_HS, 0);
         NVIC::unpend(interrupt::OTG_HS);
         NVIC::unmask(interrupt::OTG_HS);
-    }
-
-    if boot_mode == keyboard::BOOT_SELECTION_TIMEOUT {
-        // No keyboard report arrived during the selection window. Keep the
-        // camera/status screen alive without entering uninitialized BK code.
-        loop {
-            unsafe {
-                let _ = tusb::tud_task_ext(0, false);
-                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-            }
-            if USB_FS_READY.load(Ordering::Acquire)
-                && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
-            {
-                unsafe { tusb::tuh_task_ext(0, false); }
-            } else {
-                USB_HOST_TASK_PENDING.store(false, Ordering::Release);
-            }
-            while prepare_next_video_batch(&mut video_renderer) {}
-        }
     }
 
     if cdc_enabled {
