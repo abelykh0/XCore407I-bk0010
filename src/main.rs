@@ -14,7 +14,7 @@ use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line, show_usb_status, Nv12DemoImage};
+use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
 use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
@@ -45,7 +45,7 @@ use file_browser::{
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
     configure_usb_host_task_timer, try_init_usb_fs_host, USB_FS_READY,
-    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
+    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING,
 };
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
