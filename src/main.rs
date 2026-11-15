@@ -277,10 +277,8 @@ fn main() -> ! {
     let cdc_enabled = boot_mode == keyboard::BOOT_SELECTION_CDC;
     // A normal-mode timeout is not proof that a keyboard exists. Do not
     // start the emulator unless a boot-keyboard interface actually mounted.
-    let (_, _, startup_reports, _, _, _, _) = keyboard::keyboard_diagnostics();
     let mut emulator_enabled = boot_mode == keyboard::BOOT_SELECTION_NORMAL
-        && keyboard::keyboard_is_mounted()
-        && startup_reports != 0;
+        && keyboard::keyboard_is_mounted();
     let keyboard_unavailable =
         boot_mode == keyboard::BOOT_SELECTION_NORMAL && !emulator_enabled;
 
@@ -529,20 +527,19 @@ fn main() -> ! {
         // selection window, keep the diagnostic screen up until real input
         // is observed, then initialize the emulator exactly once.
         if !emulator_enabled && !cdc_enabled && keyboard::keyboard_is_mounted() {
-            let (_, _, reports, _, _, _, _) = keyboard::keyboard_diagnostics();
-            if reports != 0 {
-                unsafe {
-                    bk_platform_init(
-                        xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
-                        xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
-                        xcore407i_blinker::rom::BASIC_ROM.len() as u32,
-                    );
-                }
-                keyboard::enable_emulator_input();
-                emulator_enabled = true;
-                clear_demo_canvas(0x10);
-                show_file_browser_line(3, b"USB KEYBOARD CONNECTED", false);
+            // After the blue screen, a mounted boot keyboard is sufficient:
+            // do not wait for a keypress or interpret F10 as a mode command.
+            unsafe {
+                bk_platform_init(
+                    xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
+                    xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
+                    xcore407i_blinker::rom::BASIC_ROM.len() as u32,
+                );
             }
+            keyboard::enable_emulator_input();
+            emulator_enabled = true;
+            clear_demo_canvas(0x10);
+            show_file_browser_line(3, b"USB KEYBOARD CONNECTED", false);
         }
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
