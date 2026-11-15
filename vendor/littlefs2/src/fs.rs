@@ -480,6 +480,19 @@ impl<Storage: driver::Storage> Filesystem<'_, Storage> {
         o(&mut options).open_and_then(self, path, f)
     }
 
+    /// Open a file using caller-owned storage for its cache and state.
+    /// This avoids constructing FileAllocation on the caller's stack.
+    pub fn open_file_with_options_and_then_with_allocation<R>(
+        &self,
+        o: impl FnOnce(&mut OpenOptions) -> &OpenOptions,
+        path: &Path,
+        alloc: &mut FileAllocation<Storage>,
+        f: impl FnOnce(&File<'_, '_, Storage>) -> Result<R>,
+    ) -> Result<R> {
+        let mut options = OpenOptions::new();
+        o(&mut options).open_and_then_with_allocation(self, path, alloc, f)
+    }
+
     /// Read attribute.
     pub fn attribute<'a>(
         &self,
@@ -843,6 +856,20 @@ impl OpenOptions {
         // E.g. if res is Ok but closing gives an error.
         // Or if closing fails because something is broken and
         // we'd already know that from an Err res.
+        let res = f(&mut file);
+        unsafe { file.close()? };
+        res
+    }
+
+    /// Open a file with caller-provided file storage, then always close it.
+    pub fn open_and_then_with_allocation<'a, R, S: driver::Storage>(
+        &self,
+        fs: &Filesystem<'a, S>,
+        path: &Path,
+        alloc: &mut FileAllocation<S>,
+        f: impl FnOnce(&File<'a, '_, S>) -> Result<R>,
+    ) -> Result<R> {
+        let mut file = unsafe { self.open(fs, alloc, path)? };
         let res = f(&mut file);
         unsafe { file.close()? };
         res
