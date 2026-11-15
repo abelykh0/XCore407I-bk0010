@@ -1297,9 +1297,9 @@ pub fn service(
                         let mut tagged_pages = 0u32;
                         let mut hardware_mismatch_chunks = 0u32;
                         let mut software_mismatch_chunks = 0u32;
-                        let mut first_hardware_mismatch = [0u32; 7];
+                        let mut first_hardware_mismatch = [0u32; 12];
                         let mut first_hardware_mismatch_page = u32::MAX;
-                        let mut first_software_mismatch = [0u32; 7];
+                        let mut first_software_mismatch = [0u32; 12];
                         let mut first_software_mismatch_page = u32::MAX;
                         write_status(b"\r\nECCSCAN: read-only physical NAND scan; Dhara/LittleFS bypassed; no NAND writes. Pages=");
                         write_decimal(total_pages as usize);
@@ -1363,6 +1363,16 @@ pub fn service(
                             write_hex_u32(first_hardware_mismatch[5]);
                             write_status(b" software=0x");
                             write_hex_u32(first_hardware_mismatch[6]);
+                            write_status(b" nonFF=");
+                            write_decimal(first_hardware_mismatch[7] as usize);
+                            write_status(b" first=");
+                            write_hex_u32(first_hardware_mismatch[8]);
+                            write_status(b" last=");
+                            write_hex_u32(first_hardware_mismatch[9]);
+                            write_status(b" PCR-enable=0x");
+                            write_hex_u32(first_hardware_mismatch[10]);
+                            write_status(b" PCR-capture=0x");
+                            write_hex_u32(first_hardware_mismatch[11]);
                             write_status(b"\\r\\n");
                         }
                         if first_software_mismatch_page != u32::MAX {
