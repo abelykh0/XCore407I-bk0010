@@ -516,11 +516,11 @@ pub fn service(
                             write_hex_u32(code as u32);
                             write_status(b", value 0x");
                             write_hex_u32(detail as u32);
-                            write_status(b")\\r\\nCDC bytes received: 0x");
+                            write_status(b")\r\nCDC bytes received: 0x");
                             write_hex_u32(received);
                             write_status(b" parsed: 0x");
                             write_hex_u32(consumed);
-                            write_status(b"\\r\\n");
+                            write_status(b"\r\n");
                         }
                         if zmodem.last_error() == 2 {
                             let (
