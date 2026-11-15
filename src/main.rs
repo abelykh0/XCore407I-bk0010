@@ -139,10 +139,10 @@ fn main() -> ! {
         );
     }
 
-    // Give the boot keyboard up to 10 seconds to select CDC mode with F10.
+    // Give the boot keyboard a short window to select CDC mode with F10.
     // Any other first report selects normal emulator mode; no keyboard also
     // defaults to normal mode when the selection window expires.
-    const BOOT_SELECTION_TIMEOUT_MS: u32 = 10_000;
+    const BOOT_SELECTION_TIMEOUT_MS: u32 = 3_000;
     let selection_started = TICKS.load(Ordering::Acquire);
     while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
         if !USB_FS_READY.load(Ordering::Acquire) {
