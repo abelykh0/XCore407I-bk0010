@@ -125,21 +125,29 @@ fn block_is_bad(block: u32) -> Result<bool, ()> {
     let second_read = nand_fs::read_page(first_page + 1, PAGE_SIZE as u16, &mut marker);
     let second_bad = second_read && marker[0] != 0xFF;
 
-    // Either factory marker is sufficient. In particular, don't discard a
-    // valid second-page marker merely because the first page is unreadable.
+    // Either factory marker is sufficient. If either marker page cannot be
+    // read, conservatively retire the whole erase block instead of allowing
+    // Dhara/LittleFS to allocate or erase it.
     if first_bad || second_bad {
-        Ok(true)
-    } else if first_read && second_read {
-        Ok(false)
-    } else if !first_read {
-        FORMAT_BAD_BLOCK_REASON.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Relaxed).ok();
-        Err(())
-    } else if !second_read {
-        FORMAT_BAD_BLOCK_REASON.compare_exchange(0, 3, Ordering::AcqRel, Ordering::Relaxed).ok();
-        Err(())
-    } else {
-        Ok(false)
+        return Ok(true);
     }
+    if first_read && second_read {
+        return Ok(false);
+    }
+
+    let reason = if !first_read { 2 } else { 3 };
+    FORMAT_BAD_BLOCK_REASON.compare_exchange(
+        0, reason, Ordering::AcqRel, Ordering::Relaxed,
+    ).ok();
+    FORMAT_FIRST_BAD_BLOCK.compare_exchange(
+        u32::MAX, block, Ordering::AcqRel, Ordering::Relaxed,
+    ).ok();
+
+    // Best effort: write the standard factory/grown-bad marker to both
+    // marker pages and verify it. Even if the NAND refuses the marker write,
+    // this boot must still treat the unreadable block as bad.
+    let _ = mark_block_bad(block);
+    Ok(true)
 }
 
 fn program_bad_marker(page: u32) -> bool {
@@ -174,9 +182,15 @@ fn mark_block_bad(block: u32) -> bool {
     let first_ok = program_bad_marker(first);
     let second_ok = program_bad_marker(first + 1);
 
-    // At least one of the two standard marker pages must be readable as bad.
-    // This also catches a false-positive status from a failed OOB program.
-    (first_ok || second_ok) && matches!(block_is_bad(block), Ok(true))
+    // Verify directly rather than calling block_is_bad(), which would retry
+    // marker reads and could recursively attempt to retire this same block.
+    let mut marker = [0xFFu8; 1];
+    let first_verified = nand_fs::read_page(first, PAGE_SIZE as u16, &mut marker)
+        && marker[0] == 0x00;
+    marker[0] = 0xFF;
+    let second_verified = nand_fs::read_page(first + 1, PAGE_SIZE as u16, &mut marker)
+        && marker[0] == 0x00;
+    first_ok || second_ok || first_verified || second_verified
 }
 
 unsafe fn set_error(error: *mut i32, value: i32) {
