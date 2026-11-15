@@ -532,6 +532,33 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
 }
 
 
+/// Read-only raw NAND interface probe: READ ID and STATUS, without page access.
+pub(crate) fn ecc_scan_interface_probe() -> ([u8; 5], u8, bool) {
+    // Avoid FSMC NWAIT stalling the CPU while probing the bus. Restore PCR2
+    // exactly as found before returning.
+    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr & !(1 << 1));
+        let _ = read_volatile(FSMC_PCR2);
+    }
+
+    command(0x90);
+    address(0x00);
+    let id = [read_data(), read_data(), read_data(), read_data(), read_data()];
+
+    command(0x70);
+    let status = read_data();
+    let ready = unsafe {
+        read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>())
+    } & RB_MASK != 0;
+
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr);
+        let _ = read_volatile(FSMC_PCR2);
+    }
+    (id, status, ready)
+}
+
 /// Read-only classification helpers used by the whole-device ECC scan.
 pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<[u8; 2]> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
