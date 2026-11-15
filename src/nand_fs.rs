@@ -1220,6 +1220,28 @@ pub(crate) fn ecc_standalone_read(
 }
 
 
+
+/// One read-only comparison of stored, FSMC, and software ECC on a tagged page.
+pub(crate) struct EccPageComparison {
+    pub stored: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub hardware: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub software: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+}
+
+pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK {
+        return None;
+    }
+    let mut tag = [0u8; 2];
+    let tag_column = PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16;
+    if !read_page(page, tag_column, &mut tag) || tag != ECC_TAG {
+        return None;
+    }
+    let (stored, chunks, _, _, software, _) = ecc_standalone_read(page)?;
+    let hardware = core::array::from_fn(|index| chunks[index].calculated);
+    Some(EccPageComparison { stored, hardware, software })
+}
+
 /// Destructive, isolated FSMC ECC test. Erases the highest-numbered good
 /// physical block, programs page 2 with four independent pseudorandom 512-byte chunks,
 /// then compares write-time, read-time, and software ECC. This bypasses Dhara
