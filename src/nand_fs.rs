@@ -654,11 +654,39 @@ pub(crate) struct EccStandaloneChunk {
     pub pcr_capture: u32,
     pub first_byte: u8,
     pub last_byte: u8,
+    pub first_bytes: [u8; 16],
+    pub checksum: u32,
     pub non_ff_bytes: u16,
 }
 
 /// Read one physical NAND page directly and compare FSMC ECC with its OOB
 /// values. This bypasses Dhara and LittleFS and never changes NAND contents.
+/// Deterministic reference vectors for checking the software ECC port.
+/// Expected values were generated with Linux ecc_sw_hamming_calculate()
+/// using 512-byte steps and NAND_ECC_SOFT_HAMMING_SM_ORDER.
+pub(crate) fn ecc_software_selftest() -> [u32; 4] {
+    let zero = [0u8; FSMC_ECC_CHUNK_SIZE];
+    let erased = [0xFFu8; FSMC_ECC_CHUNK_SIZE];
+    let mut single_bit = [0u8; FSMC_ECC_CHUNK_SIZE];
+    single_bit[0] = 1;
+
+    let mut pseudo_random = [0u8; FSMC_ECC_CHUNK_SIZE];
+    let mut state = 0x1234_5678u32;
+    for byte in &mut pseudo_random {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        *byte = state as u8;
+    }
+
+    [
+        ecc_software_512(&zero),
+        ecc_software_512(&erased),
+        ecc_software_512(&single_bit),
+        ecc_software_512(&pseudo_random),
+    ]
+}
+
 pub(crate) fn ecc_standalone_read(
     page: u32,
 ) -> Option<(
@@ -689,14 +717,22 @@ pub(crate) fn ecc_standalone_read(
         pcr_capture: 0,
         first_byte: 0,
         last_byte: 0,
+        first_bytes: [0; 16],
+        checksum: 0,
         non_ff_bytes: 0,
     }; FSMC_ECC_CHUNKS_PER_PAGE];
 
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
         let pcr_enable = ecc_begin_chunk();
         let mut non_ff_bytes = 0u16;
-        for byte in chunk.iter_mut() {
+        let mut first_bytes = [0u8; 16];
+        let mut checksum = 2_166_136_261u32; // FNV-1a offset basis
+        for (offset, byte) in chunk.iter_mut().enumerate() {
             *byte = read_data();
+            if offset < first_bytes.len() {
+                first_bytes[offset] = *byte;
+            }
+            checksum = checksum.wrapping_mul(16_777_619) ^ (*byte as u32);
             if *byte != 0xFF {
                 non_ff_bytes += 1;
             }
@@ -715,6 +751,8 @@ pub(crate) fn ecc_standalone_read(
             pcr_capture,
             first_byte: chunk[0],
             last_byte: chunk[chunk.len() - 1],
+            first_bytes,
+            checksum,
             non_ff_bytes,
         };
     }
