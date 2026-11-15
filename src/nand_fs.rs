@@ -479,7 +479,8 @@ fn ecc_software_512(data: &[u8]) -> u32 {
 
     // Little-endian Linux SM-order parity packing.
     let rp3 = fold(par >> 16);
-    let rp2 = fold(par);
+    let low16 = par & 0xFFFF;
+    let rp2 = (low16 ^ (low16 >> 8)) as u8;
     let p16 = par ^ (par >> 16);
     let rp1 = ((p16 >> 8) & 0xFF) as u8;
     let rp0 = p16 as u8;
