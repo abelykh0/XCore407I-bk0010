@@ -518,7 +518,7 @@ pub fn service(
                             write_hex_u32(detail as u32);
                             write_status(b")\r\nCDC bytes received: 0x");
                             write_hex_u32(received);
-                            write_status(b" parsed: 0x");
+                            write_status(b" decoder-consumed: 0x");
                             write_hex_u32(consumed);
                             write_status(b"\r\n");
                         }
