@@ -206,10 +206,9 @@ fn main() -> ! {
         // F10 selects a device-only mode. Stop the FS host controller and
         // its scheduler permanently; no keyboard or other host traffic is
         // serviced after this point. OTG_HS remains the UVC+CDC device.
-        unsafe {
-            NVIC::mask(interrupt::OTG_FS);
-            NVIC::unpend(interrupt::OTG_FS);
-        }
+        NVIC::mask(interrupt::OTG_FS);
+        NVIC::unpend(interrupt::OTG_FS);
+
         // Reset and gate OTG_FS after masking its IRQ. This makes the
         // keyboard host electrically inactive for the remainder of CDC mode.
         device.RCC.ahb2rstr().modify(|_, w| w.otgfsrst().set_bit());
