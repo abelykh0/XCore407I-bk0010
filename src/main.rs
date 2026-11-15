@@ -135,9 +135,9 @@ fn draw_keyboard_unavailable_screen() {
     show_file_browser_line(12, &line, false);
 
     line.fill(b' ');
-    line[..14].copy_from_slice(b"LAST REPORT LEN");
+    line[..15].copy_from_slice(b"LAST REPORT LEN");
     let digits = decimal(last_len, &mut number);
-    line[15..15 + digits.len()].copy_from_slice(digits);
+    line[16..16 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(13, &line, false);
 
     line.fill(b' ');
@@ -147,7 +147,7 @@ fn draw_keyboard_unavailable_screen() {
     show_file_browser_line(14, &line, false);
 
     line.fill(b' ');
-    line[..8].copy_from_slice(b"PROTOCOL");
+    line[..11].copy_from_slice(b"HID IF PROTO");
     if protocol == 0xff {
         line[9..13].copy_from_slice(b"NONE");
     } else if protocol == 0xfe {
