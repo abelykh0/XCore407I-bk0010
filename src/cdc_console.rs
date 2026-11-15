@@ -526,6 +526,18 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
+                    } else if command_is(line, b"NANDPROBE") {
+                        write_status(b"\r\nNANDPROBE: read-only READ ID / STATUS; no NAND writes or erases.\\r\\n");
+                        let (id, status, ready) = crate::nand_fs::ecc_scan_interface_probe();
+                        write_status(b"READ ID:");
+                        for byte in id {
+                            write_status(b" 0x");
+                            write_hex_u32(byte as u32);
+                        }
+                        write_status(b"\\r\\nSTATUS: 0x");
+                        write_hex_u32(status as u32);
+                        write_status(if ready { b"  R/B=READY\\r\\n" } else { b"  R/B=BUSY\\r\\n" });
+                        write_status(b"> ");
                     } else if command_is(line, b"ECCSCAN") {
                         write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
                         let vectors = crate::nand_fs::ecc_software_selftest();
