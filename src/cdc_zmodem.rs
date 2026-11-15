@@ -568,6 +568,7 @@ pub fn service(
                                 ZmodemError::UnexpectedCrc32 => (11, 0),
                                 ZmodemError::UnexpectedEof => (12, 0),
                                 ZmodemError::UnsupportedFeature => (13, 0),
+                                ZmodemError::SubpacketTooLarge => (14, 0),
                             };
                             state.protocol_error = code;
                             state.protocol_error_detail = detail;
@@ -586,6 +587,7 @@ pub fn service(
                                 ZmodemError::UnexpectedCrc32 => b"\r\nZMODEM input: CRC-32 mismatch\r\n",
                                 ZmodemError::UnexpectedEof => b"\r\nZMODEM input: unexpected EOF\r\n",
                                 ZmodemError::UnsupportedFeature => b"\r\nZMODEM input: unsupported feature\r\n",
+                                ZmodemError::SubpacketTooLarge => b"\r\nZMODEM input: subpacket too large; retry requested\r\n",
                             };
                             super::cdc_console::write_status(message);
                             let _ = receiver.abort();
