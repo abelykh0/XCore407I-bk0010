@@ -456,7 +456,7 @@ fn ecc_software_512(data: &[u8]) -> u32 {
     let mut rp16 = 0u32;
     let mut par = 0u32;
 
-    // Linux ecc_sw_hamming_calculate(): 4 groups x 16 little-endian words.
+    // Linux ecc_sw_hamming_calculate(): 8 groups x 16 little-endian words.
     let words: [u32; 128] = core::array::from_fn(|i| {
         u32::from_le_bytes([
             data[i * 4],
@@ -593,7 +593,7 @@ fn ecc_software_256(data: &[u8]) -> u32 {
     let mut rp14 = 0u32;
     let mut par = 0u32;
 
-    // Linux ecc_sw_hamming_calculate(): 8 groups x 16 little-endian words.
+    // Linux ecc_sw_hamming_calculate(): 4 groups x 16 little-endian words.
     let words: [u32; 64] = core::array::from_fn(|i| {
         u32::from_le_bytes([
             data[i * 4],
