@@ -147,14 +147,14 @@ fn draw_keyboard_unavailable_screen() {
     show_file_browser_line(14, &line, false);
 
     line.fill(b' ');
-    line[..11].copy_from_slice(b"HID IF PROTO");
+    line[..12].copy_from_slice(b"HID IF PROTO");
     if protocol == 0xff {
-        line[9..13].copy_from_slice(b"NONE");
+        line[13..17].copy_from_slice(b"NONE");
     } else if protocol == 0xfe {
-        line[9..23].copy_from_slice(b"SET PROTO FAIL");
+        line[13..27].copy_from_slice(b"SET PROTO FAIL");
     } else {
         let digits = decimal(protocol as u32, &mut number);
-        line[9..9 + digits.len()].copy_from_slice(digits);
+        line[13..13 + digits.len()].copy_from_slice(digits);
     }
     show_file_browser_line(15, &line, false);
 
