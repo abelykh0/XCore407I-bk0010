@@ -7,168 +7,6 @@
  */
 #include "lfs.h"
 
-/* XCore allocator diagnostics and a bounded trace of allocator state transitions. */
-#define XCORE_LFS_ALLOC_TRACE_COUNT 16U
-#define XCORE_LFS_ALLOC_TRACE_FIELDS 7U
-
-static volatile uint32_t xcore_lfs_alloc_diag[10];
-static volatile uint32_t xcore_lfs_alloc_scans;
-static volatile uint32_t xcore_lfs_traversed_blocks;
-static volatile uint32_t xcore_lfs_alloc_calls;
-static volatile uint32_t xcore_lfs_alloc_successes;
-static volatile uint32_t xcore_lfs_checkpoint_resets;
-static volatile uint32_t xcore_lfs_trace[XCORE_LFS_ALLOC_TRACE_COUNT][XCORE_LFS_ALLOC_TRACE_FIELDS];
-static volatile uint32_t xcore_lfs_trace_head;
-static volatile uint32_t xcore_lfs_trace_count;
-static volatile uint32_t xcore_lfs_dir_alloc_calls;
-static volatile uint32_t xcore_lfs_ctz_extend_calls;
-static volatile uint32_t xcore_lfs_file_relocate_calls;
-static volatile uint32_t xcore_lfs_alloc_caller;
-static volatile uint32_t xcore_lfs_alloc_caller_counts[5];
-static volatile uint32_t xcore_lfs_alloc_last_caller;
-static volatile uint32_t xcore_lfs_bd_cmp_mismatches;
-static volatile uint32_t xcore_lfs_bd_cmp_last_block;
-static volatile uint32_t xcore_lfs_bd_cmp_last_off;
-static volatile uint32_t xcore_lfs_bd_cmp_last_index;
-static volatile uint32_t xcore_lfs_bd_cmp_last_expected;
-static volatile uint32_t xcore_lfs_bd_cmp_last_actual;
-static volatile uint32_t xcore_lfs_bd_prog_errors;
-static volatile uint32_t xcore_lfs_last_ctz_head;
-static volatile uint32_t xcore_lfs_last_ctz_size;
-static volatile uint32_t xcore_lfs_last_relocate_block;
-static volatile uint32_t xcore_lfs_last_relocate_off;
-static volatile uint32_t xcore_lfs_last_relocate_pos;
-static volatile uint32_t xcore_lfs_last_relocate_ctz_size;
-static volatile uint32_t xcore_lfs_compact_relocate_reasons[7];
-static volatile uint32_t xcore_lfs_last_compact_reason;
-static volatile uint32_t xcore_lfs_last_compact_pair0;
-static volatile uint32_t xcore_lfs_last_compact_pair1;
-static volatile uint32_t xcore_lfs_last_compact_rev;
-static volatile uint32_t xcore_lfs_last_compact_off;
-
-static void xcore_lfs_alloc_trace_record(lfs_t *lfs, uint32_t event) {
-    uint32_t used = 0;
-    for (lfs_size_t i = 0; i < lfs->lookahead.size; i++) {
-        used += !!(lfs->lookahead.buffer[i / 8]
-                & (1U << (i % 8)));
-    }
-
-    uint32_t slot = xcore_lfs_trace_head;
-    xcore_lfs_trace[slot][0] = event;
-    xcore_lfs_trace[slot][1] = lfs->lookahead.start;
-    xcore_lfs_trace[slot][2] = lfs->lookahead.next;
-    xcore_lfs_trace[slot][3] = lfs->lookahead.size;
-    xcore_lfs_trace[slot][4] = (uint32_t)lfs->lookahead.ckpoint;
-    xcore_lfs_trace[slot][5] = used;
-    xcore_lfs_trace[slot][6] = xcore_lfs_alloc_scans;
-
-    xcore_lfs_trace_head = (slot + 1U) % XCORE_LFS_ALLOC_TRACE_COUNT;
-    if (xcore_lfs_trace_count < XCORE_LFS_ALLOC_TRACE_COUNT) {
-        xcore_lfs_trace_count++;
-    }
-}
-
-void xcore_lfs_alloc_diag_clear(void) {
-    for (unsigned i = 0; i < 10; i++) xcore_lfs_alloc_diag[i] = 0;
-    for (unsigned i = 0; i < XCORE_LFS_ALLOC_TRACE_COUNT; i++) {
-        for (unsigned j = 0; j < XCORE_LFS_ALLOC_TRACE_FIELDS; j++) {
-            xcore_lfs_trace[i][j] = 0;
-        }
-    }
-    xcore_lfs_alloc_scans = 0;
-    xcore_lfs_traversed_blocks = 0;
-    xcore_lfs_alloc_calls = 0;
-    xcore_lfs_alloc_successes = 0;
-    xcore_lfs_checkpoint_resets = 0;
-    xcore_lfs_trace_head = 0;
-    xcore_lfs_trace_count = 0;
-    xcore_lfs_dir_alloc_calls = 0;
-    xcore_lfs_ctz_extend_calls = 0;
-    xcore_lfs_file_relocate_calls = 0;
-    xcore_lfs_alloc_caller = 0;
-    xcore_lfs_alloc_last_caller = 0;
-    for (unsigned i = 0; i < 5; i++) xcore_lfs_alloc_caller_counts[i] = 0;
-    xcore_lfs_bd_cmp_mismatches = 0;
-    xcore_lfs_bd_cmp_last_block = 0;
-    xcore_lfs_bd_cmp_last_off = 0;
-    xcore_lfs_bd_cmp_last_index = 0;
-    xcore_lfs_bd_cmp_last_expected = 0;
-    xcore_lfs_bd_cmp_last_actual = 0;
-    xcore_lfs_bd_prog_errors = 0;
-    xcore_lfs_last_ctz_head = 0;
-    xcore_lfs_last_ctz_size = 0;
-    xcore_lfs_last_relocate_block = 0;
-    xcore_lfs_last_relocate_off = 0;
-    xcore_lfs_last_relocate_pos = 0;
-    xcore_lfs_last_relocate_ctz_size = 0;
-    for (unsigned i = 0; i < 7; i++) xcore_lfs_compact_relocate_reasons[i] = 0;
-    xcore_lfs_last_compact_reason = 0;
-    xcore_lfs_last_compact_pair0 = 0;
-    xcore_lfs_last_compact_pair1 = 0;
-    xcore_lfs_last_compact_rev = 0;
-    xcore_lfs_last_compact_off = 0;
-}
-
-// out[0..10] is the original failure snapshot. The extended tail contains
-// allocator stats [10..17] followed by the 16 x 7 event trace [17..129].
-void xcore_lfs_alloc_diag_read(uint32_t *out) {
-    if (!out) return;
-    for (unsigned i = 0; i < 10; i++) out[i] = xcore_lfs_alloc_diag[i];
-    out[10] = xcore_lfs_alloc_calls;
-    out[11] = xcore_lfs_alloc_successes;
-    out[12] = xcore_lfs_checkpoint_resets;
-    out[13] = xcore_lfs_alloc_scans;
-    out[14] = xcore_lfs_traversed_blocks;
-    out[15] = xcore_lfs_trace_count;
-    out[16] = xcore_lfs_trace_head;
-    for (unsigned i = 0; i < XCORE_LFS_ALLOC_TRACE_COUNT; i++) {
-        for (unsigned j = 0; j < XCORE_LFS_ALLOC_TRACE_FIELDS; j++) {
-            out[17 + i * XCORE_LFS_ALLOC_TRACE_FIELDS + j] = xcore_lfs_trace[i][j];
-        }
-    }
-    out[129] = xcore_lfs_dir_alloc_calls;
-    out[130] = xcore_lfs_ctz_extend_calls;
-    out[131] = xcore_lfs_file_relocate_calls;
-    out[132] = xcore_lfs_last_ctz_head;
-    out[133] = xcore_lfs_last_ctz_size;
-    out[134] = xcore_lfs_last_relocate_block;
-    out[135] = xcore_lfs_last_relocate_off;
-    out[136] = xcore_lfs_last_relocate_pos;
-    out[137] = xcore_lfs_last_relocate_ctz_size;
-    for (unsigned i = 0; i < 7; i++) out[138 + i] = xcore_lfs_compact_relocate_reasons[i];
-    out[145] = xcore_lfs_last_compact_reason;
-    out[146] = xcore_lfs_last_compact_pair0;
-    out[147] = xcore_lfs_last_compact_pair1;
-    out[148] = xcore_lfs_last_compact_rev;
-    out[149] = xcore_lfs_last_compact_off;
-    for (unsigned i = 0; i < 5; i++) out[150 + i] = xcore_lfs_alloc_caller_counts[i];
-    out[155] = xcore_lfs_alloc_last_caller;
-    out[156] = xcore_lfs_bd_cmp_mismatches;
-    out[157] = xcore_lfs_bd_cmp_last_block;
-    out[158] = xcore_lfs_bd_cmp_last_off;
-    out[159] = xcore_lfs_bd_cmp_last_index;
-    out[160] = xcore_lfs_bd_cmp_last_expected;
-    out[161] = xcore_lfs_bd_cmp_last_actual;
-    out[162] = xcore_lfs_bd_prog_errors;
-}
-
-static void xcore_lfs_alloc_diag_capture(lfs_t *lfs) {
-    uint32_t used = 0;
-    for (lfs_size_t i = 0; i < lfs->lookahead.size; i++) {
-        used += !!(lfs->lookahead.buffer[i / 8]
-                & (1U << (i % 8)));
-    }
-    xcore_lfs_alloc_diag[0] = lfs->block_count;
-    xcore_lfs_alloc_diag[1] = lfs->lookahead.start;
-    xcore_lfs_alloc_diag[2] = lfs->lookahead.next;
-    xcore_lfs_alloc_diag[3] = lfs->lookahead.size;
-    xcore_lfs_alloc_diag[4] = (uint32_t)lfs->lookahead.ckpoint;
-    xcore_lfs_alloc_diag[5] = used;
-    xcore_lfs_alloc_diag[6] = lfs->cfg->lookahead_size;
-    xcore_lfs_alloc_diag[7] = 1;
-    xcore_lfs_alloc_diag[8] = xcore_lfs_alloc_scans;
-    xcore_lfs_alloc_diag[9] = xcore_lfs_traversed_blocks;
-}
 #include "lfs_util.h"
 
 
@@ -307,17 +145,6 @@ static int lfs_bd_cmp(lfs_t *lfs,
 
         int res = memcmp(dat, data + i, diff);
         if (res) {
-            for (lfs_size_t j = 0; j < diff; j++) {
-                if (dat[j] != data[i + j]) {
-                    xcore_lfs_bd_cmp_mismatches++;
-                    xcore_lfs_bd_cmp_last_block = block;
-                    xcore_lfs_bd_cmp_last_off = off + i;
-                    xcore_lfs_bd_cmp_last_index = j;
-                    xcore_lfs_bd_cmp_last_expected = data[i + j];
-                    xcore_lfs_bd_cmp_last_actual = dat[j];
-                    break;
-                }
-            }
             return res < 0 ? LFS_CMP_LT : LFS_CMP_GT;
         }
     }
@@ -356,7 +183,6 @@ static int lfs_bd_flush(lfs_t *lfs,
                 pcache->off, pcache->buffer, diff);
         LFS_ASSERT(err <= 0);
         if (err) {
-            xcore_lfs_bd_prog_errors++;
             return err;
         }
 
@@ -775,8 +601,6 @@ static int lfs_unmount_(lfs_t *lfs);
 // after a checkpoint, the block allocator may realloc any untracked blocks
 static void lfs_alloc_ckpoint(lfs_t *lfs) {
     lfs->lookahead.ckpoint = lfs->block_count;
-    xcore_lfs_checkpoint_resets++;
-    xcore_lfs_alloc_trace_record(lfs, 1); // checkpoint reset
 }
 
 // drop the lookahead buffer, this is done during mounting and failed
@@ -785,13 +609,11 @@ static void lfs_alloc_drop(lfs_t *lfs) {
     lfs->lookahead.size = 0;
     lfs->lookahead.next = 0;
     lfs_alloc_ckpoint(lfs);
-    xcore_lfs_alloc_trace_record(lfs, 2); // allocator state dropped
 }
 
 #ifndef LFS_READONLY
 static int lfs_alloc_lookahead(void *p, lfs_block_t block) {
     lfs_t *lfs = (lfs_t*)p;
-    xcore_lfs_traversed_blocks++;
     lfs_block_t off = ((block - lfs->lookahead.start)
             + lfs->block_count) % lfs->block_count;
 
@@ -805,7 +627,6 @@ static int lfs_alloc_lookahead(void *p, lfs_block_t block) {
 
 #ifndef LFS_READONLY
 static int lfs_alloc_scan(lfs_t *lfs) {
-    xcore_lfs_alloc_scans++;
     // move lookahead buffer to the first unused block
     //
     // note we limit the lookahead buffer to at most the amount of blocks
@@ -821,19 +642,16 @@ static int lfs_alloc_scan(lfs_t *lfs) {
     memset(lfs->lookahead.buffer, 0, lfs->cfg->lookahead_size);
     int err = lfs_fs_traverse_(lfs, lfs_alloc_lookahead, lfs, true);
     if (err) {
-        xcore_lfs_alloc_trace_record(lfs, 3); // lookahead scan failed
         lfs_alloc_drop(lfs);
         return err;
     }
 
-    xcore_lfs_alloc_trace_record(lfs, 3); // lookahead scan completed
     return 0;
 }
 #endif
 
 #ifndef LFS_READONLY
 static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
-    xcore_lfs_alloc_calls++;
     while (true) {
         // scan our lookahead buffer for free blocks
         while (lfs->lookahead.next < lfs->lookahead.size) {
@@ -852,13 +670,6 @@ static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
                     if (lfs->lookahead.next >= lfs->lookahead.size
                             || !(lfs->lookahead.buffer[lfs->lookahead.next / 8]
                                 & (1U << (lfs->lookahead.next % 8)))) {
-                        xcore_lfs_alloc_successes++;
-                        // Preserve checkpoint/scan events in the bounded trace;
-                        // sample successful allocations rather than flooding it.
-                        if (xcore_lfs_alloc_successes <= 4U
-                                || (xcore_lfs_alloc_successes % 64U) == 0U) {
-                            xcore_lfs_alloc_trace_record(lfs, 4); // allocation returned
-                        }
                         return 0;
                     }
                 }
@@ -879,8 +690,6 @@ static int lfs_alloc(lfs_t *lfs, lfs_block_t *block) {
             LFS_ERROR("No more free space 0x%"PRIx32,
                     (lfs->lookahead.start + lfs->lookahead.next)
                         % lfs->block_count);
-            xcore_lfs_alloc_diag_capture(lfs);
-            xcore_lfs_alloc_trace_record(lfs, 5); // NOSPC
             return LFS_ERR_NOSPC;
         }
 
@@ -1977,12 +1786,8 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
 
 #ifndef LFS_READONLY
 static int lfs_dir_alloc(lfs_t *lfs, lfs_mdir_t *dir) {
-    xcore_lfs_dir_alloc_calls++;
     // allocate pair of dir blocks (backwards, so we write block 1 first)
     for (int i = 0; i < 2; i++) {
-        xcore_lfs_alloc_caller = 1;
-        xcore_lfs_alloc_last_caller = 1;
-        xcore_lfs_alloc_caller_counts[1]++;
         int err = lfs_alloc(lfs, &dir->pair[(i+1)%2]);
         if (err) {
             return err;
@@ -2141,9 +1946,6 @@ static int lfs_dir_compact(lfs_t *lfs,
 
     if (tired && lfs_pair_cmp(dir->pair, (const lfs_block_t[2]){0, 1}) != 0) {
         // we're writing too much, time to relocate
-        xcore_lfs_compact_relocate_reasons[0]++;
-        xcore_lfs_last_compact_reason = 1;
-        xcore_lfs_last_compact_off = 0;
         goto relocate;
     }
 
@@ -2166,9 +1968,6 @@ static int lfs_dir_compact(lfs_t *lfs,
             int err = lfs_bd_erase(lfs, dir->pair[1]);
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
-                    xcore_lfs_compact_relocate_reasons[1]++;
-                    xcore_lfs_last_compact_reason = 2;
-                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2181,9 +1980,6 @@ static int lfs_dir_compact(lfs_t *lfs,
             dir->rev = lfs_fromle32(dir->rev);
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
-                    xcore_lfs_compact_relocate_reasons[2]++;
-                    xcore_lfs_last_compact_reason = 3;
-                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2199,9 +1995,6 @@ static int lfs_dir_compact(lfs_t *lfs,
                         lfs, &commit});
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
-                    xcore_lfs_compact_relocate_reasons[3]++;
-                    xcore_lfs_last_compact_reason = 4;
-                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2216,9 +2009,6 @@ static int lfs_dir_compact(lfs_t *lfs,
                 lfs_pair_fromle32(dir->tail);
                 if (err) {
                     if (err == LFS_ERR_CORRUPT) {
-                        xcore_lfs_compact_relocate_reasons[4]++;
-                        xcore_lfs_last_compact_reason = 5;
-                        xcore_lfs_last_compact_off = commit.off;
                         goto relocate;
                     }
                     return err;
@@ -2246,9 +2036,6 @@ static int lfs_dir_compact(lfs_t *lfs,
                             sizeof(delta)), &delta);
                 if (err) {
                     if (err == LFS_ERR_CORRUPT) {
-                        xcore_lfs_compact_relocate_reasons[5]++;
-                        xcore_lfs_last_compact_reason = 6;
-                        xcore_lfs_last_compact_off = commit.off;
                         goto relocate;
                     }
                     return err;
@@ -2259,9 +2046,6 @@ static int lfs_dir_compact(lfs_t *lfs,
             err = lfs_dir_commitcrc(lfs, &commit);
             if (err) {
                 if (err == LFS_ERR_CORRUPT) {
-                    xcore_lfs_compact_relocate_reasons[6]++;
-                    xcore_lfs_last_compact_reason = 7;
-                    xcore_lfs_last_compact_off = commit.off;
                     goto relocate;
                 }
                 return err;
@@ -2283,9 +2067,6 @@ static int lfs_dir_compact(lfs_t *lfs,
 
 relocate:
         // Capture the metadata pair and revision that triggered relocation.
-        xcore_lfs_last_compact_pair0 = dir->pair[0];
-        xcore_lfs_last_compact_pair1 = dir->pair[1];
-        xcore_lfs_last_compact_rev = dir->rev;
         // commit was corrupted, drop caches and prepare to relocate block
         relocated = true;
         lfs_cache_drop(lfs, &lfs->pcache);
@@ -2301,9 +2082,6 @@ relocate:
         }
 
         // relocate half of pair
-        xcore_lfs_alloc_caller = 2;
-        xcore_lfs_alloc_last_caller = 2;
-        xcore_lfs_alloc_caller_counts[2]++;
         int err = lfs_alloc(lfs, &dir->pair[1]);
         if (err && (err != LFS_ERR_NOSPC || !tired)) {
             return err;
@@ -3119,12 +2897,6 @@ static int lfs_ctz_extend(lfs_t *lfs,
     while (true) {
         // go ahead and grab a block
         lfs_block_t nblock;
-        xcore_lfs_ctz_extend_calls++;
-        xcore_lfs_last_ctz_head = head;
-        xcore_lfs_last_ctz_size = size;
-        xcore_lfs_alloc_caller = 3;
-        xcore_lfs_alloc_last_caller = 3;
-        xcore_lfs_alloc_caller_counts[3]++;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
@@ -3458,17 +3230,9 @@ static int lfs_file_close_(lfs_t *lfs, lfs_file_t *file) {
 
 #ifndef LFS_READONLY
 static int lfs_file_relocate(lfs_t *lfs, lfs_file_t *file) {
-    xcore_lfs_file_relocate_calls++;
-    xcore_lfs_last_relocate_block = file->block;
-    xcore_lfs_last_relocate_off = file->off;
-    xcore_lfs_last_relocate_pos = file->pos;
-    xcore_lfs_last_relocate_ctz_size = file->ctz.size;
     while (true) {
         // just relocate what exists into new block
         lfs_block_t nblock;
-        xcore_lfs_alloc_caller = 4;
-        xcore_lfs_alloc_last_caller = 4;
-        xcore_lfs_alloc_caller_counts[4]++;
         int err = lfs_alloc(lfs, &nblock);
         if (err) {
             return err;
