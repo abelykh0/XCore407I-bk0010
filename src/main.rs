@@ -454,6 +454,9 @@ fn main() -> ! {
     let mut browser_selected = 0usize;
     let mut browser_open = false;
     // Real-time emulator pacing uses the PDP cycle counter.
+    let mut keyboard_diag_last = keyboard::keyboard_diagnostics();
+    let mut keyboard_host_status_last = USB_FS_STATUS.load(Ordering::Acquire);
+    let mut keyboard_host_ready_last = USB_FS_READY.load(Ordering::Acquire);
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
     let mut emulator_was_paused = false;
@@ -495,6 +498,21 @@ fn main() -> ! {
             unsafe { tusb::tuh_task_ext(0, false); }
         } else {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        }
+
+        if !emulator_enabled && !cdc_enabled {
+            let diagnostics = keyboard::keyboard_diagnostics();
+            let host_status = USB_FS_STATUS.load(Ordering::Acquire);
+            let host_ready = USB_FS_READY.load(Ordering::Acquire);
+            if diagnostics != keyboard_diag_last
+                || host_status != keyboard_host_status_last
+                || host_ready != keyboard_host_ready_last
+            {
+                draw_keyboard_unavailable_screen();
+                keyboard_diag_last = diagnostics;
+                keyboard_host_status_last = host_status;
+                keyboard_host_ready_last = host_ready;
+            }
         }
 
         // If the keyboard enumerates or starts reporting after the initial
