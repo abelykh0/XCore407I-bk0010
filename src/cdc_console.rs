@@ -962,6 +962,23 @@ fn storage_test(
     }
     write_status(b"\\r\\n");
 
+    let write_ecc = crate::nand_fs::write_ecc_compare_diagnostic();
+    write_status(b"WRITE-PATH ECC comparison (same 512-byte source data): chunks=");
+    write_decimal(write_ecc[0] as usize);
+    write_status(b" mismatches=");
+    write_decimal(write_ecc[1] as usize);
+    if write_ecc[1] != 0 {
+        write_status(b" first page=0x");
+        write_hex_u32(write_ecc[2]);
+        write_status(b" chunk=");
+        write_decimal(write_ecc[3] as usize);
+        write_status(b" hardware=0x");
+        write_hex_u32(write_ecc[4]);
+        write_status(b" software=0x");
+        write_hex_u32(write_ecc[5]);
+    }
+    write_status(b"\\r\\n");
+
     if let Some((offset, expected, actual)) = mismatch {
         write_status(b"\r\nSTORAGETEST mismatch at byte ");
         write_decimal(offset);
