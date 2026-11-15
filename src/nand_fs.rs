@@ -54,7 +54,7 @@ pub fn set_io_service_hook(hook: Option<&'static fn()>) {
 }
 
 #[inline]
-fn service_io_hook() {
+pub(crate) fn service_io_hook() {
     let pointer = NAND_IO_SERVICE_HOOK.load(Ordering::Acquire);
     if !pointer.is_null() {
         unsafe { (*pointer)(); }
