@@ -523,9 +523,9 @@ fn main() -> ! {
             }
         }
 
-        // If the keyboard enumerates or starts reporting after the initial
-        // selection window, keep the diagnostic screen up until real input
-        // is observed, then initialize the emulator exactly once.
+        // If a boot keyboard mounts after the initial selection window,
+        // initialize the emulator immediately; no keypress or F10 decision
+        // is required on the diagnostic screen.
         if !emulator_enabled && !cdc_enabled && keyboard::keyboard_is_mounted() {
             // After the blue screen, a mounted boot keyboard is sufficient:
             // do not wait for a keypress or interpret F10 as a mode command.
