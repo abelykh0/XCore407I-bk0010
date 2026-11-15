@@ -1513,6 +1513,41 @@ pub fn service(
                             write_status(b"\r\nECCCORRTEST FAILED. Keep production correction disabled.\r\n");
                         }
                         write_status(b"> ");
+                    } else if command_is(line, b"ECCNANDTEST") {
+                        write_status(b"\\r\\nECCNANDTEST: read-only correction integration test; page=0x0000FFC2. NAND is not modified.\\r\\n");
+                        match crate::nand_fs::ecc_nand_correction_test(0x0000_FFC2) {
+                            Some(result) => {
+                                write_status(b"Real NAND chunks checked=");
+                                write_decimal(result[0] as usize);
+                                write_status(b" baseline ECC mismatches=");
+                                write_decimal(result[1] as usize);
+                                write_status(b"\\r\\nInjected single-bit data errors=");
+                                write_decimal(result[2] as usize);
+                                write_status(b" failures=");
+                                write_decimal(result[3] as usize);
+                                write_status(b"\\r\\nInjected ECC-bit errors=");
+                                write_decimal(result[4] as usize);
+                                write_status(b" failures=");
+                                write_decimal(result[5] as usize);
+                                write_status(b"\\r\\nInjected double-bit data errors=");
+                                write_decimal(result[6] as usize);
+                                write_status(b" miscorrections=");
+                                write_decimal(result[7] as usize);
+                                if result[0] == 4 && result[1] == 0
+                                    && result[2] == 4 && result[3] == 0
+                                    && result[4] == 96 && result[5] == 0
+                                    && result[6] == 4 && result[7] == 0
+                                {
+                                    write_status(b"\\r\\nECCNANDTEST PASSED. Production correction remains disabled.\\r\\n");
+                                } else {
+                                    write_status(b"\\r\\nECCNANDTEST FAILED. Keep production correction disabled.\\r\\n");
+                                }
+                            }
+                            None => {
+                                write_status(b"ECCNANDTEST could not read a tagged ECC page at 0x0000FFC2. Run ECCTEST first; it erases one good physical block.\\r\\n");
+                            }
+                        }
+                        write_status(b"> ");
                     } else if command_is(line, b"ECCRAW") {
                         write_status(b"\r\nECCRAW: direct physical NAND read; bypasses Dhara/LittleFS; no NAND writes. Page=0x");
                         write_hex_u32(0x0000_233F);
