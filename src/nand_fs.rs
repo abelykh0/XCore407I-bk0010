@@ -156,8 +156,8 @@ fn wait_fsmc_fifo_empty() -> bool {
 /// Read the 24-bit ECC result and disable the engine before reuse.
 fn ecc_end_chunk() -> u32 {
     unsafe {
-        let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
         let pcr = read_volatile(FSMC_PCR2);
+        let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
         ecc
