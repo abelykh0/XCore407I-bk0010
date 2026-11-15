@@ -96,8 +96,12 @@ fn main() -> ! {
     core.SYST.enable_interrupt();
     core.SYST.enable_counter();
 
-    // Prepare and initialize OTG_FS host. A failed attempt is retried from
-    // the main loop after a short delay; OTG_HS is initialized separately as a TinyUSB device.
+    // TIM3 schedules TinyUSB host-task processing outside interrupt context.
+    configure_usb_host_task_timer(&device.RCC, &device.TIM3, &mut core.NVIC);
+
+    // Prepare and initialize OTG_FS host. A failed attempt is retried during
+    // the boot-selection window and later from the main loop; OTG_HS is
+    // initialized separately as a TinyUSB device.
     unsafe {
         core.NVIC.set_priority(interrupt::OTG_FS, 0x3 << 4);
         NVIC::unpend(interrupt::OTG_FS);
