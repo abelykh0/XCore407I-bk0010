@@ -369,19 +369,18 @@ fn main() -> ! {
                         let _ = tusb::tud_task_ext(0, false);
                         xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                     }
+                    // Keep USB/UVC and the video producer alive inside ECCSCAN's
+                    // synchronous NAND waits, just as for the file browser.
+                    FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+                    xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
                     let format_requested = xcore407i_blinker::cdc_console::service(
                         Some(fs),
                         &mut zmodem_state,
                         TICKS.load(Ordering::Relaxed),
-                        &mut || {
-                            // STORAGETEST intentionally pauses UVC/video work.
-                            // Keep only TinyUSB device servicing alive so CDC
-                            // progress and diagnostics remain visible.
-                            unsafe {
-                                let _ = tusb::tud_task_ext(0, false);
-                            }
-                        },
+                        &mut || service_file_browser_io(),
                     );
+                    xcore407i_blinker::nand_fs::set_io_service_hook(None);
+                    FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
                     while prepare_next_video_batch(&mut video_renderer) {}
                     if format_requested {
                         break Ok(true);
