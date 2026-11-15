@@ -134,14 +134,14 @@ fn program_bad_marker(page: u32) -> bool {
         return false;
     }
     nand_fs::command(0x70);
-    let status_ok = nand_fs::read_data() & 0x01 == 0;
+    let _status_ok = nand_fs::read_data() & 0x01 == 0;
 
     // A successful status bit is not proof that the marker reached the
     // array. Read the OOB byte back before treating this block as retired.
     let mut marker = [0xFFu8; 1];
     let readback_ok =
         nand_fs::read_page(page, PAGE_SIZE as u16, &mut marker) && marker[0] == 0x00;
-    status_ok && readback_ok
+    readback_ok
 }
 
 fn mark_block_bad(block: u32) -> bool {
