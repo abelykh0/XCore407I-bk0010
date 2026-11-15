@@ -24,6 +24,8 @@ const NAND_BASE: usize = 0x7000_0000;
 // STM32F407 FSMC NAND Bank 2 registers.
 const FSMC_PCR2: *mut u32 = (FSMC_BASE + 0x60) as *mut u32;
 const FSMC_SR2: *const u32 = (FSMC_BASE + 0x64) as *const u32;
+const FSMC_PATT2: *mut u32 = (FSMC_BASE + 0x6C) as *mut u32;
+const FSMC_PATT_ATTHOLD_MASK: u32 = 0xFF << 16;
 const FSMC_SR_FEMPT: u32 = 1 << 6;
 // Bank 2 ECCR2 is at offset 0x74 (PCR2 +0x60, SR2 +0x64,
 // PMEM2 +0x68, PATT2 +0x6C, reserved +0x70, ECCR2 +0x74).
@@ -905,7 +907,13 @@ pub(crate) fn ecc_standalone_read(
 /// Probe ECC for chunk 0 of a physical page using three read sequences:
 /// ECC enabled before the NAND command, then enabled after ready (twice).
 /// This isolates ECC-enable timing and repeatability without writing NAND.
-pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
+pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 12]> {
+    // Diagnostic only: temporarily set PATT2.ATTHOLD=7, then restore it.
+    // This affects attribute-space cycles, not the common-memory data reads.
+    let patt_original = unsafe { read_volatile(FSMC_PATT2) };
+    let patt_test = (patt_original & !FSMC_PATT_ATTHOLD_MASK) | (7 << 16);
+    unsafe { write_volatile(FSMC_PATT2, patt_test); }
+    let patt_readback = unsafe { read_volatile(FSMC_PATT2) };
     let mut stored_bytes = [0u8; ECC_BYTES_PER_CHUNK];
     if !read_page(page, (PAGE_SIZE + ECC_OOB_OFFSET as usize) as u16, &mut stored_bytes) {
         return None;
@@ -921,7 +929,10 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
     address(page as u8);
     address((page >> 8) as u8);
     command(0x30);
-    if !wait_ready_rb() { return None; }
+    if !wait_ready_rb() {
+        unsafe { write_volatile(FSMC_PATT2, patt_original); }
+        return None;
+    }
 
     let pcr_256_a = ecc_begin_chunk_size(0);
     for byte in &mut data[..256] { *byte = read_data(); }
@@ -948,10 +959,11 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
     let checksum = data.iter().fold(2_166_136_261u32, |h, &b| {
         h.wrapping_mul(16_777_619) ^ b as u32
     });
+    unsafe { write_volatile(FSMC_PATT2, patt_original); }
     Some([
         stored, ecc_256_a & 0x00FF_FFFF, ecc_256_b & 0x00FF_FFFF,
         ecc_512 & 0x00FF_FFFF, pcr_256_a, pcr_256_b, pcr_512,
-        pcr_capture_512, non_ff, checksum,
+        pcr_capture_512, non_ff, checksum, patt_original, patt_readback,
     ])
 }
 
