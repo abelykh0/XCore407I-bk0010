@@ -1328,6 +1328,41 @@ pub fn service(
                             None => write_status(b"ECCPROBE failed: NAND read timeout\r\n"),
                         }
                         write_status(b"> ");
+                    } else if command_is(line, b"ECCTEST") {
+                        write_status(b"\\r\\nECCTEST: DESTRUCTIVE raw NAND test; Dhara/LittleFS bypassed.\\r\\n");
+                        write_status(b"Erasing the highest-numbered good physical block; its contents will be lost.\\r\\n");
+                        match crate::nand_fs::ecc_destructive_test() {
+                            Some(r) => {
+                                write_status(b"Block=0x");
+                                write_hex_u32(r[0]);
+                                write_status(b" page=0x");
+                                write_hex_u32(r[1]);
+                                write_status(b" raw-data mismatches=");
+                                write_decimal(r[2] as usize);
+                                write_status(b"\\r\\nWrite ECC chunks=");
+                                write_decimal(r[3] as usize);
+                                write_status(b" write/software mismatches=");
+                                write_decimal(r[4] as usize);
+                                write_status(b" first HW=0x");
+                                write_hex_u32(r[5]);
+                                write_status(b" SW=0x");
+                                write_hex_u32(r[6]);
+                                write_status(b"\\r\\nChunk  stored      read-HW     software\\r\\n");
+                                for i in 0..4 {
+                                    write_status(b"  ");
+                                    write_decimal(i);
+                                    write_status(b"     0x");
+                                    write_hex_u32(r[7 + i]);
+                                    write_status(b"  0x");
+                                    write_hex_u32(r[11 + i]);
+                                    write_status(b"  0x");
+                                    write_hex_u32(r[15 + i]);
+                                    write_status(b"\\r\\n");
+                                }
+                            }
+                            None => write_status(b"ECCTEST FAILED: NAND read/erase/program operation failed. Check NAND status and bad-block markers.\\r\\n"),
+                        }
+                        write_status(b"Dhara/LittleFS metadata was not updated; the tested block is outside their allocation protocol.\\r\\n> ");
                     } else if command_is(line, b"ECCSCAN") {
                         const total_pages: u32 = crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK;
                         let mut tagged_pages = 0u32;
