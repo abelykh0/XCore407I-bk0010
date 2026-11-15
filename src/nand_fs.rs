@@ -168,9 +168,6 @@ fn wait_fsmc_fifo_empty() -> bool {
         if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
             return true;
         }
-        if iteration & 0x0FFF == 0x0FFF {
-            service_io_hook();
-        }
         core::hint::spin_loop();
     }
     false
@@ -191,9 +188,6 @@ pub(crate) fn wait_ready_status() -> bool {
     for iteration in 0..TIMEOUT {
         command(0x70);
         if read_data() & 0x40 != 0 { return true; }
-        if iteration & 0x0FFF == 0x0FFF {
-            service_io_hook();
-        }
         core::hint::spin_loop();
     }
     false
@@ -203,9 +197,6 @@ pub(crate) fn wait_ready_rb() -> bool {
     for iteration in 0..TIMEOUT {
         if unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0 {
             return true;
-        }
-        if iteration & 0x0FFF == 0x0FFF {
-            service_io_hook();
         }
         core::hint::spin_loop();
     }
