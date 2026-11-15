@@ -625,54 +625,32 @@ pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
     Some(tag == ECC_TAG)
 }
 
-/// Read one tagged physical page and compare OOB, FSMC, and software ECC.
-/// This bypasses Dhara/LittleFS and never writes or alters NAND contents.
+/// Read one tagged physical page and compare stored ECC with independent
+/// software ECC. The FSMC ECC engine remains disabled throughout this scan,
+/// isolating raw NAND reads and software calculation from the hardware ECC/FIFO path.
 pub(crate) struct EccPageComparison {
     pub stored: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
-    pub hardware: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub software: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
 }
 
 pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> {
-    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK {
-        return None;
-    }
-
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
     let mut data = [0u8; PAGE_SIZE];
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() {
-        return None;
+    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(FSMC_PCR2);
     }
-
-    let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
-    for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        ecc_begin_chunk();
-        for byte in chunk.iter_mut() {
-            *byte = read_data();
-        }
-        if !wait_fsmc_fifo_empty() {
-            let _ = ecc_end_chunk();
-            return None;
-        }
-        hardware[index] = ecc_end_chunk() & 0x00FF_FFFF;
-    }
-
+    let data_ok = read_page(page, 0, &mut data);
     let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
-    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut spare) {
-        return None;
+    let spare_ok = data_ok && read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut spare);
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(FSMC_PCR2);
     }
-    if spare[ECC_OOB_BYTES..] != ECC_TAG {
-        return None;
-    }
-
+    if !spare_ok || spare[ECC_OOB_BYTES..] != ECC_TAG { return None; }
     let mut result = EccPageComparison {
         stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
-        hardware,
         software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     };
     for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
