@@ -264,6 +264,7 @@ fn main() -> ! {
     // F10 selects CDC only before this timeout. A keyboard discovered later
     // starts the emulator directly, without another mode-selection step.
     const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
+    let mut keyboard_host_restart_attempted = false;
     USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
     while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
         if !USB_FS_READY.load(Ordering::Acquire) {
@@ -297,6 +298,18 @@ fn main() -> ! {
         let now = TICKS.load(Ordering::Relaxed);
         let last_activity = USB_FS_LAST_ACTIVITY_TICK.load(Ordering::Acquire);
         if now.wrapping_sub(last_activity) >= USB_DISCOVERY_INACTIVITY_TIMEOUT_MS {
+            if !keyboard_host_restart_attempted && USB_FS_READY.load(Ordering::Acquire) {
+                // One recovery attempt before declaring the keyboard unavailable.
+                // Keep the boot-selection loop active so F10 is still recognized
+                // if the keyboard enumerates after the host restart.
+                keyboard_host_restart_attempted = true;
+                let _ = restart_usb_fs_host(&device.RCC, &device.TIM3, &mut core.NVIC);
+                USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
+                continue;
+            }
+
+            // The single host restart did not produce a keyboard report within
+            // the second discovery window. Select normal mode and show diagnostics.
             keyboard::set_boot_default_normal();
             break;
         }
@@ -505,21 +518,9 @@ fn main() -> ! {
     let mut diagnostic_last_pdp = pacing_start_cycles;
 
     loop {
-        // If the host initialized but never discovered a boot keyboard,
-        // restart the complete TinyUSB/HCD instance periodically. A plain
-        // RCC reset is insufficient because TinyUSB otherwise still considers
-        // rhport 0 active and skips hcd_init() on the next tuh_rhport_init().
-        const USB_HOST_NO_KEYBOARD_RESTART_MS: u32 = 5_000;
-        if !cdc_enabled
-            && !keyboard::keyboard_is_mounted()
-            && USB_FS_READY.load(Ordering::Acquire)
-        {
-            let now = TICKS.load(Ordering::Relaxed);
-            let last_activity = USB_FS_LAST_ACTIVITY_TICK.load(Ordering::Acquire);
-            if now.wrapping_sub(last_activity) >= USB_HOST_NO_KEYBOARD_RESTART_MS {
-                let _ = restart_usb_fs_host(&device.RCC, &device.TIM3, &mut core.NVIC);
-            }
-        }
+        // Keyboard recovery is limited to one restart during boot selection.
+        // Once the diagnostic screen is shown, do not repeatedly reset the host;
+        // leave it running so late enumeration can still be observed.
 
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
