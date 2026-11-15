@@ -706,6 +706,26 @@ fn ecc_software_256(data: &[u8]) -> u32 {
     (ecc0 as u32) | ((ecc1 as u32) << 8) | ((ecc2 as u32) << 16)
 }
 
+/// Convert Linux SM-order Hamming ECC to the STM32 FSMC ECCR bit layout.
+///
+/// Captured hardware/software comparisons show that the FSMC layout is the
+/// 24-bit Linux value rotated left by six bits, then complemented. The 256-byte
+/// mode uses only ECC[21:0]; the 512-byte mode uses all 24 bits.
+fn ecc_linux_to_fsmc(ecc: u32, valid_bits: u32) -> u32 {
+    let ecc = ecc & 0x00FF_FFFF;
+    let rotated = ((ecc << 6) | (ecc >> 18)) & 0x00FF_FFFF;
+    (!rotated) & ((1u32 << valid_bits) - 1)
+}
+
+fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
+    ecc_linux_to_fsmc(ecc_software_512(data), 24)
+}
+
+fn ecc_software_256_fsmc(data: &[u8]) -> u32 {
+    ecc_linux_to_fsmc(ecc_software_256(data), 22)
+}
+
+
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
 
@@ -733,7 +753,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         }
         if write_ecc {
             let chunk_ecc = if software_ecc {
-                ecc_software_512(chunk)
+                ecc_software_512_fsmc(chunk)
             } else {
                 ecc_end_chunk().0
             };
@@ -741,7 +761,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             // the NAND program operation. This isolates write-path ECC capture
             // from later NAND reads and historical pages.
             if !software_ecc && SOFTWARE_ECC_COMPARE_TEST_MODE.load(Ordering::SeqCst) {
-                let software_ecc = ecc_software_512(chunk);
+                let software_ecc = ecc_software_512_fsmc(chunk);
                 WRITE_ECC_COMPARE_COUNTS[0].fetch_add(1, Ordering::Relaxed);
                 if software_ecc != chunk_ecc {
                     if WRITE_ECC_COMPARE_COUNTS[1].fetch_add(1, Ordering::Relaxed) == 0 {
@@ -1029,11 +1049,11 @@ pub(crate) fn ecc_standalone_read(
 
     let mut calculated_software = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        calculated_software[index] = ecc_software_512(chunk);
+        calculated_software[index] = ecc_software_512_fsmc(chunk);
     }
     let mut calculated_software_256 = [0u32; 8];
     for (index, chunk) in data.chunks_exact(256).enumerate() {
-        calculated_software_256[index] = ecc_software_256(chunk);
+        calculated_software_256[index] = ecc_software_256_fsmc(chunk);
     }
 
     Some((stored, chunks, calculated_256, calculated_2048, calculated_software, calculated_software_256))
