@@ -561,18 +561,18 @@ pub(crate) fn ecc_scan_interface_probe() -> ([u8; 5], u8, bool) {
 
 /// Read-only raw page-read probe. Reads main and spare areas from pages 0 and 0x83.
 /// NWAIT is bypassed and the USB service hook is suppressed for deterministic bus reads.
-pub(crate) fn ecc_scan_page_probe() -> ([bool; 4], [[u8; 16]; 4]) {
-    let mut ok = [false; 4];
-    let mut data = [[0xEEu8; 16]; 4];
+pub(crate) fn ecc_scan_page_probe() -> ([bool; 8], [[u8; 16]; 8]) {
+    let mut ok = [false; 8];
+    let mut data = [[0xEEu8; 16]; 8];
     let hook = NAND_IO_SERVICE_HOOK.swap(core::ptr::null_mut(), Ordering::AcqRel);
     let pcr = unsafe { read_volatile(FSMC_PCR2) };
     unsafe {
         write_volatile(FSMC_PCR2, pcr & !(1 << 1));
         let _ = read_volatile(FSMC_PCR2);
     }
-    let pages = [0u32, 0u32, 0x83, 0x83];
-    let columns = [0u16, PAGE_SIZE as u16, 0u16, PAGE_SIZE as u16];
-    for i in 0..4 {
+    let pages = [0u32, 0, 0, 0x83, 0x83, 0x83, 0, 0x83];
+    let columns = [0u16, 1, 512, 0, 1, 512, PAGE_SIZE as u16, PAGE_SIZE as u16];
+    for i in 0..8 {
         ok[i] = read_page(pages[i], columns[i], &mut data[i]);
     }
     unsafe {
