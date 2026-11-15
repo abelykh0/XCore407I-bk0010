@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCCHECK <page> Compare stored, FSMC, and software ECC on a physical page (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -526,54 +526,90 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
-                    } else if line.len() >= 8
-                        && line[..8].iter().zip(b"ECCCHECK").all(|(a, b)| a.to_ascii_uppercase() == *b)
-                        && (line.len() == 8 || line[8] == b' ')
-                    {
-                        let mut start = 8;
-                        while start < line.len() && line[start] == b' ' { start += 1; }
-                        let page = parse_hex_u32(&line[start..]);
-                        if let Some(page) = page.filter(|page| *page < crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK) {
-                            write_status(b"\r\nECCCHECK: read-only comparison on physical page 0x");
-                            write_hex_u32(page);
-                            write_status(b"\r\n");
-                            let vectors = crate::nand_fs::ecc_software_selftest();
-                            let vectors_ok = vectors == [0x00FF_FFFF, 0x00FF_FFFF, 0x00AA_AAAA, 0x0069_5659];
-                            if vectors_ok {
-                                write_status(b"Software ECC reference vectors: PASS\r\n");
-                            } else {
-                                write_status(b"Software ECC reference vectors: FAIL\r\n");
+                    } else if command_is(line, b"ECCSCAN") {
+                        write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
+                        let vectors = crate::nand_fs::ecc_software_selftest();
+                        let vectors_ok = vectors == [0x00FF_FFFF, 0x00FF_FFFF, 0x00AA_AAAA, 0x0069_5659];
+                        write_status(if vectors_ok { b"Software ECC reference vectors: PASS\r\n" } else { b"Software ECC reference vectors: FAIL\r\n" });
+                        let mut good_blocks = 0u32;
+                        let mut bad_blocks = 0u32;
+                        let mut block_read_errors = 0u32;
+                        let mut tagged_pages = 0u32;
+                        let mut untagged_pages = 0u32;
+                        let mut page_read_errors = 0u32;
+                        let mut matching_chunks = 0u32;
+                        let mut mismatching_chunks = 0u32;
+                        let mut hardware_software_mismatches = 0u32;
+                        let mut stored_hardware_mismatches = 0u32;
+                        let mut stored_software_mismatches = 0u32;
+                        let mut first_mismatch = true;
+                        let mut first_page = 0u32;
+                        let mut first_chunk = 0u32;
+                        let mut first_stored = 0u32;
+                        let mut first_hardware = 0u32;
+                        let mut first_software = 0u32;
+                        for block in 0..crate::nand_fs::PHYSICAL_BLOCKS {
+                            match crate::nand_fs::ecc_scan_block_bad(block) {
+                                Some(true) => { bad_blocks += 1; continue; }
+                                Some(false) => { good_blocks += 1; }
+                                None => { block_read_errors += 1; write_status(b"Bad-block marker read failed at block 0x"); write_hex_u32(block); write_status(b"\r\n"); continue; }
                             }
-                            match crate::nand_fs::ecc_software_compare_page(page) {
-                                Some(result) => {
-                                    let mut mismatches = 0usize;
-                                    write_status(b"Chunk  stored      FSMC        software\r\n");
-                                    for i in 0..4 {
-                                        if result.stored[i] != result.hardware[i] || result.stored[i] != result.software[i] {
-                                            mismatches += 1;
-                                        }
-                                        write_status(b"  ");
-                                        write_decimal(i);
-                                        write_status(b"     0x");
-                                        write_hex_u32(result.stored[i]);
-                                        write_status(b"  0x");
-                                        write_hex_u32(result.hardware[i]);
-                                        write_status(b"  0x");
-                                        write_hex_u32(result.software[i]);
-                                        write_status(b"\r\n");
-                                    }
-                                    if vectors_ok && mismatches == 0 {
-                                        write_status(b"ECCCHECK PASSED: all four chunks match. NAND state was not verified.\r\n");
-                                    } else {
-                                        write_status(b"ECCCHECK FAILED: software vectors or NAND ECC comparison did not match. NAND state was not verified.\r\n");
-                                    }
+                            let first = block * crate::nand_fs::PAGES_PER_BLOCK;
+                            for page in first..first + crate::nand_fs::PAGES_PER_BLOCK {
+                                match crate::nand_fs::ecc_scan_page_tagged(page) {
+                                    Some(false) => { untagged_pages += 1; continue; }
+                                    None => { page_read_errors += 1; continue; }
+                                    Some(true) => { tagged_pages += 1; }
                                 }
-                                None => write_status(b"ECCCHECK could not read a tagged ECC page. Check page number, OOB tag, or NAND read status. No NAND writes were performed.\r\n"),
+                                match crate::nand_fs::ecc_software_compare_page(page) {
+                                    Some(result) => {
+                                        for chunk in 0..4 {
+                                            let stored = result.stored[chunk];
+                                            let hardware = result.hardware[chunk];
+                                            let software = result.software[chunk];
+                                            if stored == hardware && stored == software { matching_chunks += 1; }
+                                            else {
+                                                mismatching_chunks += 1;
+                                                if stored != hardware { stored_hardware_mismatches += 1; }
+                                                if stored != software { stored_software_mismatches += 1; }
+                                                if hardware != software { hardware_software_mismatches += 1; }
+                                                if first_mismatch {
+                                                    first_mismatch = false; first_page = page; first_chunk = chunk as u32;
+                                                    first_stored = stored; first_hardware = hardware; first_software = software;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    None => { page_read_errors += 1; }
+                                }
                             }
-                        } else {
-                            write_status(b"\r\nUsage: ECCCHECK <hex physical page>, for example ECCCHECK 0x000039AB\r\n");
+                            if block % 32 == 31 {
+                                write_status(b"Scanned through block 0x"); write_hex_u32(block); write_status(b"\r\n");
+                            }
                         }
-                        write_status(b"> ");
+                        write_status(b"\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
+                        write_status(b"  Bad blocks: "); write_decimal(bad_blocks as usize);
+                        write_status(b"  Marker read errors: "); write_decimal(block_read_errors as usize);
+                        write_status(b"\r\nTagged pages: "); write_decimal(tagged_pages as usize);
+                        write_status(b"  Untagged/erased pages: "); write_decimal(untagged_pages as usize);
+                        write_status(b"  Page read errors: "); write_decimal(page_read_errors as usize);
+                        write_status(b"\r\nMatching chunks: "); write_decimal(matching_chunks as usize);
+                        write_status(b"  Mismatching chunks: "); write_decimal(mismatching_chunks as usize);
+                        write_status(b"\r\nStored-vs-FSMC mismatches: "); write_decimal(stored_hardware_mismatches as usize);
+                        write_status(b"  Stored-vs-software mismatches: "); write_decimal(stored_software_mismatches as usize);
+                        write_status(b"\r\nFSMC-vs-software mismatches: "); write_decimal(hardware_software_mismatches as usize);
+                        write_status(b"\r\n");
+                        if !first_mismatch {
+                            write_status(b"First mismatch: page=0x"); write_hex_u32(first_page);
+                            write_status(b" chunk="); write_decimal(first_chunk as usize);
+                            write_status(b" stored=0x"); write_hex_u32(first_stored);
+                            write_status(b" FSMC=0x"); write_hex_u32(first_hardware);
+                            write_status(b" software=0x"); write_hex_u32(first_software);
+                            write_status(b"\r\n");
+                        } else { write_status(b"No ECC mismatches found in tagged pages.\r\n"); }
+                        write_status(if vectors_ok && mismatching_chunks == 0 && page_read_errors == 0 && block_read_errors == 0 {
+                            b"ECCSCAN PASSED. NAND was not modified.\r\n> "
+                        } else { b"ECCSCAN completed with diagnostic findings. NAND was not modified.\r\n> " });
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
                             list_files(fs);
