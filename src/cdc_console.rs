@@ -1293,7 +1293,7 @@ pub fn service(
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCSCAN") {
-                        const total_pages = crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK;
+                        const total_pages: u32 = crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK;
                         let mut tagged_pages = 0u32;
                         let mut hardware_mismatch_chunks = 0u32;
                         let mut software_mismatch_chunks = 0u32;
