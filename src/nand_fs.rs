@@ -10,7 +10,7 @@
 //! single-bit data errors and reject uncorrectable ECC syndromes.
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -40,6 +40,26 @@ pub(crate) const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
 pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
 pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
+
+// Optional main-context service hook used while synchronous NAND operations
+// wait for the device. The hook is installed only around the file-browser
+// operation; it must not access NAND or call back into LittleFS.
+static NAND_IO_SERVICE_HOOK: AtomicPtr<fn()> = AtomicPtr::new(core::ptr::null_mut());
+
+pub fn set_io_service_hook(hook: Option<&'static fn()>) {
+    let pointer = hook.map_or(core::ptr::null_mut(), |callback| {
+        callback as *const fn() as *mut fn()
+    });
+    NAND_IO_SERVICE_HOOK.store(pointer, Ordering::Release);
+}
+
+#[inline]
+fn service_io_hook() {
+    let pointer = NAND_IO_SERVICE_HOOK.load(Ordering::Acquire);
+    if !pointer.is_null() {
+        unsafe { (**pointer)(); }
+    }
+}
 
 pub const PAGE_SIZE: usize = 2048;
 pub const SPARE_SIZE: usize = 64;
@@ -144,9 +164,12 @@ fn ecc_begin_chunk() {
 
 /// Wait for the FSMC FIFO to empty before capturing the ECC result.
 fn wait_fsmc_fifo_empty() -> bool {
-    for _ in 0..TIMEOUT {
+    for iteration in 0..TIMEOUT {
         if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
             return true;
+        }
+        if iteration & 0x0FFF == 0x0FFF {
+            service_io_hook();
         }
         core::hint::spin_loop();
     }
@@ -165,18 +188,24 @@ fn ecc_end_chunk() -> u32 {
 }
 
 pub(crate) fn wait_ready_status() -> bool {
-    for _ in 0..TIMEOUT {
+    for iteration in 0..TIMEOUT {
         command(0x70);
         if read_data() & 0x40 != 0 { return true; }
+        if iteration & 0x0FFF == 0x0FFF {
+            service_io_hook();
+        }
         core::hint::spin_loop();
     }
     false
 }
 
 pub(crate) fn wait_ready_rb() -> bool {
-    for _ in 0..TIMEOUT {
+    for iteration in 0..TIMEOUT {
         if unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0 {
             return true;
+        }
+        if iteration & 0x0FFF == 0x0FFF {
+            service_io_hook();
         }
         core::hint::spin_loop();
     }
@@ -597,6 +626,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         }
         let chunk_ecc = ecc_end_chunk();
         encode_ecc(chunk_ecc, &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
+        service_io_hook();
     }
 
     let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
@@ -624,6 +654,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
             record_ecc_read_failure(page, chunk_index as u32, stored_ecc, calculated_ecc);
             return false;
         }
+        service_io_hook();
     }
     true
 }
