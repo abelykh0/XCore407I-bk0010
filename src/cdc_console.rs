@@ -388,7 +388,7 @@ fn report_storage_test_io_failure(fs: &Filesystem<'_, ActiveStorage>, stage: &[u
         write_hex_u32(ecc[22 + index]);
     }
     write_status(b"\r\n");
-    write_status(b"\r\nRecent LittleFS allocator events (oldest first):\\r\\n");
+    write_status(b"\r\nRecent LittleFS allocator events (oldest first):\r\n");
     let trace_count = alloc_stats[5].min(16) as usize;
     let trace_head = (alloc_stats[6] as usize) % 16;
     let trace_start = (trace_head + 16 - trace_count) % 16;
@@ -623,11 +623,11 @@ fn ecc_diagnostic_read(
     service_usb_only: &mut impl FnMut(),
 ) {
     if path_bytes.is_empty() || path_bytes.len() >= LINE_CAPACITY || path_bytes[0] != b'/' {
-        write_status(b"\\r\\nECCDIAG: expected an absolute file path.\\r\\n> ");
+        write_status(b"\r\nECCDIAG: expected an absolute file path.\r\n> ");
         return;
     }
     if path_bytes.iter().any(|byte| *byte == 0 || *byte < 0x20 || *byte > 0x7e) {
-        write_status(b"\\r\\nECCDIAG: path contains invalid characters.\\r\\n> ");
+        write_status(b"\r\nECCDIAG: path contains invalid characters.\r\n> ");
         return;
     }
 
@@ -635,13 +635,13 @@ fn ecc_diagnostic_read(
     path_buffer[..path_bytes.len()].copy_from_slice(path_bytes);
     path_buffer[path_bytes.len()] = 0;
     let Ok(path) = Path::from_bytes_with_nul(&path_buffer[..=path_bytes.len()]) else {
-        write_status(b"\\r\\nECCDIAG: invalid file path.\\r\\n> ");
+        write_status(b"\r\nECCDIAG: invalid file path.\r\n> ");
         return;
     };
 
-    write_status(b"\\r\\nECCDIAG: read-only scan of ");
+    write_status(b"\r\nECCDIAG: read-only scan of ");
     write_status(path_bytes);
-    write_status(b"; no NAND writes.\\r\\n");
+    write_status(b"; no NAND writes.\r\n");
     crate::nand_fs::clear_nand_read_diagnostic();
     crate::nand_fs::clear_nand_rb_wait_diagnostic();
 
@@ -674,7 +674,7 @@ fn ecc_diagnostic_read(
         Ok(()) => {
             write_status(b"Read bytes: ");
             write_decimal(total);
-            write_status(b"\\r\\n");
+            write_status(b"\r\n");
             if check_test_pattern {
     if let Some((offset, expected, actual)) = mismatch {
                     write_status(b"Pattern mismatch at byte ");
@@ -683,18 +683,18 @@ fn ecc_diagnostic_read(
                     write_hex_u32(expected as u32);
                     write_status(b", actual 0x");
                     write_hex_u32(actual as u32);
-                    write_status(b"\\r\\n");
+                    write_status(b"\r\n");
                 } else {
-                    write_status(b"Pattern check: no mismatch in bytes read.\\r\\n");
+                    write_status(b"Pattern check: no mismatch in bytes read.\r\n");
                 }
             } else {
-                write_status(b"Pattern check: skipped (arbitrary file).\\r\\n");
+                write_status(b"Pattern check: skipped (arbitrary file).\r\n");
             }
         }
         Err(error) => {
             write_status(b"Read failed; LittleFS error: 0x");
             write_hex_u32(error.code() as u32);
-            write_status(b"\\r\\n");
+            write_status(b"\r\n");
         }
     }
 
@@ -707,7 +707,7 @@ fn ecc_diagnostic_read(
     write_decimal(ecc[2] as usize);
     write_status(b" corrected_data_bits=");
     write_decimal(ecc[4] as usize);
-    write_status(b"\\r\\nLast page=0x");
+    write_status(b"\r\nLast page=0x");
     write_hex_u32(ecc[5]);
     write_status(b" chunk=");
     write_decimal(ecc[7] as usize);
@@ -715,22 +715,22 @@ fn ecc_diagnostic_read(
     write_hex_u32(ecc[9]);
     write_status(b" calculated ECC=0x");
     write_hex_u32(ecc[10]);
-    write_status(b"\\r\\nECCR2 per 512-byte chunk: ");
+    write_status(b"\r\nECCR2 per 512-byte chunk: ");
     for index in 0..4 {
         if index != 0 { write_status(b" "); }
         write_hex_u32(ecc[14 + index]);
     }
-    write_status(b"\\r\\nPCR2 after ECC enable: ");
+    write_status(b"\r\nPCR2 after ECC enable: ");
     for index in 0..4 {
         if index != 0 { write_status(b" "); }
         write_hex_u32(ecc[18 + index]);
     }
-    write_status(b"\\r\\nPCR2 before ECCR2 capture: ");
+    write_status(b"\r\nPCR2 before ECCR2 capture: ");
     for index in 0..4 {
         if index != 0 { write_status(b" "); }
         write_hex_u32(ecc[22 + index]);
     }
-    write_status(b"\\r\\nFirst nonzero syndrome: ");
+    write_status(b"\r\nFirst nonzero syndrome: ");
     if ecc[28] == 0 {
         write_status(b"none");
     } else {
@@ -746,13 +746,13 @@ fn ecc_diagnostic_read(
         write_hex_u32(ecc[30]);
     }
     let (calls, iterations, timeouts) = crate::nand_fs::nand_rb_wait_diagnostic();
-    write_status(b"\\r\\nNAND R/B waits: calls=");
+    write_status(b"\r\nNAND R/B waits: calls=");
     write_decimal(calls as usize);
     write_status(b" polls=");
     write_decimal(iterations as usize);
     write_status(b" timeouts=");
     write_decimal(timeouts as usize);
-    write_status(b"\\r\\n> ");
+    write_status(b"\r\n> ");
 }
 
 struct EccNoCorrectionGuard;
@@ -960,7 +960,7 @@ fn storage_test(
         write_status(b" software=0x");
         write_hex_u32(software_ecc[5]);
     }
-    write_status(b"\\r\\n");
+    write_status(b"\r\n");
 
     let write_ecc = crate::nand_fs::write_ecc_compare_diagnostic();
     write_status(b"WRITE-PATH ECC comparison (same 512-byte source data): chunks=");
@@ -977,7 +977,7 @@ fn storage_test(
         write_status(b" software=0x");
         write_hex_u32(write_ecc[5]);
     }
-    write_status(b"\\r\\n");
+    write_status(b"\r\n");
 
     if let Some((offset, expected, actual)) = mismatch {
         write_status(b"\r\nSTORAGETEST mismatch at byte ");
@@ -1299,9 +1299,9 @@ pub fn service(
                         let mut software_mismatch_chunks = 0u32;
                         let mut first_mismatch = [0u32; 7];
                         let mut first_mismatch_page = u32::MAX;
-                        write_status(b"\\r\\nECCSCAN: read-only physical NAND scan; Dhara/LittleFS bypassed; no NAND writes. Pages=");
+                        write_status(b"\r\nECCSCAN: read-only physical NAND scan; Dhara/LittleFS bypassed; no NAND writes. Pages=");
                         write_decimal(total_pages as usize);
-                        write_status(b"\\r\\n");
+                        write_status(b"\r\n");
                         let mut failed_page = u32::MAX;
                         for page in 0..total_pages {
                             match crate::nand_fs::ecc_scan_physical_page(page) {
@@ -1326,7 +1326,7 @@ pub fn service(
                                 write_decimal(page as usize);
                                 write_status(b" / ");
                                 write_decimal(total_pages as usize);
-                                write_status(b"\\r\\n");
+                                write_status(b"\r\n");
                             }
                             if (page & 0x3F) == 0 {
                                 _service_background();
@@ -1338,13 +1338,13 @@ pub fn service(
                         write_decimal(hardware_mismatch_chunks as usize);
                         write_status(b" software mismatch chunks=");
                         write_decimal(software_mismatch_chunks as usize);
-                        write_status(b"\\r\\n");
+                        write_status(b"\r\n");
                         if failed_page != u32::MAX {
                             write_status(b"ECCSCAN stopped: direct NAND read failed at page 0x");
                             write_hex_u32(failed_page);
-                            write_status(b"\\r\\n");
+                            write_status(b"\r\n");
                         } else {
-                            write_status(b"ECCSCAN completed.\\r\\n");
+                            write_status(b"ECCSCAN completed.\r\n");
                         }
                         if first_mismatch_page != u32::MAX {
                             write_status(b"First mismatch: page=0x");
@@ -1357,13 +1357,13 @@ pub fn service(
                             write_hex_u32(first_mismatch[5]);
                             write_status(b" software=0x");
                             write_hex_u32(first_mismatch[6]);
-                            write_status(b"\\r\\n");
+                            write_status(b"\r\n");
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCRAW") {
-                        write_status(b"\\r\\nECCRAW: direct physical NAND read; bypasses Dhara/LittleFS; no NAND writes. Page=0x");
+                        write_status(b"\r\nECCRAW: direct physical NAND read; bypasses Dhara/LittleFS; no NAND writes. Page=0x");
                         write_hex_u32(0x0000_233F);
-                        write_status(b"\\r\\n");
+                        write_status(b"\r\n");
                         let selftest = crate::nand_fs::ecc_software_selftest();
                         write_status(b"Software ECC vectors [zero, erased, bit0, PRNG]: ");
                         for value in selftest {
@@ -1405,21 +1405,21 @@ pub fn service(
                                     write_hex_u32(chunk.pcr_enable);
                                     write_status(b"/");
                                     write_hex_u32(chunk.pcr_capture);
-                                    write_status(b"\\r\\n");
+                                    write_status(b"\r\n");
                                 }
-                                write_status(b"256-byte ECCPS=000 probe (no OOB comparison):\\r\\n");
+                                write_status(b"256-byte ECCPS=000 probe (no OOB comparison):\r\n");
                                 for index in 0..8 {
                                     write_status(b"256[");
                                     write_decimal(index);
                                     write_status(b"] calculated=0x");
                                     write_hex_u32(calculated_256[index]);
-                                    write_status(b"\\r\\n");
+                                    write_status(b"\r\n");
                                 }
                                 write_status(b"2048-byte ECCPS=011 single-window probe: 0x");
                                 write_hex_u32(calculated_2048);
-                                write_status(b"\\r\\n");
+                                write_status(b"\r\n");
                             }
-                            None => write_status(b"Direct NAND read failed (ready/busy timeout or OOB read failure).\\r\\n"),
+                            None => write_status(b"Direct NAND read failed (ready/busy timeout or OOB read failure).\r\n"),
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"LIST") {
@@ -1444,7 +1444,7 @@ pub fn service(
                                 || path_bytes == b"/.storage-test";
                             ecc_diagnostic_read(fs, path_bytes, check_pattern, _service_background);
                         } else {
-                            write_status(b"Storage unavailable.\\r\\n> ");
+                            write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"STORAGETEST") {
                         if let Some(fs) = fs {
