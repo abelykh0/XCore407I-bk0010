@@ -21,7 +21,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCPROBE       Probe FSMC ECC read timing on physical page 1; read-only\r\n  ECCTEST        DESTRUCTIVE: erase one good block and test ECC\r\n  ECCCORRTEST    Exhaustive software ECC correction test; no NAND writes\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCPROBE       Probe FSMC ECC read timing on physical page 1; read-only\r\n  ECCTEST        DESTRUCTIVE: erase one good block and test ECC\r\n  ECCCORRTEST    Exhaustive software ECC correction test; no NAND writes\r\n  ECCNANDTEST    Read-only correction test on NAND page 0xFFC2\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -1514,22 +1514,22 @@ pub fn service(
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCNANDTEST") {
-                        write_status(b"\\r\\nECCNANDTEST: read-only correction integration test; page=0x0000FFC2. NAND is not modified.\\r\\n");
+                        write_status(b"\r\nECCNANDTEST: read-only correction integration test; page=0x0000FFC2. NAND is not modified.\r\n");
                         match crate::nand_fs::ecc_nand_correction_test(0x0000_FFC2) {
                             Some(result) => {
                                 write_status(b"Real NAND chunks checked=");
                                 write_decimal(result[0] as usize);
                                 write_status(b" baseline ECC mismatches=");
                                 write_decimal(result[1] as usize);
-                                write_status(b"\\r\\nInjected single-bit data errors=");
+                                write_status(b"\r\nInjected single-bit data errors=");
                                 write_decimal(result[2] as usize);
                                 write_status(b" failures=");
                                 write_decimal(result[3] as usize);
-                                write_status(b"\\r\\nInjected ECC-bit errors=");
+                                write_status(b"\r\nInjected ECC-bit errors=");
                                 write_decimal(result[4] as usize);
                                 write_status(b" failures=");
                                 write_decimal(result[5] as usize);
-                                write_status(b"\\r\\nInjected double-bit data errors=");
+                                write_status(b"\r\nInjected double-bit data errors=");
                                 write_decimal(result[6] as usize);
                                 write_status(b" miscorrections=");
                                 write_decimal(result[7] as usize);
@@ -1538,13 +1538,13 @@ pub fn service(
                                     && result[4] == 96 && result[5] == 0
                                     && result[6] == 4 && result[7] == 0
                                 {
-                                    write_status(b"\\r\\nECCNANDTEST PASSED. Production correction remains disabled.\\r\\n");
+                                    write_status(b"\r\nECCNANDTEST PASSED. Production correction remains disabled.\r\n");
                                 } else {
-                                    write_status(b"\\r\\nECCNANDTEST FAILED. Keep production correction disabled.\\r\\n");
+                                    write_status(b"\r\nECCNANDTEST FAILED. Keep production correction disabled.\r\n");
                                 }
                             }
                             None => {
-                                write_status(b"ECCNANDTEST could not read a tagged ECC page at 0x0000FFC2. Run ECCTEST first; it erases one good physical block.\\r\\n");
+                                write_status(b"ECCNANDTEST could not read a tagged ECC page at 0x0000FFC2. Run ECCTEST first; it erases one good physical block.\r\n");
                             }
                         }
                         write_status(b"> ");
