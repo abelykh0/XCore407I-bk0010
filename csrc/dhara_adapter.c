@@ -37,20 +37,28 @@ int xcore_dhara_map_resume(int32_t *error)
 	return ret;
 }
 
-int xcore_dhara_map_provision(uint32_t sector, const uint8_t *data, int32_t *error)
+int xcore_dhara_map_provision(uint32_t sector, const uint8_t *data,
+			       int32_t *error, int32_t *phase)
 {
 	dhara_error_t err = DHARA_E_NONE;
 	int ret;
 
+	if (phase)
+		*phase = 0;
 	if (!xcore_initialized || !data) {
 		if (error)
 			*error = DHARA_E_CORRUPT_MAP;
 		return -1;
 	}
 
+	if (phase)
+		*phase = 1;
 	ret = dhara_map_write(&xcore_map, sector, data, &err);
-	if (!ret)
+	if (!ret) {
+		if (phase)
+			*phase = 2;
 		ret = dhara_map_sync(&xcore_map, &err);
+	}
 	if (error)
 		*error = (int32_t)err;
 	return ret;
