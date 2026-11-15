@@ -14,7 +14,7 @@ use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, Nv12DemoImage};
+use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, show_file_browser_line, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
 use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
@@ -45,7 +45,7 @@ use file_browser::{
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
     configure_usb_host_task_timer, try_init_usb_fs_host, USB_FS_READY,
-    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING,
+    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
 };
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
@@ -79,6 +79,95 @@ unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
+}
+
+
+fn draw_keyboard_unavailable_screen() {
+    fn decimal(mut value: u32, out: &mut [u8; 10]) -> &[u8] {
+        let mut pos = out.len();
+        if value == 0 {
+            out[9] = b'0';
+            return &out[9..];
+        }
+        while value != 0 && pos != 0 {
+            pos -= 1;
+            out[pos] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+        &out[pos..]
+    }
+
+    clear_demo_canvas(0x10); // blue background
+    show_file_browser_line(3, b"KEYBOARD NOT AVAILABLE", false);
+    show_file_browser_line(5, b"USB HOST DIAGNOSTICS", false);
+
+    let (hid, boot, reports, last_len, rearm, protocol, unmounts) =
+        keyboard::keyboard_diagnostics();
+    show_file_browser_line(7, if USB_FS_READY.load(Ordering::Acquire) {
+        b"OTG_FS HOST: READY" as &[u8]
+    } else {
+        b"OTG_FS HOST: NOT READY" as &[u8]
+    }, false);
+
+    let mut line = [b' '; 32];
+    let mut number = [0u8; 10];
+    line[..10].copy_from_slice(b"HOST EVENT");
+    let digits = decimal(USB_FS_STATUS.load(Ordering::Acquire), &mut number);
+    line[11..11 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(9, &line, false);
+
+    line.fill(b' ');
+    line[..10].copy_from_slice(b"HID MOUNTS");
+    let digits = decimal(hid, &mut number);
+    line[11..11 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(10, &line, false);
+
+    line.fill(b' ');
+    line[..15].copy_from_slice(b"BOOT KEYBOARDS");
+    let digits = decimal(boot, &mut number);
+    line[16..16 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(11, &line, false);
+
+    line.fill(b' ');
+    line[..7].copy_from_slice(b"REPORTS");
+    let digits = decimal(reports, &mut number);
+    line[8..8 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(12, &line, false);
+
+    line.fill(b' ');
+    line[..14].copy_from_slice(b"LAST REPORT LEN");
+    let digits = decimal(last_len, &mut number);
+    line[15..15 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(13, &line, false);
+
+    line.fill(b' ');
+    line[..11].copy_from_slice(b"REARM FAILS");
+    let digits = decimal(rearm, &mut number);
+    line[12..12 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(14, &line, false);
+
+    line.fill(b' ');
+    line[..8].copy_from_slice(b"PROTOCOL");
+    if protocol == 0xff {
+        line[9..13].copy_from_slice(b"NONE");
+    } else if protocol == 0xfe {
+        line[9..20].copy_from_slice(b"SET PROTO FAIL");
+    } else {
+        let digits = decimal(protocol as u32, &mut number);
+        line[9..9 + digits.len()].copy_from_slice(digits);
+    }
+    show_file_browser_line(15, &line, false);
+
+    line.fill(b' ');
+    line[..8].copy_from_slice(b"UNMOUNTS");
+    let digits = decimal(unmounts, &mut number);
+    line[9..9 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(16, &line, false);
+
+    show_file_browser_line(19, b"CHECK KEYBOARD USB CABLE/PORT", false);
+    show_file_browser_line(20, b"USE USB BOOT-HID KEYBOARD", false);
+    show_file_browser_line(22, b"RECONNECT KEYBOARD THEN RESET", false);
+    show_file_browser_line(24, b"NO EMULATOR STARTED", false);
 }
 
 #[entry]
@@ -175,7 +264,16 @@ fn main() -> ! {
 
     let boot_mode = keyboard::boot_selection();
     let cdc_enabled = boot_mode == keyboard::BOOT_SELECTION_CDC;
-    let emulator_enabled = boot_mode == keyboard::BOOT_SELECTION_NORMAL;
+    // A normal-mode timeout is not proof that a keyboard exists. Do not
+    // start the emulator unless a boot-keyboard interface actually mounted.
+    let emulator_enabled =
+        boot_mode == keyboard::BOOT_SELECTION_NORMAL && keyboard::keyboard_is_mounted();
+    let keyboard_unavailable =
+        boot_mode == keyboard::BOOT_SELECTION_NORMAL && !keyboard::keyboard_is_mounted();
+
+    if keyboard_unavailable {
+        draw_keyboard_unavailable_screen();
+    }
 
     if emulator_enabled {
         unsafe {
@@ -653,7 +751,8 @@ fn main() -> ! {
         // Freeze PDP execution while any modal UI owns input. Rebase the
         // pacing clock on both entry and exit so the emulator never tries to
         // catch up for time spent in the file chooser or format recovery UI.
-        let emulator_paused = browser_open
+        let emulator_paused = !emulator_enabled
+            || browser_open
             || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
             || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
             || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE
