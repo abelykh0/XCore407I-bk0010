@@ -1292,6 +1292,38 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
+                    } else if command_is(line, b"ECCPROBE") {
+                        const page = 1u32;
+                        write_status(b"\\r\\nECCPROBE: read-only chunk-0 timing/repeatability test; page=0x");
+                        write_hex_u32(page);
+                        write_status(b"\\r\\n");
+                        match crate::nand_fs::ecc_probe_chunk0(page) {
+                            Some(r) => {
+                                write_status(b"stored=0x");
+                                write_hex_u32(r[0]);
+                                write_status(b" before-command=0x");
+                                write_hex_u32(r[1]);
+                                write_status(b" after-ready-1=0x");
+                                write_hex_u32(r[2]);
+                                write_status(b" after-ready-2=0x");
+                                write_hex_u32(r[3]);
+                                write_status(b"\\r\\nPCR-before=0x");
+                                write_hex_u32(r[4]);
+                                write_status(b" PCR-after-1=0x");
+                                write_hex_u32(r[5]);
+                                write_status(b" PCR-after-2=0x");
+                                write_hex_u32(r[6]);
+                                write_status(b"\\r\\nnonFF=");
+                                write_decimal(r[7] as usize);
+                                write_status(b" first=");
+                                write_hex_u32(r[8]);
+                                write_status(b" last=");
+                                write_hex_u32(r[9]);
+                                write_status(b"\\r\\n");
+                            }
+                            None => write_status(b"ECCPROBE failed: NAND read timeout\\r\\n"),
+                        }
+                        write_status(b"> ");
                     } else if command_is(line, b"ECCSCAN") {
                         const total_pages: u32 = crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK;
                         let mut tagged_pages = 0u32;
