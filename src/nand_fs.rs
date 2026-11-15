@@ -832,6 +832,74 @@ fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
     Some((byte_index, bit_index))
 }
 
+/// Exhaustively validate the production 512-byte correction decoder without NAND I/O.
+/// Returns [single-bit tested, single-bit failures, ECC-bit tested, ECC-bit failures,
+/// double-bit tested, double-bit miscorrections].
+pub(crate) fn ecc_correction_selftest() -> [u32; 6] {
+    let mut original = [0u8; FSMC_ECC_CHUNK_SIZE];
+    let mut state = 0xA341_316Cu32;
+    for byte in &mut original {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        *byte = state as u8;
+    }
+    let stored = ecc_software_512_fsmc(&original);
+
+    let mut bit_syndromes = [0u32; FSMC_ECC_CHUNK_SIZE * 8];
+    let mut single_tested = 0u32;
+    let mut single_failures = 0u32;
+    let mut damaged = original;
+    for bit in 0..bit_syndromes.len() {
+        let byte_index = bit / 8;
+        let bit_mask = 1u8 << (bit % 8);
+        damaged[byte_index] ^= bit_mask;
+        let calculated = ecc_software_512_fsmc(&damaged);
+        let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
+        bit_syndromes[bit] = syndrome;
+        let corrected = correct_ecc_chunk(&mut damaged, stored, calculated);
+        single_tested += 1;
+        if !corrected || damaged != original {
+            single_failures += 1;
+        }
+        damaged[byte_index] ^= bit_mask;
+    }
+
+    let mut ecc_tested = 0u32;
+    let mut ecc_failures = 0u32;
+    for bit in 0..24 {
+        let mut unchanged = original;
+        let accepted = correct_ecc_chunk(&mut unchanged, stored ^ (1 << bit), stored);
+        ecc_tested += 1;
+        if !accepted || unchanged != original {
+            ecc_failures += 1;
+        }
+    }
+
+    // For two data-bit errors, the syndrome is the XOR of the two
+    // corresponding single-bit syndromes. Exercise every distinct pair.
+    let mut double_tested = 0u32;
+    let mut double_miscorrections = 0u32;
+    for first in 0..bit_syndromes.len() {
+        for second in (first + 1)..bit_syndromes.len() {
+            let syndrome = bit_syndromes[first] ^ bit_syndromes[second];
+            double_tested += 1;
+            if ecc_error_location(syndrome).is_some() {
+                double_miscorrections += 1;
+            }
+        }
+    }
+
+    [
+        single_tested,
+        single_failures,
+        ecc_tested,
+        ecc_failures,
+        double_tested,
+        double_miscorrections,
+    ]
+}
+
 fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     if data.len() != FSMC_ECC_CHUNK_SIZE {
         return false;
