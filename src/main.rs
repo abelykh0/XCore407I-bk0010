@@ -55,6 +55,16 @@ static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
     AtomicPtr::new(ptr::null_mut());
 static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
 
+// ECCSCAN runs in the CDC console's foreground. Keep the USB device stack
+// serviced between NAND reads, but do not run the video renderer from this
+// callback: renderer work can monopolize the scan between completed blocks.
+fn service_cdc_scan_io() {
+    unsafe {
+        let _ = tusb::tud_task_ext(0, false);
+        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+    }
+}
+
 fn service_file_browser_io() {
     unsafe {
         let _ = tusb::tud_task_ext(0, false);
@@ -382,7 +392,7 @@ fn main() -> ! {
                         Some(fs),
                         &mut zmodem_state,
                         TICKS.load(Ordering::Relaxed),
-                        &mut || service_file_browser_io(),
+                        &mut || service_cdc_scan_io(),
                     );
                     xcore407i_blinker::nand_fs::set_io_service_hook(None);
                     FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
