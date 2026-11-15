@@ -9,12 +9,13 @@
 //! Hamming ECC values and an ECC tag in the spare area. Reads correct
 //! single-bit data errors and reject uncorrectable ECC syndromes.
 
+use core::mem::MaybeUninit;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
-    fs::Filesystem,
+    fs::{Allocation as LittleFsAllocation, Filesystem},
     io::Result as LfsResult,
 };
 
@@ -67,6 +68,30 @@ pub const PAGES_PER_BLOCK: u32 = 64;
 pub const PHYSICAL_BLOCKS: u32 = 1024;
 pub const ERASE_BLOCK_SIZE: usize = PAGE_SIZE * PAGES_PER_BLOCK as usize;
 pub type ActiveStorage = crate::dhara_fs::DharaStorage;
+
+// One caller-owned LittleFS mount workspace shared by normal and CDC modes.
+// The modes are mutually exclusive, so this allocation is never mounted twice
+// concurrently. Keeping it static avoids placing the multi-kilobyte cache and
+// LittleFS state on the limited main stack.
+static mut LITTLEFS_MOUNT_ALLOCATION: MaybeUninit<LittleFsAllocation<ActiveStorage>> =
+    MaybeUninit::uninit();
+
+fn mount_with_shared_allocation<R>(
+    storage: &mut ActiveStorage,
+    service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
+) -> LfsResult<R> {
+    // SAFETY: firmware runs one main-context filesystem operation at a time;
+    // the normal and CDC modes do not run concurrently. Interrupt handlers
+    // must not access LittleFS.
+    unsafe {
+        let allocation_ptr = core::ptr::addr_of_mut!(LITTLEFS_MOUNT_ALLOCATION)
+            .cast::<LittleFsAllocation<ActiveStorage>>();
+        allocation_ptr.write(LittleFsAllocation::new());
+        let allocation = &mut *allocation_ptr;
+        let filesystem = Filesystem::<ActiveStorage>::mount(allocation, storage)?;
+        service(&filesystem)
+    }
+}
 
 // Preserve the first low-level failure for storage error reports.
 static NAND_READ_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
@@ -808,7 +833,7 @@ pub fn with_mounted_detailed_with_progress<R>(
     // Mount directly rather than using is_mountable(): the latter only
     // returns a bool and discards LittleFS's actual error code.
     // Nest the service result so a caller-operation error remains distinct.
-    let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
+    let mounted = mount_with_shared_allocation(&mut storage, |fs| {
         progress(u32::MAX, 1);
         Ok(service(fs))
     }).map_err(|error| FsAccessError::Mount(error.code()))?;
@@ -831,10 +856,6 @@ pub fn with_mounted_report<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>, &[u8], usize) -> LfsResult<R>,
 ) -> Result<R, InitError> {
     let mut storage = ActiveStorage::new()?;
-    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
-        return Err(InitError::MountFailed);
-    }
-
     let mut report = [0u8; 256];
     let mut len = 0;
     append(&mut report, &mut len, b"XCore407I NAND / LittleFS\r\n");
@@ -844,7 +865,7 @@ pub fn with_mounted_report<R>(
     append(&mut report, &mut len, b"LittleFS: existing volume mounted\r\n");
     append(&mut report, &mut len, b"Capacity: ");
 
-    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
+    mount_with_shared_allocation(&mut storage, |fs| {
         append_hex(&mut report, &mut len, fs.total_space() as u32, 8);
         append(&mut report, &mut len, b" bytes\r\nFree: ");
         append_hex(
@@ -881,12 +902,7 @@ pub fn initialize_and_mount_report() -> ([u8; 256], usize) {
     append_hex(&mut report, &mut len, storage.factory_bad_blocks() as u32, 4);
     append(&mut report, &mut len, b"\r\n");
 
-    if !Filesystem::<ActiveStorage>::is_mountable(&mut storage) {
-        append(&mut report, &mut len, b"ERROR: no valid LittleFS; NAND unchanged\r\n");
-        return (report, len);
-    }
-
-    match Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
+    match mount_with_shared_allocation(&mut storage, |fs| {
         Ok((fs.total_space(), fs.available_space().unwrap_or(0)))
     }) {
         Ok((total, free)) => {
@@ -961,7 +977,7 @@ pub fn initialize_nand_volume_with_progress(
     let mut storage = ActiveStorage::initialize_new_volume_with_progress(progress)?;
     Filesystem::<ActiveStorage>::format(&mut storage)
         .map_err(|_| InitError::MountFailed)?;
-    Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |_| Ok(()))
+    mount_with_shared_allocation(&mut storage, |_| Ok(()))
         .map_err(|_| InitError::MountFailed)?;
     let bad_blocks = storage.bad_block_count();
     Ok(FormatReport {
