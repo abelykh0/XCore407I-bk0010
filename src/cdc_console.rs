@@ -1359,10 +1359,22 @@ pub fn service(
                                     write_hex_u32(r[15 + i]);
                                     write_status(b"\r\n");
                                 }
+                                write_status(b"PCR2 enable=0x");
+                                write_hex_u32(r[19]);
+                                write_status(b" capture=0x");
+                                write_hex_u32(r[20]);
+                                write_status(b"\r\nECCPS=256 windows:");
+                                for i in 0..8 {
+                                    write_status(b" 0x");
+                                    write_hex_u32(r[21 + i]);
+                                }
+                                write_status(b"\r\nECCPS=2048: 0x");
+                                write_hex_u32(r[29]);
+                                write_status(b"\r\n");
                             }
                             None => write_status(b"ECCTEST FAILED: NAND read/erase/program operation failed. Check NAND status and bad-block markers.\r\n"),
                         }
-                        write_status(b"Dhara/LittleFS metadata was not updated; the tested block is outside their allocation protocol.\r\n> ");
+                        write_status(b"Dhara/LittleFS metadata was not updated; this raw erase may invalidate the existing volume.\r\n> ");
                     } else if command_is(line, b"ECCSCAN") {
                         const total_pages: u32 = crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK;
                         let mut tagged_pages = 0u32;
