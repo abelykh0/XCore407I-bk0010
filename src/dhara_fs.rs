@@ -108,16 +108,22 @@ fn block_is_bad(block: u32) -> Result<bool, ()> {
     }
     let first_page = block * PAGES_PER_BLOCK;
     let mut marker = [0u8; 1];
-    if !nand_fs::read_page(first_page, PAGE_SIZE as u16, &mut marker) {
-        return Err(());
+    let first_read = nand_fs::read_page(first_page, PAGE_SIZE as u16, &mut marker);
+    let first_bad = first_read && marker[0] != 0xFF;
+
+    marker[0] = 0xFF;
+    let second_read = nand_fs::read_page(first_page + 1, PAGE_SIZE as u16, &mut marker);
+    let second_bad = second_read && marker[0] != 0xFF;
+
+    // Either factory marker is sufficient. In particular, don't discard a
+    // valid second-page marker merely because the first page is unreadable.
+    if first_bad || second_bad {
+        Ok(true)
+    } else if first_read && second_read {
+        Ok(false)
+    } else {
+        Err(())
     }
-    if marker[0] != 0xFF {
-        return Ok(true);
-    }
-    if !nand_fs::read_page(first_page + 1, PAGE_SIZE as u16, &mut marker) {
-        return Err(());
-    }
-    Ok(marker[0] != 0xFF)
 }
 
 fn program_bad_marker(page: u32) -> bool {
