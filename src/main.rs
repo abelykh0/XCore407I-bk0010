@@ -731,6 +731,31 @@ fn main() -> ! {
             let listing_result = list_root_files(
                 &mut *browser_paths,
                 &mut *browser_path_lengths,
+                |done, total| {
+                    if done == u32::MAX {
+                        show_file_browser_line(
+                            27,
+                            if total == 0 {
+                                b"F2: LITTLEFS MOUNT" as &[u8]
+                            } else {
+                                b"F2: ROOT DIRECTORY"
+                            },
+                            false,
+                        );
+                    } else if total == 0 {
+                        show_file_browser_line(27, b"F2: NAND INIT", false);
+                    } else if done == 1 || done % 32 == 0 || done == total {
+                        let percent = done.saturating_mul(100) / total;
+                        let mut line = [b' '; 32];
+                        line[..12].copy_from_slice(b"F2: NAND SCAN");
+                        line[13] = b'0' + ((percent / 100) % 10) as u8;
+                        line[14] = b'0' + ((percent / 10) % 10) as u8;
+                        line[15] = b'0' + (percent % 10) as u8;
+                        line[16] = b'%';
+                        show_file_browser_line(27, &line, false);
+                    }
+                    service_file_browser_io();
+                },
             );
             xcore407i_blinker::nand_fs::set_io_service_hook(None);
             FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
