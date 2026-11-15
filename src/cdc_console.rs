@@ -106,7 +106,7 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
                 write_hex_u32(device_location);
                 write_status(b" status=0x");
                 write_hex_u32(device_status);
-                write_status(b"\\r\\n");
+                write_status(b"\r\n");
             }
             write_status(b"NAND was not modified by this diagnostic.\r\n");
         }
