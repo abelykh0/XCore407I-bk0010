@@ -862,7 +862,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     address((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
-        if !raw_read {
+        if !raw_read && !software_ecc {
             let _ = ecc_end_chunk();
         }
         record_nand_read_failure(1, page);
