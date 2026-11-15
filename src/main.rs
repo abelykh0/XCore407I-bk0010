@@ -668,13 +668,17 @@ fn main() -> ! {
 
         let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
         if save_state == SAVE_DIALOG_CHECK {
+            show_file_browser_line(27, b"F3: BUILDING SAVE PATH", false);
             let mut path = [0u8; MAX_BROWSER_PATH];
             let path_len = unsafe { build_save_path(&mut path) };
             if path_len == 0 {
+                show_file_browser_line(27, b"F3: INVALID SAVE PATH", false);
                 SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
                 SAVE_DIALOG_RESULT.store(SAVE_RESULT_ERROR, Ordering::Release);
             } else {
+                show_file_browser_line(27, b"F3: CHECKING FILE ON NAND", false);
                 let exists = save_file_exists(&path[..path_len]);
+                show_file_browser_line(27, b"F3: FILE CHECK COMPLETE", false);
                 if exists {
                     SAVE_DIALOG_STATE.store(SAVE_DIALOG_CONFIRM, Ordering::Release);
                     SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
@@ -686,10 +690,17 @@ fn main() -> ! {
         }
 
         if SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_WRITE {
+            show_file_browser_line(27, b"F3: PREPARING NAND WRITE", false);
             let mut path = [0u8; MAX_BROWSER_PATH];
             let path_len = unsafe { build_save_path(&mut path) };
             let overwrite = SAVE_OVERWRITE.load(Ordering::Acquire);
+            show_file_browser_line(27, b"F3: WRITING RAM TO NAND", false);
             let saved = path_len != 0 && save_ram_to_path(&path[..path_len], overwrite).is_ok();
+            show_file_browser_line(
+                27,
+                if saved { b"F3: NAND WRITE COMPLETE" } else { b"F3: NAND WRITE FAILED" },
+                false,
+            );
             SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
             SAVE_DIALOG_RESULT.store(
                 if saved { SAVE_RESULT_OK } else { SAVE_RESULT_ERROR },
