@@ -1041,7 +1041,7 @@ pub(crate) fn ecc_standalone_read(
 
 
 /// Destructive, isolated FSMC ECC test. Erases the highest-numbered good
-/// physical block, programs page 2 with four deterministic 512-byte patterns,
+/// physical block, programs page 2 with four independent pseudorandom 512-byte chunks,
 /// then compares write-time, read-time, and software ECC. This bypasses Dhara
 /// and LittleFS; the selected physical block's prior contents are lost.
 pub(crate) fn ecc_destructive_test() -> Option<[u32; 38]> {
