@@ -49,9 +49,14 @@ pub(crate) fn set_ecc_write_raw_read_test_mode(enabled: bool) {
 
 // Diagnostic mode: calculate/compare ECC on reads, but never mutate page data.
 static ECC_CHECK_NO_CORRECT_TEST_MODE: AtomicBool = AtomicBool::new(false);
+static SOFTWARE_ECC_TEST_MODE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_ecc_check_no_correct_test_mode(enabled: bool) {
     ECC_CHECK_NO_CORRECT_TEST_MODE.store(enabled, Ordering::SeqCst);
+}
+
+pub(crate) fn set_software_ecc_test_mode(enabled: bool) {
+    SOFTWARE_ECC_TEST_MODE.store(enabled, Ordering::SeqCst);
 }
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
@@ -534,20 +539,25 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     cortex_m::asm::delay(1_000);
 
     let raw_mode = RAW_NAND_TEST_MODE.load(Ordering::SeqCst);
+    let software_ecc = SOFTWARE_ECC_TEST_MODE.load(Ordering::SeqCst);
     let write_ecc = !raw_mode;
     let mut ecc = [0xFFu8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        if write_ecc { let _ = ecc_begin_chunk(); }
+        if write_ecc && !software_ecc { let _ = ecc_begin_chunk(); }
         for &byte in chunk { write_data(byte); }
-        // The FSMC buffers NAND writes. Capturing ECC before FEMPT is set can
-        // store a code for an incomplete chunk and cause false corrections.
+        // The FSMC buffers NAND writes. Wait for the bus transfer to finish
+        // before moving to the next chunk or storing its software ECC.
         if !wait_fsmc_fifo_empty() {
             let status = unsafe { read_volatile(FSMC_SR2) };
             record_nand_device_failure(6, page, status);
             return false;
         }
         if write_ecc {
-            let (chunk_ecc, _) = ecc_end_chunk();
+            let chunk_ecc = if software_ecc {
+                ecc_software_512(chunk)
+            } else {
+                ecc_end_chunk().0
+            };
             encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
         }
     }
@@ -837,13 +847,11 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     let raw_read = RAW_NAND_TEST_MODE.load(Ordering::SeqCst)
         || ECC_WRITE_RAW_READ_TEST_MODE.load(Ordering::SeqCst);
+    let software_ecc = SOFTWARE_ECC_TEST_MODE.load(Ordering::SeqCst);
 
-    // For ECC reads, enable the engine before starting the NAND page-read
-    // transaction. This keeps ECCEN asserted across command/address setup,
-    // the NAND's internal read cycle, and the 512-byte data transfer.
-    // Command/address accesses use separate FSMC addresses and are excluded
-    // from ECC accumulation by the controller.
-    if !raw_read {
+    // In the software-ECC experiment, leave the FSMC ECC engine disabled:
+    // calculate the reference code from the bytes actually read from NAND.
+    if !raw_read && !software_ecc {
         let _ = ecc_begin_chunk();
     }
 
@@ -869,15 +877,19 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     let mut calculated = [0u8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        if chunk_index != 0 {
+        if !software_ecc && chunk_index != 0 {
             let _ = ecc_begin_chunk();
         }
         let pcr_enable = unsafe { read_volatile(FSMC_PCR2) };
         ECC_LAST_PCR_ENABLE[chunk_index].store(pcr_enable, Ordering::Relaxed);
-        for byte in chunk {
+        for byte in chunk.iter_mut() {
             *byte = read_data();
         }
-        let (chunk_ecc, pcr_capture) = ecc_end_chunk();
+        let (chunk_ecc, pcr_capture) = if software_ecc {
+            (ecc_software_512(chunk), unsafe { read_volatile(FSMC_PCR2) })
+        } else {
+            ecc_end_chunk()
+        };
         ECC_LAST_PCR_CAPTURE[chunk_index].store(pcr_capture, Ordering::Relaxed);
         ECC_LAST_PAGE_CHUNKS[chunk_index].store(chunk_ecc, Ordering::Relaxed);
         encode_ecc(chunk_ecc, &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
