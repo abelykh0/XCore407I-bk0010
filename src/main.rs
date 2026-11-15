@@ -8,7 +8,7 @@ mod keyboard_map;
 mod usb_host;
 
 use core::ptr;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicPtr, Ordering};
 use cortex_m::peripheral::{syst::SystClkSource, NVIC};
 use cortex_m_rt::{entry, exception};
 use panic_halt as _;
@@ -49,6 +49,31 @@ use usb_host::{
 };
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
+
+static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
+    AtomicPtr::new(ptr::null_mut());
+static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
+
+fn service_file_browser_io() {
+    unsafe {
+        let _ = tusb::tud_task_ext(0, false);
+        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+    }
+    if USB_FS_READY.load(Ordering::Acquire)
+        && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+    {
+        unsafe { tusb::tuh_task_ext(0, false); }
+    } else {
+        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+    }
+
+    let renderer = FILE_BROWSER_VIDEO_RENDERER.load(Ordering::Acquire);
+    if !renderer.is_null() {
+        unsafe {
+            while prepare_next_video_batch(&mut *renderer) {}
+        }
+    }
+}
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
@@ -506,26 +531,21 @@ fn main() -> ! {
 
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
             keyboard_queue_discard();
-            match list_root_files(
+
+            // NAND/LittleFS operations are synchronous. Install a narrowly
+            // scoped hook so USB and the UVC producer continue running even
+            // inside NAND ready/FSMC wait loops and ECC page processing.
+            FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+            xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+            let listing_result = list_root_files(
                 &mut *browser_paths,
                 &mut *browser_path_lengths,
-                |_, _| {
-                    // NAND marker scanning is synchronous, but it must not
-                    // starve the UVC producer or USB host keyboard task.
-                    unsafe {
-                        let _ = tusb::tud_task_ext(0, false);
-                        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                    }
-                    if USB_FS_READY.load(Ordering::Acquire)
-                        && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
-                    {
-                        unsafe { tusb::tuh_task_ext(0, false); }
-                    } else {
-                        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
-                    }
-                    while prepare_next_video_batch(&mut video_renderer) {}
-                },
-            ) {
+                |_, _| service_file_browser_io(),
+            );
+            xcore407i_blinker::nand_fs::set_io_service_hook(None);
+            FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
+
+            match listing_result {
                 Ok(count) => {
                     browser_count = count;
                     browser_selected = 0;
