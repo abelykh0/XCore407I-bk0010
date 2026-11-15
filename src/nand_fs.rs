@@ -70,6 +70,16 @@ pub(crate) fn set_software_ecc_compare_test_mode(enabled: bool) {
     SOFTWARE_ECC_COMPARE_TEST_MODE.store(enabled, Ordering::SeqCst);
 }
 
+pub(crate) fn clear_write_ecc_compare_diagnostic() {
+    for count in &WRITE_ECC_COMPARE_COUNTS {
+        count.store(0, Ordering::Release);
+    }
+    WRITE_ECC_FIRST_PAGE.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_HARDWARE.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_SOFTWARE.store(0, Ordering::Release);
+}
+
 pub(crate) fn software_ecc_compare_diagnostic() -> [u32; 6] {
     [
         SOFTWARE_ECC_COMPARE_COUNTS[0].load(Ordering::Acquire),
@@ -204,11 +214,6 @@ pub(crate) fn clear_nand_read_diagnostic() {
     NAND_READ_FAILURE_CALCULATED_ECC.store(0, Ordering::Release);
     for count in &ECC_READ_COUNTS { count.store(0, Ordering::Release); }
     for count in &SOFTWARE_ECC_COMPARE_COUNTS { count.store(0, Ordering::Release); }
-    for count in &WRITE_ECC_COMPARE_COUNTS { count.store(0, Ordering::Release); }
-    WRITE_ECC_FIRST_PAGE.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_HARDWARE.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_SOFTWARE.store(0, Ordering::Release);
     SOFTWARE_ECC_FIRST_PAGE.store(0, Ordering::Release);
     SOFTWARE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
     SOFTWARE_ECC_FIRST_STORED.store(0, Ordering::Release);
