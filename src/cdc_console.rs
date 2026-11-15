@@ -561,27 +561,27 @@ pub fn service(
                             for marker_page in [first, first + 1] {
                                 write_status(b"  Marker page 0x");
                                 write_hex_u32(marker_page);
-                                write_status(b": reading\\r\\n");
+                                write_status(b": reading\r\n");
                                 _service_background();
                                 match crate::nand_fs::ecc_scan_block_marker(marker_page) {
                                     Some(true) => {
                                         block_bad = true;
-                                        write_status(b"  marker: bad\\r\\n");
+                                        write_status(b"  marker: bad\r\n");
                                     }
-                                    Some(false) => write_status(b"  marker: erased\\r\\n"),
+                                    Some(false) => write_status(b"  marker: erased\r\n"),
                                     None => {
                                         marker_error = true;
-                                        write_status(b"  marker: read failed\\r\\n");
+                                        write_status(b"  marker: read failed\r\n");
                                         break;
                                     }
                                 }
                             }
                             if marker_error {
                                 block_read_errors += 1;
-                                write_status(b"bad-block marker read failed\\r\\n");
+                                write_status(b"bad-block marker read failed\r\n");
                             } else if block_bad {
                                 bad_blocks += 1;
-                                write_status(b"bad\\r\\n");
+                                write_status(b"bad\r\n");
                             } else {
                                 good_blocks += 1;
                                     for page in first..first + crate::nand_fs::PAGES_PER_BLOCK {
@@ -623,12 +623,7 @@ pub fn service(
                                             None => { page_read_errors += 1; }
                                         }
                                     }
-                                    write_status(b"complete\r\n");
-                                }
-                                None => {
-                                    block_read_errors += 1;
-                                    write_status(b"bad-block marker read failed\r\n");
-                                }
+                                write_status(b"complete\r\n");
                             }
                             _service_background();
                         }
