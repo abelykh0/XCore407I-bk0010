@@ -176,7 +176,10 @@ pub extern "C" fn tuh_hid_report_received_cb(
             // Some boot keyboards send an all-zero "no keys pressed" report
             // immediately after enumeration. It is not a mode-selection
             // keystroke: keep waiting so the user can still press F10.
-            let has_key = bytes[2..8].iter().any(|key| *key != 0);
+            // HID usages 0x01..=0x03 are ErrorRollOver/ErrorPostFail/
+            // ErrorUndefined, not actual key presses. Some keyboards emit
+            // these during startup; they must not consume the F10 selection.
+            let has_key = bytes[2..8].iter().any(|key| *key > 0x03);
             if has_key {
                 let selected = if bytes[2..8].contains(&0x43) {
                     BOOT_SELECTION_CDC
