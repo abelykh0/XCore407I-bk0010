@@ -39,13 +39,13 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
     match error {
         FsAccessError::Init(kind) => {
             let message: &[u8] = match kind {
-                InitError::Timeout => b"\r\nStorage init failed: NAND timeout. NAND was not modified.\r\n",
-                InitError::WrongDevice => b"\r\nStorage init failed: unexpected NAND device. NAND was not modified.\r\n",
-                InitError::MarkerRead => b"\r\nStorage init failed: NAND bad-block marker read error. NAND was not modified.\r\n",
-                InitError::MountFailed => b"\r\nStorage init failed: LittleFS mount failed. NAND was not modified.\r\n",
-                InitError::DharaNoJournal => b"\r\nStorage init failed: Dhara journal/volume marker missing. NAND was not modified.\r\n",
-                InitError::DharaCapacity => b"\r\nStorage init failed: Dhara capacity too small. NAND was not modified.\r\n",
-                InitError::ProvisionFailed => b"\r\nStorage init failed: Dhara provisioning error. NAND was not modified.\r\n",
+                InitError::Timeout => b"\r\nStorage init failed: NAND timeout. NAND state was not verified.\r\n",
+                InitError::WrongDevice => b"\r\nStorage init failed: unexpected NAND device. NAND state was not verified.\r\n",
+                InitError::MarkerRead => b"\r\nStorage init failed: NAND bad-block marker read error. NAND state was not verified.\r\n",
+                InitError::MountFailed => b"\r\nStorage init failed: LittleFS mount failed. NAND state was not verified.\r\n",
+                InitError::DharaNoJournal => b"\r\nStorage init failed: Dhara journal/volume marker missing. NAND state was not verified.\r\n",
+                InitError::DharaCapacity => b"\r\nStorage init failed: Dhara capacity too small. NAND state was not verified.\r\n",
+                InitError::ProvisionFailed => b"\r\nStorage init failed: Dhara provisioning error. NAND state was not verified.\r\n",
             };
             write_status(message);
         }
@@ -111,7 +111,7 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
             write_status(b"NAND was not modified by this diagnostic.\r\n");
         }
         FsAccessError::Operation => {
-            write_status(b"\r\nStorage service operation failed. NAND was not modified.\r\n");
+            write_status(b"\r\nStorage service operation failed. NAND state was not verified.\r\n");
         }
     }
 }
@@ -547,9 +547,9 @@ pub fn service(
                                         write_status(b"\r\n");
                                     }
                                     if vectors_ok && mismatches == 0 {
-                                        write_status(b"ECCCHECK PASSED: all four chunks match. NAND was not modified.\r\n");
+                                        write_status(b"ECCCHECK PASSED: all four chunks match. NAND state was not verified.\r\n");
                                     } else {
-                                        write_status(b"ECCCHECK FAILED: software vectors or NAND ECC comparison did not match. NAND was not modified.\r\n");
+                                        write_status(b"ECCCHECK FAILED: software vectors or NAND ECC comparison did not match. NAND state was not verified.\r\n");
                                     }
                                 }
                                 None => write_status(b"ECCCHECK could not read a tagged ECC page. Check page number, OOB tag, or NAND read status. No NAND writes were performed.\r\n"),
