@@ -506,7 +506,26 @@ fn main() -> ! {
 
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
             keyboard_queue_discard();
-            match list_root_files(&mut *browser_paths, &mut *browser_path_lengths) {
+            match list_root_files(
+                &mut *browser_paths,
+                &mut *browser_path_lengths,
+                |_, _| {
+                    // NAND marker scanning is synchronous, but it must not
+                    // starve the UVC producer or USB host keyboard task.
+                    unsafe {
+                        let _ = tusb::tud_task_ext(0, false);
+                        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                    }
+                    if USB_FS_READY.load(Ordering::Acquire)
+                        && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+                    {
+                        unsafe { tusb::tuh_task_ext(0, false); }
+                    } else {
+                        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+                    }
+                    while prepare_next_video_batch(&mut video_renderer) {}
+                },
+            ) {
                 Ok(count) => {
                     browser_count = count;
                     browser_selected = 0;
