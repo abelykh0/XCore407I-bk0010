@@ -905,7 +905,7 @@ pub(crate) fn ecc_standalone_read(
 /// Probe ECC for chunk 0 of a physical page using three read sequences:
 /// ECC enabled before the NAND command, then enabled after ready (twice).
 /// This isolates ECC-enable timing and repeatability without writing NAND.
-pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
+pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 12]> {
     let mut stored_bytes = [0u8; ECC_BYTES_PER_CHUNK];
     if !read_page(page, (PAGE_SIZE + ECC_OOB_OFFSET as usize) as u16, &mut stored_bytes) {
         return None;
@@ -913,50 +913,32 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
     let stored = u32::from_le_bytes([stored_bytes[0], stored_bytes[1], stored_bytes[2], 0]);
     let mut data = [0u8; FSMC_ECC_CHUNK_SIZE];
 
-    // Variant A: enable ECC before issuing the NAND read command.
-    let pcr_pre = ecc_begin_chunk();
     command(0x00);
     address(0);
     address(0);
     address(page as u8);
     address((page >> 8) as u8);
     command(0x30);
-    if !wait_ready_rb() {
-        let _ = ecc_end_chunk();
-        return None;
+    if !wait_ready_rb() { return None; }
+
+    let pcr_enable = ecc_begin_chunk();
+    let mut snapshots = [0u32; 4];
+    for segment in 0..4 {
+        for byte in &mut data[segment * 128..(segment + 1) * 128] {
+            *byte = read_data();
+        }
+        // ECCR2 is read-only; sampling it must not reset the accumulator.
+        snapshots[segment] = unsafe { read_volatile(FSMC_ECCR2) } & 0x00FF_FFFF;
     }
-    for byte in data.iter_mut() { *byte = read_data(); }
-    let ecc_pre = ecc_end_chunk().0 & 0x00FF_FFFF;
-
-    // Variant B: issue the command and wait for ready before enabling ECC.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() { return None; }
-    let pcr_post1 = ecc_begin_chunk();
-    for byte in data.iter_mut() { *byte = read_data(); }
-    let ecc_post1 = ecc_end_chunk().0 & 0x00FF_FFFF;
-
-    // Variant C: repeat the post-ready sequence to check determinism.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() { return None; }
-    let pcr_post2 = ecc_begin_chunk();
-    for byte in data.iter_mut() { *byte = read_data(); }
-    let ecc_post2 = ecc_end_chunk().0 & 0x00FF_FFFF;
-
+    let (final_ecc, pcr_capture) = ecc_end_chunk();
     let non_ff = data.iter().filter(|&&byte| byte != 0xFF).count() as u32;
+    let checksum = data.iter().fold(2_166_136_261u32, |h, &b| {
+        h.wrapping_mul(16_777_619) ^ b as u32
+    });
     Some([
-        stored, ecc_pre, ecc_post1, ecc_post2,
-        pcr_pre, pcr_post1, pcr_post2,
-        non_ff, data[0] as u32, data[data.len() - 1] as u32,
+        stored, snapshots[0], snapshots[1], snapshots[2], snapshots[3],
+        final_ecc & 0x00FF_FFFF, pcr_enable, pcr_capture,
+        non_ff, data[0] as u32, data[data.len() - 1] as u32, checksum,
     ])
 }
 
