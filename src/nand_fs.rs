@@ -870,6 +870,11 @@ pub(crate) fn ecc_correction_selftest() -> [u32; 6] {
     let mut single_failures = 0u32;
     let mut damaged = original;
     for bit in 0..bit_syndromes.len() {
+        // Start each trial from the same clean reference. The correction
+        // routine itself restores the flipped bit on success, so toggling
+        // the bit again after correction would reintroduce the error and
+        // contaminate every subsequent trial.
+        damaged.copy_from_slice(&original);
         let byte_index = bit / 8;
         let bit_mask = 1u8 << (bit % 8);
         damaged[byte_index] ^= bit_mask;
@@ -881,7 +886,6 @@ pub(crate) fn ecc_correction_selftest() -> [u32; 6] {
         if !corrected || damaged != original {
             single_failures += 1;
         }
-        damaged[byte_index] ^= bit_mask;
     }
 
     let mut ecc_tested = 0u32;
