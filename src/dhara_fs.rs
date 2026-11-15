@@ -54,6 +54,22 @@ static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_ERROR: AtomicU32 = AtomicU32::new(0);
 
+// Preserve the exact stage and underlying return values when destructive
+// provisioning fails. These survive the subsequent console error report.
+static FORMAT_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
+static FORMAT_FAILURE_LOCATION: AtomicU32 = AtomicU32::new(0);
+static FORMAT_FAILURE_DETAIL: AtomicU32 = AtomicU32::new(0);
+static FORMAT_FAILURE_RETURN: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn format_diagnostic() -> (u32, u32, u32, u32) {
+    (
+        FORMAT_FAILURE_STAGE.load(Ordering::Acquire),
+        FORMAT_FAILURE_LOCATION.load(Ordering::Acquire),
+        FORMAT_FAILURE_DETAIL.load(Ordering::Acquire),
+        FORMAT_FAILURE_RETURN.load(Ordering::Acquire),
+    )
+}
+
 fn record_storage_io_error(operation: u32, location: u32, error: i32) {
     if STORAGE_IO_OPERATION.compare_exchange(0, operation, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
         STORAGE_IO_LOCATION.store(location, Ordering::Release);
@@ -287,6 +303,11 @@ impl DharaStorage {
         mut progress: impl FnMut(u32, u32),
     ) -> Result<Self, crate::nand_fs::InitError> {
         nand_fs::configure_fsmc();
+        FORMAT_FAILURE_STAGE.store(0, Ordering::Release);
+        FORMAT_FAILURE_LOCATION.store(0, Ordering::Release);
+        FORMAT_FAILURE_DETAIL.store(0, Ordering::Release);
+        FORMAT_FAILURE_RETURN.store(0, Ordering::Release);
+
         nand_fs::command(0xFF);
         if !nand_fs::wait_ready_status() {
             return Err(crate::nand_fs::InitError::Timeout);
@@ -316,6 +337,8 @@ impl DharaStorage {
                 Ok(false) => {
                     if !nand_fs::erase_physical_block(block as u16) {
                         if !mark_block_bad(block) {
+                            FORMAT_FAILURE_STAGE.store(1, Ordering::Release);
+                            FORMAT_FAILURE_LOCATION.store(block, Ordering::Release);
                             return Err(crate::nand_fs::InitError::ProvisionFailed);
                         }
                         bad_blocks = bad_blocks.saturating_add(1);
@@ -342,11 +365,24 @@ impl DharaStorage {
                 &mut error,
             )
         } != 0 {
+            FORMAT_FAILURE_STAGE.store(2, Ordering::Release);
+            FORMAT_FAILURE_DETAIL.store(error as u32, Ordering::Release);
+            FORMAT_FAILURE_RETURN.store(1, Ordering::Release);
             return Err(crate::nand_fs::InitError::ProvisionFailed);
         }
 
-        let storage = Self::new()?;
+        let storage = match Self::new() {
+            Ok(storage) => storage,
+            Err(error) => {
+                FORMAT_FAILURE_STAGE.store(3, Ordering::Release);
+                FORMAT_FAILURE_DETAIL.store(error as u32, Ordering::Release);
+                return Err(error);
+            }
+        };
         if storage.factory_bad_blocks() < bad_blocks {
+            FORMAT_FAILURE_STAGE.store(4, Ordering::Release);
+            FORMAT_FAILURE_LOCATION.store(bad_blocks as u32, Ordering::Release);
+            FORMAT_FAILURE_DETAIL.store(storage.factory_bad_blocks() as u32, Ordering::Release);
             return Err(crate::nand_fs::InitError::ProvisionFailed);
         }
         Ok(storage)
