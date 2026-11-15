@@ -573,6 +573,139 @@ fn ecc_software_512(data: &[u8]) -> u32 {
     (ecc0 as u32) | ((ecc1 as u32) << 8) | ((ecc2 as u32) << 16)
 }
 
+
+/// Linux SM-order Hamming ECC for one 256-byte half-window.
+fn ecc_software_256(data: &[u8]) -> u32 {
+    if data.len() != 256 {
+        return 0;
+    }
+
+    #[inline]
+    fn inv_parity(value: u8) -> u8 {
+        ((!value.count_ones()) & 1) as u8
+    }
+
+    let mut rp4 = 0u32;
+    let mut rp6 = 0u32;
+    let mut rp8 = 0u32;
+    let mut rp10 = 0u32;
+    let mut rp12 = 0u32;
+    let mut rp14 = 0u32;
+    let mut par = 0u32;
+
+    // Linux ecc_sw_hamming_calculate(): 8 groups x 16 little-endian words.
+    let words: [u32; 64] = core::array::from_fn(|i| {
+        u32::from_le_bytes([
+            data[i * 4],
+            data[i * 4 + 1],
+            data[i * 4 + 2],
+            data[i * 4 + 3],
+        ])
+    });
+
+    for group in 0..4 {
+        let base = group * 16;
+        let mut t = words[base];
+        rp4 ^= words[base];
+        t ^= words[base + 1];
+        rp6 ^= t;
+        t ^= words[base + 2];
+        rp4 ^= words[base + 2];
+        t ^= words[base + 3];
+        rp8 ^= t;
+
+        t ^= words[base + 4];
+        rp4 ^= words[base + 4];
+        rp6 ^= words[base + 4];
+        t ^= words[base + 5];
+        rp6 ^= words[base + 5];
+        t ^= words[base + 6];
+        rp4 ^= words[base + 6];
+        t ^= words[base + 7];
+        rp10 ^= t;
+
+        t ^= words[base + 8];
+        rp4 ^= words[base + 8];
+        rp6 ^= words[base + 8];
+        rp8 ^= words[base + 8];
+        t ^= words[base + 9];
+        rp6 ^= words[base + 9];
+        rp8 ^= words[base + 9];
+        t ^= words[base + 10];
+        rp4 ^= words[base + 10];
+        rp8 ^= words[base + 10];
+        t ^= words[base + 11];
+        rp8 ^= words[base + 11];
+
+        t ^= words[base + 12];
+        rp4 ^= words[base + 12];
+        rp6 ^= words[base + 12];
+        t ^= words[base + 13];
+        rp6 ^= words[base + 13];
+        t ^= words[base + 14];
+        rp4 ^= words[base + 14];
+        t ^= words[base + 15];
+
+        par ^= t;
+        if group & 1 == 0 { rp12 ^= t; }
+        if group & 2 == 0 { rp14 ^= t; }
+    }
+
+    let fold = |v: u32| -> u8 {
+        let v = v ^ (v >> 16);
+        let v = v ^ (v >> 8);
+        v as u8
+    };
+    let rp4 = fold(rp4);
+    let rp6 = fold(rp6);
+    let rp8 = fold(rp8);
+    let rp10 = fold(rp10);
+    let rp12 = fold(rp12);
+    let rp14 = fold(rp14);
+
+    // Little-endian Linux SM-order parity packing.
+    let rp3 = fold(par >> 16);
+    let low16 = par & 0xFFFF;
+    let rp2 = (low16 ^ (low16 >> 8)) as u8;
+    let p16 = par ^ (par >> 16);
+    let rp1 = ((p16 >> 8) & 0xFF) as u8;
+    let rp0 = p16 as u8;
+    let par8 = (p16 ^ (p16 >> 8)) as u8;
+
+    let rp5 = par8 ^ rp4;
+    let rp7 = par8 ^ rp6;
+    let rp9 = par8 ^ rp8;
+    let rp11 = par8 ^ rp10;
+    let rp13 = par8 ^ rp12;
+    let rp15 = par8 ^ rp14;
+
+    let ecc0 = (inv_parity(rp7) << 7)
+        | (inv_parity(rp6) << 6)
+        | (inv_parity(rp5) << 5)
+        | (inv_parity(rp4) << 4)
+        | (inv_parity(rp3) << 3)
+        | (inv_parity(rp2) << 2)
+        | (inv_parity(rp1) << 1)
+        | inv_parity(rp0);
+    let ecc1 = (inv_parity(rp15) << 7)
+        | (inv_parity(rp14) << 6)
+        | (inv_parity(rp13) << 5)
+        | (inv_parity(rp12) << 4)
+        | (inv_parity(rp11) << 3)
+        | (inv_parity(rp10) << 2)
+        | (inv_parity(rp9) << 1)
+        | inv_parity(rp8);
+    let ecc2 = (inv_parity(par8 & 0xF0) << 7)
+        | (inv_parity(par8 & 0x0F) << 6)
+        | (inv_parity(par8 & 0xCC) << 5)
+        | (inv_parity(par8 & 0x33) << 4)
+        | (inv_parity(par8 & 0xAA) << 3)
+        | (inv_parity(par8 & 0x55) << 2)
+        | 0x03;
+
+    (ecc0 as u32) | ((ecc1 as u32) << 8) | ((ecc2 as u32) << 16)
+}
+
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
 
@@ -766,6 +899,7 @@ pub(crate) fn ecc_standalone_read(
     [u32; 8],
     u32,
     [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    [u32; 8],
 )> {
     let mut data = [0u8; PAGE_SIZE];
 
@@ -897,8 +1031,12 @@ pub(crate) fn ecc_standalone_read(
     for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
         calculated_software[index] = ecc_software_512(chunk);
     }
+    let mut calculated_software_256 = [0u32; 8];
+    for (index, chunk) in data.chunks_exact(256).enumerate() {
+        calculated_software_256[index] = ecc_software_256(chunk);
+    }
 
-    Some((stored, chunks, calculated_256, calculated_2048, calculated_software))
+    Some((stored, chunks, calculated_256, calculated_2048, calculated_software, calculated_software_256))
 }
 
 
@@ -906,7 +1044,7 @@ pub(crate) fn ecc_standalone_read(
 /// physical block, programs page 2 with four deterministic 512-byte patterns,
 /// then compares write-time, read-time, and software ECC. This bypasses Dhara
 /// and LittleFS; the selected physical block's prior contents are lost.
-pub(crate) fn ecc_destructive_test() -> Option<[u32; 30]> {
+pub(crate) fn ecc_destructive_test() -> Option<[u32; 38]> {
     let mut selected_block = None;
     for block in (0..PHYSICAL_BLOCKS).rev() {
         let first_page = block * PAGES_PER_BLOCK;
@@ -965,9 +1103,9 @@ pub(crate) fn ecc_destructive_test() -> Option<[u32; 30]> {
     let data_mismatches = expected.iter().zip(actual.iter())
         .filter(|(expected, actual)| expected != actual).count() as u32;
 
-    let (stored, chunks, ecc256, ecc2048, software) = ecc_standalone_read(page)?;
+    let (stored, chunks, ecc256, ecc2048, software, software256) = ecc_standalone_read(page)?;
     let write_diag = write_ecc_compare_diagnostic();
-    let mut result = [0u32; 30];
+    let mut result = [0u32; 38];
     result[0] = block;
     result[1] = page;
     result[2] = data_mismatches;
@@ -986,6 +1124,7 @@ pub(crate) fn ecc_destructive_test() -> Option<[u32; 30]> {
         result[21 + index] = ecc256[index];
     }
     result[29] = ecc2048;
+    for index in 0..8 { result[30 + index] = software256[index]; }
     Some(result)
 }
 
