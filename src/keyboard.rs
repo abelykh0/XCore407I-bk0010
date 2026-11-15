@@ -209,33 +209,27 @@ pub extern "C" fn tuh_hid_report_received_cb(
 
         let selection = BOOT_SELECTION.load(Ordering::Acquire);
         if selection == BOOT_SELECTION_WAITING {
-            // Some boot keyboards send an all-zero "no keys pressed" report
-            // immediately after enumeration. It is not a mode-selection
-            // keystroke: keep waiting so the user can still press F10.
-            // Ignore empty reports and HID error usages, but use the first
-            // real key report to choose the mode. F10 selects CDC; any other
-            // key selects normal mode so the emulator starts as soon as the
-            // keyboard is usable.
-            let has_key = bytes[2..8].iter().any(|key| *key > 0x03);
-            if has_key {
-                let selected = if bytes[2..8].contains(&0x43) {
-                    BOOT_SELECTION_CDC
-                } else {
-                    BOOT_SELECTION_NORMAL
-                };
-                if BOOT_SELECTION.compare_exchange(
-                    BOOT_SELECTION_WAITING,
-                    selected,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                ).is_ok() {
-                    // Do not forward the mode-selection report as input.
-                    unsafe {
-                        let mut keys = [0u8; 6];
-                        keys.copy_from_slice(&bytes[2..8]);
-                        PREVIOUS_KEYS = keys;
-                        PREVIOUS_MODIFIERS = bytes[0];
-                    }
+            // The first boot-keyboard report decides the startup mode.
+            // F10 must be held during startup to select CDC; an empty report
+            // (or any other key) selects normal mode immediately. Do not wait
+            // for a later keypress after the keyboard has enumerated.
+            let selected = if bytes[2..8].contains(&0x43) {
+                BOOT_SELECTION_CDC
+            } else {
+                BOOT_SELECTION_NORMAL
+            };
+            if BOOT_SELECTION.compare_exchange(
+                BOOT_SELECTION_WAITING,
+                selected,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                // Do not forward the mode-selection report as input.
+                unsafe {
+                    let mut keys = [0u8; 6];
+                    keys.copy_from_slice(&bytes[2..8]);
+                    PREVIOUS_KEYS = keys;
+                    PREVIOUS_MODIFIERS = bytes[0];
                 }
             }
         } else if selection == BOOT_SELECTION_NORMAL
