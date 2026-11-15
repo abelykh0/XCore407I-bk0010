@@ -812,22 +812,41 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
 /// encode the data-bit position; the remaining nine encode the byte address.
 /// A data-bit error has 01 or 10 in every pair. A one-bit syndrome is an
 /// ECC-bit error and does not require changing the data.
+/// Decode a 24-bit STM32 FSMC syndrome using Linux's SM-order Hamming
+/// decoder. FSMC ECC is Linux ECC rotated left by six bits and complemented,
+/// so the syndrome is rotated right by six before decoding.
 fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
-    let mut bit_index = 0usize;
-    for bit in 0..3 {
-        match (syndrome >> (bit * 2)) & 0x03 {
-            0b01 => {}
-            0b10 => bit_index |= 1 << bit,
-            _ => return None,
-        }
+    let linux = ((syndrome >> 6) | (syndrome << 18)) & 0x00FF_FFFF;
+    let b0 = linux as u8;
+    let b1 = (linux >> 8) as u8;
+    let b2 = (linux >> 16) as u8;
+
+    // A 512-byte data-bit syndrome has alternating parity in every
+    // address pair, including both high byte-address bits in b2.
+    if ((b0 ^ (b0 >> 1)) & 0x55) != 0x55
+        || ((b1 ^ (b1 >> 1)) & 0x55) != 0x55
+        || ((b2 ^ (b2 >> 1)) & 0x55) != 0x55
+    {
+        return None;
     }
-    let mut byte_index = 0usize;
-    for bit in 0..9 {
-        match (syndrome >> (6 + bit * 2)) & 0x03 {
-            0b01 => {}
-            0b10 => byte_index |= 1 << bit,
-            _ => return None,
-        }
+
+    // Linux addressbits[] extracts the odd-positioned bits from each
+    // interleaved parity byte: input bits 1,3,5,7 become output bits 0..3.
+    #[inline]
+    fn address_bits(value: u8) -> usize {
+        (((value >> 1) & 1)
+            | ((value >> 2) & 2)
+            | ((value >> 3) & 4)
+            | ((value >> 4) & 8)) as usize
+    }
+
+    let byte_index = (address_bits(b2 & 0x03) << 8)
+        | (address_bits(b1) << 4)
+        | address_bits(b0);
+    let bit_index = address_bits(b2 >> 2);
+
+    if byte_index >= FSMC_ECC_CHUNK_SIZE || bit_index >= 8 {
+        return None;
     }
     Some((byte_index, bit_index))
 }
@@ -915,30 +934,9 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
         return true;
     }
 
-    // Decode the three low parity pairs as the bit index (P4, P2, P1).
-    let mut bit_index = 0usize;
-    for bit in 0..3 {
-        match (syndrome >> (bit * 2)) & 0x03 {
-            0b01 => {}
-            0b10 => bit_index |= 1 << bit,
-            _ => return false,
-        }
-    }
-
-    // The remaining nine pairs encode the byte address (P8 through P1024).
-    let mut byte_index = 0usize;
-    for bit in 0..9 {
-        match (syndrome >> (6 + bit * 2)) & 0x03 {
-            0b01 => {}
-            0b10 => byte_index |= 1 << bit,
-            _ => return false,
-        }
-    }
-
-    if byte_index >= data.len() {
+    let Some((byte_index, bit_index)) = ecc_error_location(syndrome) else {
         return false;
-    }
-
+    };
     data[byte_index] ^= 1 << bit_index;
     true
 }
