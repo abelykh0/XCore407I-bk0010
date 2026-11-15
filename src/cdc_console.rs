@@ -755,18 +755,20 @@ fn ecc_diagnostic_read(
     write_status(b"\\r\\n> ");
 }
 
-struct RawNandTestModeGuard;
+struct SoftwareEccTestModeGuard;
 
-impl RawNandTestModeGuard {
+impl SoftwareEccTestModeGuard {
     fn enable() -> Self {
+        crate::nand_fs::set_software_ecc_test_mode(true);
         crate::nand_fs::set_ecc_check_no_correct_test_mode(true);
         Self
     }
 }
 
-impl Drop for RawNandTestModeGuard {
+impl Drop for SoftwareEccTestModeGuard {
     fn drop(&mut self) {
         crate::nand_fs::set_ecc_check_no_correct_test_mode(false);
+        crate::nand_fs::set_software_ecc_test_mode(false);
     }
 }
 
@@ -779,10 +781,11 @@ fn storage_test(
         return;
     };
 
-    // Bypass ECC for every NAND read/program during this isolated test,
-    // including Dhara cleanup, relocation, flush, and readback.
-    let _raw_nand_mode = RawNandTestModeGuard::enable();
-    write_status(b"\r\nSTORAGETEST starting; ECC WRITE and READ CHECK enabled, data correction disabled; UVC/video servicing is paused.\r\n");
+    // Exercise the software Hamming implementation in both directions:
+    // generate OOB ECC on program, then recalculate it from NAND read data.
+    // Do not correct data during this experiment; report syndromes instead.
+    let _software_ecc_mode = SoftwareEccTestModeGuard::enable();
+    write_status(b"\r\nSTORAGETEST starting; SOFTWARE ECC WRITE + READ VERIFY, correction disabled; UVC/video servicing is paused.\r\n");
     service_usb_only();
     // Keep allocator history from the start of the test, including cleanup
     // and free-space traversal, rather than clearing it just before writes.
@@ -899,6 +902,25 @@ fn storage_test(
         report_storage_test_io_failure(fs, b"read", error.code());
         return;
     }
+
+    let ecc = crate::nand_fs::ecc_read_diagnostic();
+    write_status(b"\r\nSOFTWARE ECC verification: tagged pages=");
+    write_decimal(ecc[0] as usize);
+    write_status(b" legacy pages=");
+    write_decimal(ecc[1] as usize);
+    write_status(b" chunks with ECC mismatch=");
+    write_decimal(ecc[2] as usize);
+    write_status(b"\r\nLast comparison: page=0x");
+    write_hex_u32(ecc[5]);
+    write_status(b" chunk=");
+    write_decimal(ecc[7] as usize);
+    write_status(b" stored=0x");
+    write_hex_u32(ecc[9]);
+    write_status(b" calculated=0x");
+    write_hex_u32(ecc[10]);
+    write_status(b" syndrome=0x");
+    write_hex_u32(ecc[8]);
+    write_status(b"\r\n");
 
     if let Some((offset, expected, actual)) = mismatch {
         write_status(b"\r\nSTORAGETEST mismatch at byte ");
