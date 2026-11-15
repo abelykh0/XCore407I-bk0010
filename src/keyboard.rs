@@ -31,6 +31,30 @@ pub(crate) const BOOT_SELECTION_NORMAL: u8 = 1;
 pub(crate) const BOOT_SELECTION_CDC: u8 = 2;
 static BOOT_SELECTION: AtomicU8 = AtomicU8::new(BOOT_SELECTION_WAITING);
 static EMULATOR_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
+static HID_MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
+static BOOT_KEYBOARD_MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_REPORT_COUNT: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_LAST_REPORT_LEN: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_REARM_FAILURE_COUNT: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_LAST_PROTOCOL: AtomicU8 = AtomicU8::new(0xff);
+static KEYBOARD_UNMOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn keyboard_diagnostics() -> (u32, u32, u32, u32, u32, u8, u32) {
+    (
+        HID_MOUNT_COUNT.load(Ordering::Acquire),
+        BOOT_KEYBOARD_MOUNT_COUNT.load(Ordering::Acquire),
+        KEYBOARD_REPORT_COUNT.load(Ordering::Acquire),
+        KEYBOARD_LAST_REPORT_LEN.load(Ordering::Acquire),
+        KEYBOARD_REARM_FAILURE_COUNT.load(Ordering::Acquire),
+        KEYBOARD_LAST_PROTOCOL.load(Ordering::Acquire),
+        KEYBOARD_UNMOUNT_COUNT.load(Ordering::Acquire),
+    )
+}
+
+pub(crate) fn keyboard_is_mounted() -> bool {
+    KEYBOARD_DEVICE.load(Ordering::Acquire) != 0
+}
+
 
 pub(crate) fn boot_selection() -> u8 {
     BOOT_SELECTION.load(Ordering::Acquire)
@@ -90,12 +114,15 @@ pub(crate) fn keyboard_queue_discard() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8, _len: u16) {
+    HID_MOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
+    let protocol = unsafe { tusb::tuh_hid_interface_protocol(dev_addr, instance) };
+    KEYBOARD_LAST_PROTOCOL.store(protocol, Ordering::Release);
     // HID interface protocol 1 is a boot keyboard; ignore unrelated HID
     // interfaces rather than decoding a mouse/gamepad report as keystrokes.
-    if BOOT_SELECTION.load(Ordering::Acquire) == BOOT_SELECTION_CDC
-        || unsafe { tusb::tuh_hid_interface_protocol(dev_addr, instance) } != 1 {
+    if BOOT_SELECTION.load(Ordering::Acquire) == BOOT_SELECTION_CDC || protocol != 1 {
         return;
     }
+    BOOT_KEYBOARD_MOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
@@ -114,14 +141,18 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
         // Request boot protocol; the completion callback starts reception.
         if !unsafe { tusb::tuh_hid_set_protocol(dev_addr, instance, 0) } {
             USB_FS_STATUS.store(9, Ordering::Release);
+            KEYBOARD_LAST_PROTOCOL.store(0xfe, Ordering::Release);
         }
     } else {
-        unsafe { tusb::tuh_hid_receive_report(dev_addr, instance); }
+        if !unsafe { tusb::tuh_hid_receive_report(dev_addr, instance) } {
+            KEYBOARD_REARM_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
+    KEYBOARD_UNMOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
     if KEYBOARD_DEVICE.load(Ordering::Acquire) == dev_addr
         && KEYBOARD_INSTANCE.load(Ordering::Acquire) == instance
     {
@@ -149,9 +180,12 @@ pub extern "C" fn tuh_hid_set_protocol_complete_cb(dev_addr: u8, instance: u8, p
     }
 
     if protocol == 0 {
-        unsafe { tusb::tuh_hid_receive_report(dev_addr, instance); }
+        if !unsafe { tusb::tuh_hid_receive_report(dev_addr, instance) } {
+            KEYBOARD_REARM_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     } else {
         USB_FS_STATUS.store(9, Ordering::Release);
+        KEYBOARD_LAST_PROTOCOL.store(0xfe, Ordering::Release);
     }
 }
 
@@ -168,6 +202,8 @@ pub extern "C" fn tuh_hid_report_received_cb(
         return;
     }
 
+    KEYBOARD_REPORT_COUNT.fetch_add(1, Ordering::Relaxed);
+    KEYBOARD_LAST_REPORT_LEN.store(len as u32, Ordering::Release);
     if len >= 8 && !report.is_null() {
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
 
