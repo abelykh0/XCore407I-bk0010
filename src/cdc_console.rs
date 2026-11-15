@@ -109,6 +109,12 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
 }
 
 
+fn write_hex_byte(value: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let digits = [HEX[(value >> 4) as usize], HEX[(value & 0x0F) as usize]];
+    write_status(&digits);
+}
+
 fn write_hex_u32(value: u32) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut digits = [b'0'; 8];
@@ -1200,6 +1206,13 @@ pub fn service(
                         write_status(b"\\r\\nECCRAW: direct physical NAND read; bypasses Dhara/LittleFS; no NAND writes. Page=0x");
                         write_hex_u32(0x0000_2391);
                         write_status(b"\\r\\n");
+                        let selftest = crate::nand_fs::ecc_software_selftest();
+                        write_status(b"Software ECC vectors [zero, erased, bit0, PRNG]: ");
+                        for value in selftest {
+                            write_hex_u32(value);
+                            write_status(b" ");
+                        }
+                        write_status(b"(expected FFFFFF FFFFFF AAAAAA 695659)\\r\\n");
                         match crate::nand_fs::ecc_standalone_read(0x0000_2391) {
                             Some((stored, chunks, calculated_256, calculated_2048, calculated_software)) => {
                                 for index in 0..4 {
@@ -1222,6 +1235,12 @@ pub fn service(
                                     write_hex_u32(chunk.first_byte as u32);
                                     write_status(b"/");
                                     write_hex_u32(chunk.last_byte as u32);
+                                    write_status(b" first16=");
+                                    for byte in chunk.first_bytes {
+                                        write_hex_byte(byte);
+                                    }
+                                    write_status(b" fnv=0x");
+                                    write_hex_u32(chunk.checksum);
                                     write_status(b" nonFF=");
                                     write_decimal(chunk.non_ff_bytes as usize);
                                     write_status(b" PCR=");
