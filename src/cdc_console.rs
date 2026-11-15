@@ -1252,7 +1252,7 @@ pub fn service(
                         write_status(b"> ");
                     } else if command_is(line, b"ECCRAW") {
                         write_status(b"\\r\\nECCRAW: direct physical NAND read; bypasses Dhara/LittleFS; no NAND writes. Page=0x");
-                        write_hex_u32(0x0000_2391);
+                        write_hex_u32(0x0000_233F);
                         write_status(b"\\r\\n");
                         let selftest = crate::nand_fs::ecc_software_selftest();
                         write_status(b"Software ECC vectors [zero, erased, bit0, PRNG]: ");
@@ -1261,7 +1261,7 @@ pub fn service(
                             write_status(b" ");
                         }
                         write_status(b"(expected 00FFFFFF 00FFFFFF 00AAAAAA 00695659)\r\n");
-                        match crate::nand_fs::ecc_standalone_read(0x0000_2391) {
+                        match crate::nand_fs::ecc_standalone_read(0x0000_233F) {
                             Some((stored, chunks, calculated_256, calculated_2048, calculated_software)) => {
                                 for index in 0..4 {
                                     let chunk = chunks[index];
