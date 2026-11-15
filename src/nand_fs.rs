@@ -642,9 +642,12 @@ pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[
 }
 
 /// Read-only classification helpers used by the whole-device ECC scan.
-pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<[u8; 2]> {
+pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<u8> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
-    let mut marker = [0xFFu8; 2];
+    // K9F1G08U0E factory/grown-bad marker is spare-area byte zero.
+    // Match Dhara's block_is_bad() exactly; spare byte one is not part of
+    // the marker and must not be used to classify a block.
+    let mut marker = [0xFFu8; 1];
 
     // ECCSCAN is a standalone diagnostic. Do not run the USB/UVC/video service
     // hook from inside this low-level marker read: it can obscure whether a
@@ -671,7 +674,7 @@ pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<[u8; 2]> {
     NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
 
     if !read_ok { return None; }
-    Some(marker)
+    Some(marker[0])
 }
 
 pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
