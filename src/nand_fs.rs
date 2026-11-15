@@ -388,6 +388,7 @@ fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
     ecc_linux_to_fsmc(ecc_software_512(data), 24)
 }
 
+/// Program a full page and store four FSMC-generated 512-byte ECC values.
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
 
@@ -430,15 +431,6 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     true
 }
 
-/// Read a full data page, computing ECC as the four 512-byte chunks are read.
-/// Pages without the tag are treated as legacy raw-NAND pages.
-///
-/// Apply the STM32 FSMC 512-byte Hamming syndrome to a data chunk.
-///
-/// The 24-bit syndrome is twelve 2-bit parity pairs. The first three pairs
-/// encode the data-bit position; the remaining nine encode the byte address.
-/// A data-bit error has 01 or 10 in every pair. A one-bit syndrome is an
-/// ECC-bit error and does not require changing the data.
 /// Decode a 24-bit STM32 FSMC syndrome using Linux's SM-order Hamming
 /// decoder. FSMC ECC is Linux ECC rotated left by six bits and complemented,
 /// so the syndrome is rotated right by six before decoding.
