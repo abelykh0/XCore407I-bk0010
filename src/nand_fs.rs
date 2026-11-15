@@ -901,6 +901,81 @@ pub(crate) fn ecc_standalone_read(
     Some((stored, chunks, calculated_256, calculated_2048, calculated_software))
 }
 
+
+/// Read-only raw NAND ECC scan for one physical page.
+/// Returns None on NAND I/O failure; untagged pages return an all-zero record.
+/// Record: tagged, hardware mismatches, software mismatches, first chunk,
+/// first stored ECC, first FSMC ECC, first software ECC.
+pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 7]> {
+    let mut tag = [0u8; 2];
+    if !read_page(
+        page,
+        (PAGE_SIZE + ECC_OOB_OFFSET as usize + ECC_OOB_BYTES) as u16,
+        &mut tag,
+    ) {
+        return None;
+    }
+    if tag != ECC_TAG {
+        return Some([0; 7]);
+    }
+
+    // Read each 512-byte chunk once with the FSMC ECC engine enabled only
+    // for the data transfer. Retain the bytes for the independent SW result.
+    let mut data = [0u8; PAGE_SIZE];
+    let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb() {
+        return None;
+    }
+    for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        let _ = ecc_begin_chunk();
+        for byte in chunk.iter_mut() {
+            *byte = read_data();
+        }
+        if !wait_fsmc_fifo_empty() {
+            let _ = ecc_end_chunk();
+            return None;
+        }
+        hardware[index] = ecc_end_chunk().0 & 0x00FF_FFFF;
+    }
+
+    let mut stored_bytes = [0u8; ECC_OOB_BYTES];
+    if !read_page(page, (PAGE_SIZE + ECC_OOB_OFFSET as usize) as u16, &mut stored_bytes) {
+        return None;
+    }
+
+    let mut result = [0u32; 7];
+    result[0] = 1;
+    result[3] = u32::MAX;
+    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+        let offset = index * ECC_BYTES_PER_CHUNK;
+        let stored = u32::from_le_bytes([
+            stored_bytes[offset], stored_bytes[offset + 1], stored_bytes[offset + 2], 0,
+        ]);
+        let software = ecc_software_512(
+            &data[index * FSMC_ECC_CHUNK_SIZE..(index + 1) * FSMC_ECC_CHUNK_SIZE],
+        );
+        if stored != hardware[index] {
+            result[1] += 1;
+        }
+        if stored != software {
+            result[2] += 1;
+        }
+        if result[3] == u32::MAX && (stored != hardware[index] || stored != software) {
+            result[3] = index as u32;
+            result[4] = stored;
+            result[5] = hardware[index];
+            result[6] = software;
+        }
+    }
+    Some(result)
+}
+
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE {
         return false;
