@@ -799,12 +799,17 @@ pub fn with_mounted_detailed_with_progress<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
     progress: impl FnMut(u32, u32),
 ) -> Result<R, FsAccessError> {
+    // Progress sentinels distinguish the NAND scan, LittleFS mount, and
+    // caller operation. Physical scan updates are 1..=PHYSICAL_BLOCKS.
+    progress(0, 0);
     let mut storage =
-        ActiveStorage::new_with_progress(progress).map_err(FsAccessError::Init)?;
+        ActiveStorage::new_with_progress(&mut progress).map_err(FsAccessError::Init)?;
+    progress(u32::MAX, 0);
     // Mount directly rather than using is_mountable(): the latter only
     // returns a bool and discards LittleFS's actual error code.
     // Nest the service result so a caller-operation error remains distinct.
     let mounted = Filesystem::<ActiveStorage>::mount_and_then(&mut storage, |fs| {
+        progress(u32::MAX, 1);
         Ok(service(fs))
     }).map_err(|error| FsAccessError::Mount(error.code()))?;
     mounted.map_err(|_| FsAccessError::Operation)
