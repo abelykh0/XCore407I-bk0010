@@ -542,14 +542,11 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
 
 
 /// Read-only classification helpers used by the whole-device ECC scan.
-pub(crate) fn ecc_scan_block_bad(block: u32) -> Option<bool> {
-    if block >= PHYSICAL_BLOCKS { return None; }
+pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<bool> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
     let mut marker = [0xFFu8; 2];
-    for page in [block * PAGES_PER_BLOCK, block * PAGES_PER_BLOCK + 1] {
-        if !read_page(page, PAGE_SIZE as u16, &mut marker) { return None; }
-        if marker != [0xFF, 0xFF] { return Some(true); }
-    }
-    Some(false)
+    if !read_page(page, PAGE_SIZE as u16, &mut marker) { return None; }
+    Some(marker != [0xFF, 0xFF])
 }
 
 pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
