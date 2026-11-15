@@ -398,6 +398,9 @@ pub fn service(
             }
             return false;
         }
+        if zmodem.discard_trailing_input(now_ms) {
+            return false;
+        }
 
         let mut byte = 0u8;
         while tusb::tud_cdc_n_read(0, (&mut byte as *mut u8).cast::<c_void>(), 1) != 0 {
