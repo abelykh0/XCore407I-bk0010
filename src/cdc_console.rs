@@ -1294,35 +1294,31 @@ pub fn service(
                         write_status(b"> ");
                     } else if command_is(line, b"ECCPROBE") {
                         const page: u32 = 1;
-                        write_status(b"\r\nECCPROBE: read-only ECCR2 progress; page=0x");
+                        write_status(b"\r\nECCPROBE: read-only ECCPS window test; page=0x");
                         write_hex_u32(page);
                         write_status(b"\r\n");
                         match crate::nand_fs::ecc_probe_chunk0(page) {
                             Some(r) => {
                                 write_status(b"stored=0x");
                                 write_hex_u32(r[0]);
-                                write_status(b" ECCR@128=0x");
+                                write_status(b" ECC256-A=0x");
                                 write_hex_u32(r[1]);
-                                write_status(b" @256=0x");
+                                write_status(b" ECC256-B=0x");
                                 write_hex_u32(r[2]);
-                                write_status(b" @384=0x");
+                                write_status(b" ECC512=0x");
                                 write_hex_u32(r[3]);
-                                write_status(b" @512=0x");
+                                write_status(b"\r\nPCR256-A=0x");
                                 write_hex_u32(r[4]);
-                                write_status(b" final=0x");
+                                write_status(b" PCR256-B=0x");
                                 write_hex_u32(r[5]);
-                                write_status(b"\r\nPCR-enable=0x");
+                                write_status(b" PCR512-enable=0x");
                                 write_hex_u32(r[6]);
-                                write_status(b" PCR-capture=0x");
+                                write_status(b" PCR512-capture=0x");
                                 write_hex_u32(r[7]);
                                 write_status(b"\r\nnonFF=");
                                 write_decimal(r[8] as usize);
-                                write_status(b" first=");
-                                write_hex_u32(r[9]);
-                                write_status(b" last=");
-                                write_hex_u32(r[10]);
                                 write_status(b" checksum=0x");
-                                write_hex_u32(r[11]);
+                                write_hex_u32(r[9]);
                                 write_status(b"\r\n");
                             }
                             None => write_status(b"ECCPROBE failed: NAND read timeout\r\n"),
