@@ -231,7 +231,7 @@ pub fn report_format_failure(error: crate::nand_fs::InitError) {
         write_hex_u32(format_detail);
         write_status(b", return 0x");
         write_hex_u32(format_return);
-        write_status(b"\\r\\n");
+        write_status(b"\r\n");
     }
 
     let (operation, location, storage_error) =
