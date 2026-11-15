@@ -21,7 +21,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCPROBE       Probe FSMC ECC read timing on physical page 1; read-only\r\n  ECCTEST        DESTRUCTIVE: erase one good block and test ECC\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCPROBE       Probe FSMC ECC read timing on physical page 1; read-only\r\n  ECCTEST        DESTRUCTIVE: erase one good block and test ECC\r\n  ECCCORRTEST    Exhaustive software ECC correction test; no NAND writes\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -826,11 +826,10 @@ fn storage_test(
                 }
 
                 if offset % (16 * 1024) == 0 {
-                    write_status(b"WRITE ");
-                    write_decimal(offset);
-                    write_status(b"/");
-                    write_decimal(STORAGE_TEST_LENGTH);
-                    write_status(b"\r\n");
+                    if offset == 0 {
+                        write_status(b"WRITE: ");
+                    }
+                    write_status(b".");
                 }
                 service_usb_only();
 
@@ -844,7 +843,7 @@ fn storage_test(
                 }
                 offset += count;
             }
-            write_status(b"FLUSH: committing file...\r\n");
+            write_status(b"\r\nFLUSH: committing file...\r\n");
             service_usb_only();
             file.flush()
         },
@@ -876,11 +875,10 @@ fn storage_test(
             while offset < STORAGE_TEST_LENGTH {
                 let requested = core::cmp::min(buffer.len(), STORAGE_TEST_LENGTH - offset);
                 if offset % (16 * 1024) == 0 {
-                    write_status(b"READ ");
-                    write_decimal(offset);
-                    write_status(b"/");
-                    write_decimal(STORAGE_TEST_LENGTH);
-                    write_status(b"\r\n");
+                    if offset == 0 {
+                        write_status(b"READ: ");
+                    }
+                    write_status(b".");
                 }
                 service_usb_only();
 
@@ -899,7 +897,7 @@ fn storage_test(
                 offset += count;
             }
 
-            write_status(b"READ complete. Checking for extra data...\r\n");
+            write_status(b"\r\nREAD complete. Checking for extra data...\r\n");
             service_usb_only();
             let mut extra = [0u8; 1];
             if file.read(&mut extra)? != 0 {
@@ -1492,6 +1490,27 @@ pub fn service(
                             write_status(b" software=0x");
                             write_hex_u32(first_software_mismatch[6]);
                             write_status(b"\r\n");
+                        }
+                        write_status(b"> ");
+                    } else if command_is(line, b"ECCCORRTEST") {
+                        write_status(b"\r\nECCCORRTEST: exhaustive software decoder test; no NAND reads or writes.\r\nTesting all 4096 single-bit data errors...\r\n");
+                        let result = crate::nand_fs::ecc_correction_selftest();
+                        write_status(b"Single-bit data errors: tested=");
+                        write_decimal(result[0] as usize);
+                        write_status(b" failures=");
+                        write_decimal(result[1] as usize);
+                        write_status(b"\r\nECC-bit errors: tested=");
+                        write_decimal(result[2] as usize);
+                        write_status(b" failures=");
+                        write_decimal(result[3] as usize);
+                        write_status(b"\r\nDouble-bit data errors: tested=");
+                        write_decimal(result[4] as usize);
+                        write_status(b" miscorrections=");
+                        write_decimal(result[5] as usize);
+                        if result[1] == 0 && result[3] == 0 && result[5] == 0 {
+                            write_status(b"\r\nECCCORRTEST PASSED.\r\n");
+                        } else {
+                            write_status(b"\r\nECCCORRTEST FAILED. Keep production correction disabled.\r\n");
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCRAW") {
