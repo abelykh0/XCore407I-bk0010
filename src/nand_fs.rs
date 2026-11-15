@@ -1473,10 +1473,10 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     // In the software-ECC experiment, leave the FSMC ECC engine disabled:
     // calculate the reference code from the bytes actually read from NAND.
-    if !raw_read && !software_ecc {
-        let _ = ecc_begin_chunk();
-    }
-
+    // For hardware ECC, do not enable the accumulator until the NAND read
+    // command/address cycle has completed and the device is ready. Enable it
+    // immediately before each 512-byte data transfer, matching the standalone
+    // probe and the FSMC NAND ECC procedure.
     command(0x00);
     address(0);
     address(0);
@@ -1484,9 +1484,6 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     address((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
-        if !raw_read && !software_ecc {
-            let _ = ecc_end_chunk();
-        }
         record_nand_read_failure(1, page);
         record_nand_device_failure(1, page, 0);
         return false;
@@ -1499,7 +1496,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
 
     let mut calculated = [0u8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        if !software_ecc && chunk_index != 0 {
+        if !software_ecc {
             let _ = ecc_begin_chunk();
         }
         let pcr_enable = unsafe { read_volatile(FSMC_PCR2) };
