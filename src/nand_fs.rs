@@ -930,22 +930,18 @@ pub(crate) fn ecc_destructive_test() -> Option<[u32; 30]> {
     }
 
     let mut expected = [0u8; PAGE_SIZE];
-    let mut random_state = 0x6D2B_79F5u32;
-    for (index, byte) in expected.iter_mut().enumerate() {
-        let chunk = index / FSMC_ECC_CHUNK_SIZE;
-        let offset = index % FSMC_ECC_CHUNK_SIZE;
-        *byte = match chunk {
-            0 => 0x00,
-            1 => 0xFF,
-            2 => if offset & 1 == 0 { 0xAA } else { 0x55 },
-            _ => {
-                // Deterministic xorshift stream, independent of ECC code.
-                random_state ^= random_state << 13;
-                random_state ^= random_state >> 17;
-                random_state ^= random_state << 5;
-                random_state as u8
-            }
-        };
+    // Use independent deterministic pseudorandom data in every ECC window.
+    // Uniform and short-period patterns can legitimately produce zero
+    // Hamming parity, which makes them poor tests of the ECC datapath.
+    for (chunk_index, chunk) in expected.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        let mut random_state = 0x6D2B_79F5u32
+            ^ (chunk_index as u32).wrapping_mul(0x9E37_79B9);
+        for byte in chunk {
+            random_state ^= random_state << 13;
+            random_state ^= random_state >> 17;
+            random_state ^= random_state << 5;
+            *byte = random_state as u8;
+        }
     }
 
     for count in &WRITE_ECC_COMPARE_COUNTS {
