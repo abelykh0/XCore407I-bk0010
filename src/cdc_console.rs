@@ -553,14 +553,37 @@ pub fn service(
                             write_status(b"Block 0x");
                             write_hex_u32(block);
                             write_status(b": scanning markers/pages\r\n");
-                            // Flush the block-start marker before entering synchronous NAND reads.
-                            // This makes a stalled read distinguishable from a stalled CDC output path.
-                            _service_background();
-                            match crate::nand_fs::ecc_scan_block_bad(block) {
-                                Some(true) => { bad_blocks += 1; write_status(b"bad\r\n"); }
-                                Some(false) => {
-                                    good_blocks += 1;
-                                    let first = block * crate::nand_fs::PAGES_PER_BLOCK;
+                            // Report each factory-marker read separately. If a read
+                            // never returns, the last "reading" line identifies its page.
+                            let first = block * crate::nand_fs::PAGES_PER_BLOCK;
+                            let mut block_bad = false;
+                            let mut marker_error = false;
+                            for marker_page in [first, first + 1] {
+                                write_status(b"  Marker page 0x");
+                                write_hex_u32(marker_page);
+                                write_status(b": reading\\r\\n");
+                                _service_background();
+                                match crate::nand_fs::ecc_scan_block_marker(marker_page) {
+                                    Some(true) => {
+                                        block_bad = true;
+                                        write_status(b"  marker: bad\\r\\n");
+                                    }
+                                    Some(false) => write_status(b"  marker: erased\\r\\n"),
+                                    None => {
+                                        marker_error = true;
+                                        write_status(b"  marker: read failed\\r\\n");
+                                        break;
+                                    }
+                                }
+                            }
+                            if marker_error {
+                                block_read_errors += 1;
+                                write_status(b"bad-block marker read failed\\r\\n");
+                            } else if block_bad {
+                                bad_blocks += 1;
+                                write_status(b"bad\\r\\n");
+                            } else {
+                                good_blocks += 1;
                                     for page in first..first + crate::nand_fs::PAGES_PER_BLOCK {
                                         match crate::nand_fs::ecc_scan_page_tagged(page) {
                                             Some(false) => { untagged_pages += 1; continue; }
