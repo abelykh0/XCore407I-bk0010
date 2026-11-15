@@ -38,7 +38,7 @@ struct DharaNand {
 unsafe extern "C" {
     fn xcore_dhara_map_init();
     fn xcore_dhara_map_resume(error: *mut i32) -> c_int;
-    fn xcore_dhara_map_provision(sector: u32, data: *const u8, error: *mut i32) -> c_int;
+    fn xcore_dhara_map_provision(sector: u32, data: *const u8, error: *mut i32, phase: *mut i32) -> c_int;
     fn xcore_dhara_map_capacity() -> u32;
     fn xcore_dhara_map_read(sector: u32, data: *mut u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
@@ -60,13 +60,23 @@ static FORMAT_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
 static FORMAT_FAILURE_LOCATION: AtomicU32 = AtomicU32::new(0);
 static FORMAT_FAILURE_DETAIL: AtomicU32 = AtomicU32::new(0);
 static FORMAT_FAILURE_RETURN: AtomicU32 = AtomicU32::new(0);
+static FORMAT_PROVISION_PHASE: AtomicU32 = AtomicU32::new(0);
+static FORMAT_BAD_BLOCK_CALLS: AtomicU32 = AtomicU32::new(0);
+static FORMAT_FIRST_BAD_BLOCK: AtomicU32 = AtomicU32::new(u32::MAX);
+static FORMAT_BAD_BLOCK_REASON: AtomicU32 = AtomicU32::new(0);
+static FORMAT_IS_BAD_CALLS: AtomicU32 = AtomicU32::new(0);
 
-pub(crate) fn format_diagnostic() -> (u32, u32, u32, u32) {
+pub(crate) fn format_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32) {
     (
         FORMAT_FAILURE_STAGE.load(Ordering::Acquire),
         FORMAT_FAILURE_LOCATION.load(Ordering::Acquire),
         FORMAT_FAILURE_DETAIL.load(Ordering::Acquire),
         FORMAT_FAILURE_RETURN.load(Ordering::Acquire),
+        FORMAT_PROVISION_PHASE.load(Ordering::Acquire),
+        FORMAT_BAD_BLOCK_CALLS.load(Ordering::Acquire),
+        FORMAT_FIRST_BAD_BLOCK.load(Ordering::Acquire),
+        FORMAT_BAD_BLOCK_REASON.load(Ordering::Acquire),
+        FORMAT_IS_BAD_CALLS.load(Ordering::Acquire),
     )
 }
 
@@ -121,8 +131,14 @@ fn block_is_bad(block: u32) -> Result<bool, ()> {
         Ok(true)
     } else if first_read && second_read {
         Ok(false)
-    } else {
+    } else if !first_read {
+        FORMAT_BAD_BLOCK_REASON.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Relaxed).ok();
         Err(())
+    } else if !second_read {
+        FORMAT_BAD_BLOCK_REASON.compare_exchange(0, 3, Ordering::AcqRel, Ordering::Relaxed).ok();
+        Err(())
+    } else {
+        Ok(false)
     }
 }
 
@@ -171,13 +187,26 @@ unsafe fn set_error(error: *mut i32, value: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> c_int {
+    FORMAT_IS_BAD_CALLS.fetch_add(1, Ordering::Relaxed);
     if !valid_nand(nand) {
+        FORMAT_BAD_BLOCK_CALLS.fetch_add(1, Ordering::Relaxed);
+        FORMAT_BAD_BLOCK_REASON.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed).ok();
+        FORMAT_FIRST_BAD_BLOCK.compare_exchange(u32::MAX, block, Ordering::AcqRel, Ordering::Relaxed).ok();
         return 1;
     }
     match block_is_bad(block) {
-        Ok(true) => 1,
+        Ok(true) => {
+            FORMAT_BAD_BLOCK_CALLS.fetch_add(1, Ordering::Relaxed);
+            FORMAT_BAD_BLOCK_REASON.compare_exchange(0, 4, Ordering::AcqRel, Ordering::Relaxed).ok();
+            FORMAT_FIRST_BAD_BLOCK.compare_exchange(u32::MAX, block, Ordering::AcqRel, Ordering::Relaxed).ok();
+            1
+        }
         Ok(false) => 0,
-        Err(()) => 1,
+        Err(()) => {
+            FORMAT_BAD_BLOCK_CALLS.fetch_add(1, Ordering::Relaxed);
+            FORMAT_FIRST_BAD_BLOCK.compare_exchange(u32::MAX, block, Ordering::AcqRel, Ordering::Relaxed).ok();
+            1
+        }
     }
 }
 
@@ -323,6 +352,11 @@ impl DharaStorage {
         FORMAT_FAILURE_LOCATION.store(0, Ordering::Release);
         FORMAT_FAILURE_DETAIL.store(0, Ordering::Release);
         FORMAT_FAILURE_RETURN.store(0, Ordering::Release);
+        FORMAT_PROVISION_PHASE.store(0, Ordering::Release);
+        FORMAT_BAD_BLOCK_CALLS.store(0, Ordering::Release);
+        FORMAT_FIRST_BAD_BLOCK.store(u32::MAX, Ordering::Release);
+        FORMAT_BAD_BLOCK_REASON.store(0, Ordering::Release);
+        FORMAT_IS_BAD_CALLS.store(0, Ordering::Release);
 
         nand_fs::command(0xFF);
         if !nand_fs::wait_ready_status() {
@@ -374,17 +408,20 @@ impl DharaStorage {
         marker.fill(0xFF);
         marker[..VOLUME_MARKER.len()].copy_from_slice(VOLUME_MARKER);
         let mut error = 0i32;
+        let mut provision_phase = 0i32;
         let provision_result = unsafe {
             xcore_dhara_map_provision(
                 VOLUME_MARKER_SECTOR,
                 marker.as_ptr(),
                 &mut error,
+                &mut provision_phase,
             )
         };
         if provision_result != 0 {
             FORMAT_FAILURE_STAGE.store(2, Ordering::Release);
             FORMAT_FAILURE_DETAIL.store(error as u32, Ordering::Release);
             FORMAT_FAILURE_RETURN.store(provision_result as u32, Ordering::Release);
+            FORMAT_PROVISION_PHASE.store(provision_phase as u32, Ordering::Release);
             return Err(crate::nand_fs::InitError::ProvisionFailed);
         }
 
