@@ -526,6 +526,23 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
+                    } else if command_is(line, b"NANDPAGEPROBE") {
+                        write_status(b"\\r\\nNANDPAGEPROBE: read-only raw page reads; no NAND writes or erases.\\r\\n");
+                        let (ok, data) = crate::nand_fs::ecc_scan_page_probe();
+                        let labels = [b"Page 0 main: " as &[u8], b"Page 0 spare: ", b"Page 0x83 main: ", b"Page 0x83 spare: "];
+                        for i in 0..4 {
+                            write_status(labels[i]);
+                            if ok[i] {
+                                for (j, byte) in data[i].iter().enumerate() {
+                                    if j != 0 { write_status(b" "); }
+                                    write_hex_u32(*byte as u32);
+                                }
+                            } else {
+                                write_status(b"READ FAILED");
+                            }
+                            write_status(b"\\r\\n");
+                        }
+                        write_status(b"> ");
                     } else if command_is(line, b"NANDPROBE") {
                         write_status(b"\r\nNANDPROBE: read-only READ ID / STATUS; no NAND writes or erases.\\r\\n");
                         let (id, status, ready) = crate::nand_fs::ecc_scan_interface_probe();
