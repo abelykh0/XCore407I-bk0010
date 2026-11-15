@@ -61,8 +61,9 @@ unsafe extern "C" {
 pub(crate) fn list_root_files(
     paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
     path_lengths: &mut [u16; MAX_BROWSER_FILES],
+    progress: impl FnMut(u32, u32),
 ) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
-    xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
+    xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
             let mut count = 0usize;
             for item in directory {
@@ -100,7 +101,7 @@ pub(crate) fn list_root_files(
             }
             Ok(count)
         })
-    })
+    }, progress)
 }
 
 pub(crate) fn draw_file_browser(
