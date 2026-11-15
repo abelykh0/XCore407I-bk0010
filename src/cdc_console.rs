@@ -220,6 +220,20 @@ pub fn report_format_failure(error: crate::nand_fs::InitError) {
     write_status(reason);
     write_status(b".\r\n");
 
+    let (format_stage, format_location, format_detail, format_return) =
+        crate::dhara_fs::format_diagnostic();
+    if format_stage != 0 {
+        write_status(b"Format stage 0x");
+        write_hex_u32(format_stage);
+        write_status(b", location 0x");
+        write_hex_u32(format_location);
+        write_status(b", detail 0x");
+        write_hex_u32(format_detail);
+        write_status(b", return 0x");
+        write_hex_u32(format_return);
+        write_status(b"\\r\\n");
+    }
+
     let (operation, location, storage_error) =
         crate::dhara_fs::storage_io_diagnostic();
     if operation != 0 {
