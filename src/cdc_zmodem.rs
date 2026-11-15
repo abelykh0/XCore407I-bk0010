@@ -317,6 +317,7 @@ pub fn seed_input(state: &mut State, bytes: &[u8]) -> bool {
         return false;
     }
     state.wire[..bytes.len()].copy_from_slice(bytes);
+    state.wire_received_bytes = state.wire_received_bytes.wrapping_add(bytes.len() as u32);
     state.wire_len = bytes.len();
     state.wire_pos = 0;
     true
