@@ -11,7 +11,7 @@ use crate::file_browser::{
     FORMAT_CANCELLED,
     INIT_STATE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST, INIT_CANCELLED,
 };
-use crate::usb_host::USB_FS_STATUS;
+use crate::usb_host::{note_usb_host_activity, USB_FS_STATUS};
 use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
 use xcore407i_blinker::camera::request_camera_mode_toggle;
 use xcore407i_blinker::tusb;
@@ -123,6 +123,7 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
         return;
     }
     BOOT_KEYBOARD_MOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
+    note_usb_host_activity();
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
@@ -203,6 +204,7 @@ pub extern "C" fn tuh_hid_report_received_cb(
     }
 
     KEYBOARD_REPORT_COUNT.fetch_add(1, Ordering::Relaxed);
+    note_usb_host_activity();
     KEYBOARD_LAST_REPORT_LEN.store(len as u32, Ordering::Release);
     if len >= 8 && !report.is_null() {
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
