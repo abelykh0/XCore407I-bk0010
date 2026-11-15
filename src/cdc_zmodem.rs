@@ -27,6 +27,7 @@ pub struct State {
     wire_len: usize,
     wire_pos: usize,
     last_activity_ms: u32,
+    discard_input_until_ms: u32,
     transfer_failed: bool,
     transfer_started: bool,
     timeout_pending: bool,
@@ -56,6 +57,7 @@ impl State {
             wire_len: 0,
             wire_pos: 0,
             last_activity_ms: 0,
+            discard_input_until_ms: 0,
             transfer_failed: false,
             transfer_started: false,
             timeout_pending: false,
@@ -78,6 +80,35 @@ impl State {
 
     pub fn active(&self) -> bool {
         self.receiver.is_some()
+    }
+
+    /// Discard trailing sender bytes after a failed session so they cannot
+    /// be interpreted as interactive console commands. Resume the console
+    /// only after one second without incoming transfer data.
+    pub fn discard_trailing_input(&mut self, now_ms: u32) -> bool {
+        if self.discard_input_until_ms == 0 {
+            return false;
+        }
+
+        let mut discarded = [0u8; WIRE_CAPACITY];
+        let count = unsafe {
+            tusb::tud_cdc_n_read(
+                0,
+                discarded.as_mut_ptr().cast::<c_void>(),
+                discarded.len() as u32,
+            )
+        } as usize;
+        if count != 0 {
+            self.discard_input_until_ms = now_ms.wrapping_add(1_000);
+            return true;
+        }
+
+        if (now_ms.wrapping_sub(self.discard_input_until_ms) as i32) < 0 {
+            return true;
+        }
+
+        self.discard_input_until_ms = 0;
+        false
     }
 
     pub fn handshake_status(&self) -> (bool, bool, bool) {
@@ -122,6 +153,7 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     state.transfer_started = false;
     state.timeout_pending = false;
     state.session_complete_pending = false;
+    state.discard_input_until_ms = 0;
 }
 
 fn make_path(name: &[u8], path: &mut [u8; NAME_CAPACITY + 2]) -> Option<usize> {
@@ -533,6 +565,7 @@ pub fn service(
     }
 
     if finished {
+        let failed = state.transfer_failed || state.timeout_pending;
         // Do not let trailing ZMODEM bytes leak into the interactive console.
         state.wire_len = 0;
         state.wire_pos = 0;
@@ -554,6 +587,9 @@ pub fn service(
         state.transfer_started = false;
         state.timeout_pending = false;
         state.session_complete_pending = false;
+        if failed {
+            state.discard_input_until_ms = now_ms.wrapping_add(1_000);
+        }
         camera::release_cdc_receiver_storage();
     }
 }
