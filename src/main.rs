@@ -46,6 +46,7 @@ use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
     configure_usb_host_task_timer, try_init_usb_fs_host, USB_FS_READY,
     USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
+    USB_FS_LAST_ACTIVITY_TICK,
 };
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
@@ -228,11 +229,13 @@ fn main() -> ! {
         );
     }
 
-    // Allow slow USB-host startup and keyboard enumeration to finish before
-    // defaulting to normal mode. F10 is accepted only while this boot window
-    // remains open; CDC mode intentionally disables the host keyboard.
-    const BOOT_SELECTION_TIMEOUT_MS: u32 = 30_000;
-    let selection_started = TICKS.load(Ordering::Acquire);
+    // Show the keyboard diagnostic screen after 5 seconds without a
+    // successful USB-host discovery event. Each successful stage refreshes
+    // USB_FS_LAST_ACTIVITY_TICK; host servicing continues on the blue screen.
+    // F10 selects CDC only before this timeout. A keyboard discovered later
+    // starts the emulator directly, without another mode-selection step.
+    const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
+    USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
     while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
         if !USB_FS_READY.load(Ordering::Acquire) {
             let now = TICKS.load(Ordering::Relaxed);
@@ -263,7 +266,8 @@ fn main() -> ! {
         }
 
         let now = TICKS.load(Ordering::Relaxed);
-        if now.wrapping_sub(selection_started) >= BOOT_SELECTION_TIMEOUT_MS {
+        let last_activity = USB_FS_LAST_ACTIVITY_TICK.load(Ordering::Acquire);
+        if now.wrapping_sub(last_activity) >= USB_DISCOVERY_INACTIVITY_TIMEOUT_MS {
             keyboard::set_boot_default_normal();
             break;
         }
