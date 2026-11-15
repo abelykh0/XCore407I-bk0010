@@ -583,6 +583,37 @@ pub(crate) fn ecc_scan_page_probe() -> ([bool; 8], [[u8; 16]; 8]) {
     (ok, data)
 }
 
+/// Repeat representative raw page reads, issuing RESET and polling STATUS before
+/// every sample. This is diagnostic-only and never programs or erases the array.
+pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[[u8; 16]; 3]; 8]) {
+    let mut reset_ok = [[false; 3]; 8];
+    let mut read_ok = [[false; 3]; 8];
+    let mut data = [[[0xEEu8; 16]; 3]; 8];
+    let hook = NAND_IO_SERVICE_HOOK.swap(core::ptr::null_mut(), Ordering::AcqRel);
+    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr & !(1 << 1) & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(FSMC_PCR2);
+    }
+    let pages = [0u32, 0, 0, 0, 0x83, 0x83, 0x83, 0x83];
+    let columns = [0u16, 1, 512, PAGE_SIZE as u16, 0, 1, 512, PAGE_SIZE as u16];
+    for i in 0..8 {
+        for repeat in 0..3 {
+            command(0xFF);
+            reset_ok[i][repeat] = wait_ready_status();
+            if reset_ok[i][repeat] {
+                read_ok[i][repeat] = read_page(pages[i], columns[i], &mut data[i][repeat]);
+            }
+        }
+    }
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr);
+        let _ = read_volatile(FSMC_PCR2);
+    }
+    NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
+    (reset_ok, read_ok, data)
+}
+
 /// Read-only classification helpers used by the whole-device ECC scan.
 pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<[u8; 2]> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
