@@ -902,6 +902,93 @@ pub(crate) fn ecc_standalone_read(
 }
 
 
+/// Destructive, isolated FSMC ECC test. Erases the highest-numbered good
+/// physical block, programs page 2 with four deterministic 512-byte patterns,
+/// then compares write-time, read-time, and software ECC. This bypasses Dhara
+/// and LittleFS; the selected physical block's prior contents are lost.
+pub(crate) fn ecc_destructive_test() -> Option<[u32; 19]> {
+    let mut selected_block = None;
+    for block in (0..PHYSICAL_BLOCKS).rev() {
+        let first_page = block * PAGES_PER_BLOCK;
+        let mut marker0 = [0u8; 1];
+        let mut marker1 = [0u8; 1];
+        if !read_page(first_page, PAGE_SIZE as u16, &mut marker0)
+            || !read_page(first_page + 1, PAGE_SIZE as u16, &mut marker1)
+        {
+            return None;
+        }
+        if marker0[0] == 0xFF && marker1[0] == 0xFF {
+            selected_block = Some(block);
+            break;
+        }
+    }
+    let block = selected_block?;
+    let page = block * PAGES_PER_BLOCK + 2;
+
+    if !erase_physical_block(block as u16) {
+        return None;
+    }
+
+    let mut expected = [0u8; PAGE_SIZE];
+    for (index, byte) in expected.iter_mut().enumerate() {
+        let chunk = index / FSMC_ECC_CHUNK_SIZE;
+        let offset = index % FSMC_ECC_CHUNK_SIZE;
+        *byte = match chunk {
+            0 => 0x00,
+            1 => 0xFF,
+            2 => if offset & 1 == 0 { 0xAA } else { 0x55 },
+            _ => {
+                // Deterministic xorshift stream, independent of ECC code.
+                let mut state = 0x6D2B_79F5u32;
+                for _ in 0..=offset {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                }
+                state as u8
+            }
+        };
+    }
+
+    for count in &WRITE_ECC_COMPARE_COUNTS {
+        count.store(0, Ordering::Release);
+    }
+    WRITE_ECC_FIRST_PAGE.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_HARDWARE.store(0, Ordering::Release);
+    WRITE_ECC_FIRST_SOFTWARE.store(0, Ordering::Release);
+    SOFTWARE_ECC_COMPARE_TEST_MODE.store(true, Ordering::SeqCst);
+    let programmed = program_physical_page(page, &expected);
+    SOFTWARE_ECC_COMPARE_TEST_MODE.store(false, Ordering::SeqCst);
+    if !programmed {
+        return None;
+    }
+
+    let mut actual = [0u8; PAGE_SIZE];
+    if !read_page(page, 0, &mut actual) {
+        return None;
+    }
+    let data_mismatches = expected.iter().zip(actual.iter())
+        .filter(|(expected, actual)| expected != actual).count() as u32;
+
+    let (stored, chunks, _ecc256, _ecc2048, software) = ecc_standalone_read(page)?;
+    let write_diag = write_ecc_compare_diagnostic();
+    let mut result = [0u32; 19];
+    result[0] = block;
+    result[1] = page;
+    result[2] = data_mismatches;
+    result[3] = write_diag[0];
+    result[4] = write_diag[1];
+    result[5] = write_diag[4];
+    result[6] = write_diag[5];
+    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+        result[7 + index] = stored[index];
+        result[11 + index] = chunks[index].calculated;
+        result[15 + index] = software[index];
+    }
+    Some(result)
+}
+
 /// Probe ECC for chunk 0 of a physical page using three read sequences:
 /// ECC enabled before the NAND command, then enabled after ready (twice).
 /// This isolates ECC-enable timing and repeatability without writing NAND.
