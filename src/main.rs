@@ -731,7 +731,6 @@ fn main() -> ! {
             let listing_result = list_root_files(
                 &mut *browser_paths,
                 &mut *browser_path_lengths,
-                |_, _| service_file_browser_io(),
             );
             xcore407i_blinker::nand_fs::set_io_service_hook(None);
             FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
