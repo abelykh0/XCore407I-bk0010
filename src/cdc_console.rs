@@ -897,6 +897,10 @@ fn storage_test(
     write_decimal(ecc[1] as usize);
     write_status(b" nonzero syndromes=");
     write_decimal(ecc[2] as usize);
+    write_status(b" ECC-bit errors=");
+    write_decimal(ecc[3] as usize);
+    write_status(b" corrected data bits=");
+    write_decimal(ecc[4] as usize);
     if ecc[2] != 0 {
         write_status(b"First nonzero syndrome: page=0x");
         write_hex_u32(ecc[26]);
