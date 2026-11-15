@@ -615,8 +615,8 @@ pub fn service(
                             for marker_page in [first, first + 1] {
                                 _service_background();
                                 match crate::nand_fs::ecc_scan_block_marker(marker_page) {
-                                    Some(bytes) => {
-                                        if bytes != [0xFF, 0xFF] {
+                                    Some(marker) => {
+                                        if marker != 0xFF {
                                             block_bad = true;
                                         }
                                     }
