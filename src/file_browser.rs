@@ -35,7 +35,7 @@ pub(crate) static INIT_STATE: AtomicU8 = AtomicU8::new(INIT_IDLE);
 pub(crate) const SAVE_RAM_START: usize = 0x0200;
 pub(crate) const SAVE_RAM_LENGTH: usize = 15_872;
 pub(crate) const SAVE_NAME_CAPACITY: usize = 24;
-pub(crate) const MAX_BROWSER_FILES: usize = 25;
+pub(crate) const MAX_BROWSER_FILES: usize = 17;
 pub(crate) const MAX_BROWSER_PATH: usize = 256;
 
 // Keep the browser's path table in ordinary .bss, not on the limited stack.
