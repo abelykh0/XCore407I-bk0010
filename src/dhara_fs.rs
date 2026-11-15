@@ -565,6 +565,9 @@ impl Storage for DharaStorage {
                 record_storage_io_error(1, sector, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
             }
+            // Also yield after each logical page. A cached or unmapped Dhara
+            // read may not enter the raw NAND wait hooks.
+            nand_fs::service_io_hook();
         }
         Ok(buf.len())
     }
