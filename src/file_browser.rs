@@ -56,14 +56,13 @@ unsafe extern "C" {
     static mut RamBuffer: [u8; 0x4000];
 }
 
-/// Read up to 25 regular files from the LittleFS root directory.
+/// Read up to MAX_BROWSER_FILES regular files from the LittleFS root directory.
 /// Paths are retained as NUL-terminated ASCII strings for the later load.
 pub(crate) fn list_root_files(
     paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
     path_lengths: &mut [u16; MAX_BROWSER_FILES],
-    progress: impl FnMut(u32, u32),
 ) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
-    xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
+    xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
         fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
             let mut count = 0usize;
             for item in directory {
