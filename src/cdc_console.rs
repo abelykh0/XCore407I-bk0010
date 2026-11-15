@@ -548,6 +548,7 @@ pub fn service(
                         let mut first_stored = 0u32;
                         let mut first_hardware = 0u32;
                         let mut first_software = 0u32;
+                        write_status(b"Progress: one dot per 8 physical blocks (1024 blocks total).\r\n[");
                         for block in 0..crate::nand_fs::PHYSICAL_BLOCKS {
                             match crate::nand_fs::ecc_scan_block_bad(block) {
                                 Some(true) => { bad_blocks += 1; continue; }
@@ -583,11 +584,14 @@ pub fn service(
                                     None => { page_read_errors += 1; }
                                 }
                             }
-                            if block % 32 == 31 {
-                                write_status(b"Scanned through block 0x"); write_hex_u32(block); write_status(b"\r\n");
+                            if block % 8 == 7 {
+                                write_status(b".");
+                            }
+                            if block % 128 == 127 {
+                                write_status(b"]\r\n[");
                             }
                         }
-                        write_status(b"\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
+                        write_status(b"]\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
                         write_status(b"  Bad blocks: "); write_decimal(bad_blocks as usize);
                         write_status(b"  Marker read errors: "); write_decimal(block_read_errors as usize);
                         write_status(b"\r\nTagged pages: "); write_decimal(tagged_pages as usize);
