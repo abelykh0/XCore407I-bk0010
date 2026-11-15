@@ -636,7 +636,7 @@ impl Receiver {
             self.subpacket_state = SubpacketPhase::Crc(packet);
         } else {
             let unescaped = zdle::UNZDLE_TABLE[byte as usize];
-            self.buf.push(unescaped).map_err(|_| Error::OutOfMemory)?;
+            self.buf.push(unescaped).map_err(|_| Error::SubpacketTooLarge)?;
             self.crc.update(unescaped, self.data_encoding);
         }
         Ok(Some(()))
@@ -658,7 +658,7 @@ impl Receiver {
             };
             return self.receive_subpacket_followup_byte(next);
         }
-        self.buf.push(byte).map_err(|_| Error::OutOfMemory)?;
+        self.buf.push(byte).map_err(|_| Error::SubpacketTooLarge)?;
         self.crc.update(byte, self.data_encoding);
         Ok(Some(()))
     }
@@ -686,7 +686,7 @@ impl Receiver {
     where
         P: Read + ?Sized,
     {
-        match self.subpacket_state {
+        let result = match self.subpacket_state {
             SubpacketPhase::SkipTrailer => {
                 // A hex header ends with a CR LF (possibly with the
                 // high bit set) XON line trailer that sits between the
@@ -769,6 +769,19 @@ impl Receiver {
             }
             SubpacketPhase::Writing(_) => Ok(Some(())),
             SubpacketPhase::Idle => Err(Error::InvalidState),
+        };
+
+        // A data packet that overruns our negotiated subpacket buffer is
+        // recoverable: discard it and request retransmission from the last
+        // committed offset, just as we do for a CRC failure. Metadata
+        // overflow remains fatal because no file offset exists to rewind to.
+        match result {
+            Err(err @ Error::SubpacketTooLarge)
+                if self.state == ReceiverPhase::FileReadingSubpacket =>
+            {
+                self.recover_corrupt_subpacket(err)
+            }
+            other => other,
         }
     }
 
