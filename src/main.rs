@@ -255,6 +255,13 @@ fn main() -> ! {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
         }
 
+        // A valid keyboard report has already selected NORMAL or CDC.
+        // Do not keep consuming the keyboard reports for the remainder of
+        // the fallback window: initialize the selected mode immediately.
+        if keyboard::boot_selection() != keyboard::BOOT_SELECTION_WAITING {
+            break;
+        }
+
         let now = TICKS.load(Ordering::Relaxed);
         if now.wrapping_sub(selection_started) >= BOOT_SELECTION_TIMEOUT_MS {
             keyboard::set_boot_default_normal();
