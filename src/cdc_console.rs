@@ -676,7 +676,24 @@ fn ecc_diagnostic_read(
             write_decimal(total);
             write_status(b"\\r\\n");
             if check_test_pattern {
-                if let Some((offset, expected, actual)) = mismatch {
+                let software_ecc = crate::nand_fs::software_ecc_compare_diagnostic();
+    write_status(b"SOFTWARE ECC comparison (Linux SM-order Hamming): chunks=");
+    write_decimal(software_ecc[0] as usize);
+    write_status(b" mismatches=");
+    write_decimal(software_ecc[1] as usize);
+    if software_ecc[1] != 0 {
+        write_status(b" first page=0x");
+        write_hex_u32(software_ecc[2]);
+        write_status(b" chunk=");
+        write_decimal(software_ecc[3] as usize);
+        write_status(b" stored=0x");
+        write_hex_u32(software_ecc[4]);
+        write_status(b" software=0x");
+        write_hex_u32(software_ecc[5]);
+    }
+    write_status(b"\\r\\n");
+
+    if let Some((offset, expected, actual)) = mismatch {
                     write_status(b"Pattern mismatch at byte ");
                     write_decimal(offset);
                     write_status(b": expected 0x");
@@ -760,6 +777,7 @@ struct EccNoCorrectionGuard;
 impl EccNoCorrectionGuard {
     fn enable() -> Self {
         crate::nand_fs::set_ecc_check_no_correct_test_mode(true);
+        crate::nand_fs::set_software_ecc_compare_test_mode(true);
         Self
     }
 }
@@ -767,6 +785,7 @@ impl EccNoCorrectionGuard {
 impl Drop for EccNoCorrectionGuard {
     fn drop(&mut self) {
         crate::nand_fs::set_ecc_check_no_correct_test_mode(false);
+        crate::nand_fs::set_software_ecc_compare_test_mode(false);
     }
 }
 
