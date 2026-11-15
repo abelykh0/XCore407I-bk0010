@@ -545,7 +545,16 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
 pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<bool> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
     let mut marker = [0xFFu8; 2];
-    if !read_page(page, PAGE_SIZE as u16, &mut marker) { return None; }
+
+    // ECCSCAN is a standalone diagnostic. Do not run the USB/UVC/video service
+    // hook from inside this low-level marker read: it can obscure whether a
+    // NAND wait is actually returning. The caller services USB immediately
+    // before and after each marker read.
+    let hook = NAND_IO_SERVICE_HOOK.swap(core::ptr::null_mut(), Ordering::AcqRel);
+    let read_ok = read_page(page, PAGE_SIZE as u16, &mut marker);
+    NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
+
+    if !read_ok { return None; }
     Some(marker != [0xFF, 0xFF])
 }
 
