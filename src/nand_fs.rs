@@ -797,7 +797,7 @@ pub fn with_mounted_detailed<R>(
 /// to run during the physical bad-block marker scan.
 pub fn with_mounted_detailed_with_progress<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
-    progress: impl FnMut(u32, u32),
+    mut progress: impl FnMut(u32, u32),
 ) -> Result<R, FsAccessError> {
     // Progress sentinels distinguish the NAND scan, LittleFS mount, and
     // caller operation. Physical scan updates are 1..=PHYSICAL_BLOCKS.
