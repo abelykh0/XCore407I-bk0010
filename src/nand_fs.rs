@@ -384,6 +384,31 @@ fn encode_ecc(ecc: u32, out: &mut [u8]) {
     out[2] = (ecc >> 16) as u8;
 }
 
+/// Software reference for the STM32 FSMC 512-byte Hamming ECC format.
+/// This is the Linux FSMC driver's NAND_ECC_SOFT_HAMMING_SM_ORDER layout.
+/// The 12 parity pairs encode byte address bits 0..8, then bit address bits 0..2.
+fn ecc_software_512(data: &[u8]) -> u32 {
+    if data.len() != FSMC_ECC_CHUNK_SIZE {
+        return 0;
+    }
+
+    // Linux SM-order Hamming ECC is the complemented 24-bit parity syndrome.
+    let mut ecc = 0x00FF_FFFFu32;
+    for (byte_index, &byte) in data.iter().enumerate() {
+        for bit_index in 0..8 {
+            if byte & (1 << bit_index) == 0 {
+                continue;
+            }
+            let address = (byte_index as u32) | ((bit_index as u32) << 9);
+            for parity_index in 0..12 {
+                let pair = if address & (1 << parity_index) == 0 { 0b01 } else { 0b10 };
+                ecc ^= pair << (parity_index * 2);
+            }
+        }
+    }
+    ecc & 0x00FF_FFFF
+}
+
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
 
@@ -528,6 +553,7 @@ pub(crate) fn ecc_standalone_read(
     [EccStandaloneChunk; FSMC_ECC_CHUNKS_PER_PAGE],
     [u32; 8],
     u32,
+    [u32; FSMC_ECC_CHUNKS_PER_PAGE],
 )> {
     let mut data = [0u8; PAGE_SIZE];
 
@@ -645,7 +671,12 @@ pub(crate) fn ecc_standalone_read(
     }
     let calculated_2048 = ecc_end_chunk().0 & 0x0FFF_FFFF;
 
-    Some((stored, chunks, calculated_256, calculated_2048))
+    let mut calculated_software = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        calculated_software[index] = ecc_software_512(chunk);
+    }
+
+    Some((stored, chunks, calculated_256, calculated_2048, calculated_software))
 }
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
