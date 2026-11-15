@@ -101,6 +101,7 @@ const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 pub(crate) const RB_MASK: u32 = 1 << 6;
 pub(crate) const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
 pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
+const ATTR_ADDR: *mut u8 = (NAND_BASE | 0x0800_0000 | (1 << 16)) as *mut u8;
 pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
 
@@ -296,6 +297,8 @@ pub enum InitError {
 
 pub(crate) fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
 pub(crate) fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
+#[inline]
+fn address_attribute(value: u8) { unsafe { write_volatile(ATTR_ADDR, value) } }
 pub(crate) fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
 pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
@@ -927,7 +930,7 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 12]> {
     address(0);
     address(0);
     address(page as u8);
-    address((page >> 8) as u8);
+    address_attribute((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
         unsafe { write_volatile(FSMC_PATT2, patt_original); }
@@ -948,7 +951,7 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 12]> {
     address(0);
     address(0);
     address(page as u8);
-    address((page >> 8) as u8);
+    address_attribute((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() { return None; }
     let pcr_512 = ecc_begin_chunk_size(1);
