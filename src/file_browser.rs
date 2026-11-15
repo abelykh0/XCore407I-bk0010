@@ -45,9 +45,24 @@ pub(crate) static mut BROWSER_PATHS: [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES]
 pub(crate) static mut BROWSER_PATH_LENGTHS: [u16; MAX_BROWSER_FILES] = [0; MAX_BROWSER_FILES];
 
 // Shared by normal and CDC modes; their filesystem operations are serialized.
-static mut FILE_BROWSER_FILE_ALLOCATION: littlefs2::fs::FileAllocation<
-    xcore407i_blinker::nand_fs::ActiveStorage,
-> = littlefs2::fs::FileAllocation::new();
+static mut FILE_BROWSER_FILE_ALLOCATION: core::mem::MaybeUninit<
+    littlefs2::fs::FileAllocation<xcore407i_blinker::nand_fs::ActiveStorage>,
+> = core::mem::MaybeUninit::uninit();
+
+fn with_file_browser_file_allocation<R>(
+    operation: impl FnOnce(
+        &mut littlefs2::fs::FileAllocation<xcore407i_blinker::nand_fs::ActiveStorage>,
+    ) -> R,
+) -> R {
+    // Normal and CDC modes are mutually exclusive and file operations run in
+    // the main context, so this shared workspace has only one active user.
+    unsafe {
+        let allocation_ptr = core::ptr::addr_of_mut!(FILE_BROWSER_FILE_ALLOCATION)
+            .cast::<littlefs2::fs::FileAllocation<xcore407i_blinker::nand_fs::ActiveStorage>>();
+        allocation_ptr.write(littlefs2::fs::FileAllocation::new());
+        operation(&mut *allocation_ptr)
+    }
+}
 pub(crate) static FILE_BROWSER_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub(crate) static FILE_BROWSER_ACTION: AtomicU8 = AtomicU8::new(0);
 pub(crate) static SAVE_DIALOG_STATE: AtomicU8 = AtomicU8::new(SAVE_DIALOG_IDLE);
@@ -179,10 +194,11 @@ pub(crate) fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(),
             return Err(littlefs2::io::Error::IO);
         }
 
-        unsafe { fs.open_file_with_options_and_then_with_allocation(
+        with_file_browser_file_allocation(|allocation| {
+            fs.open_file_with_options_and_then_with_allocation(
             |options| options.write(true).create(true).truncate(true),
             path,
-            &mut *core::ptr::addr_of_mut!(FILE_BROWSER_FILE_ALLOCATION),
+            allocation,
             |file| {
                 let start = (SAVE_RAM_START as u16).to_le_bytes();
                 let size = (SAVE_RAM_LENGTH as u16).to_le_bytes();
@@ -212,7 +228,8 @@ pub(crate) fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(),
                 }
                 Ok(())
             },
-        ) }
+        )
+        })
     })
     .map_err(|_| ())
 }
@@ -252,10 +269,11 @@ pub(crate) unsafe fn draw_save_dialog(state: u8) {
 pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
     let (start, _size) = xcore407i_blinker::nand_fs::with_mounted(|fs| {
-        unsafe { fs.open_file_with_options_and_then_with_allocation(
+        with_file_browser_file_allocation(|allocation| {
+            fs.open_file_with_options_and_then_with_allocation(
             |options| options.read(true),
             path,
-            &mut *core::ptr::addr_of_mut!(FILE_BROWSER_FILE_ALLOCATION),
+            allocation,
             |file| {
             let mut header = [0u8; 4];
             let mut header_read = 0usize;
@@ -288,7 +306,9 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
                 total += count;
             }
             Ok((start, size))
-        ) }
+            },
+        )
+        })
     }).map_err(|_| ())?;
 
     unsafe { bk_set_pc(start); }
