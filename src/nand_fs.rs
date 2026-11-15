@@ -905,7 +905,7 @@ pub(crate) fn ecc_standalone_read(
 /// Probe ECC for chunk 0 of a physical page using three read sequences:
 /// ECC enabled before the NAND command, then enabled after ready (twice).
 /// This isolates ECC-enable timing and repeatability without writing NAND.
-pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
+pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 12]> {
     let mut stored_bytes = [0u8; ECC_BYTES_PER_CHUNK];
     if !read_page(page, (PAGE_SIZE + ECC_OOB_OFFSET as usize) as u16, &mut stored_bytes) {
         return None;
@@ -931,8 +931,7 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
     for byte in &mut data[256..] { *byte = read_data(); }
     let (ecc_256_b, _) = ecc_end_chunk();
 
-    // Repeat the same page read as one 512-byte calculation, without
-    // intermediate ECCR reads.
+    // Repeat the same page read as one 512-byte calculation using byte loads.
     command(0x00);
     address(0);
     address(0);
@@ -944,6 +943,23 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
     for byte in &mut data { *byte = read_data(); }
     let (ecc_512, pcr_capture_512) = ecc_end_chunk();
 
+    // Repeat with 32-bit CPU loads. On the configured 8-bit NAND bus the
+    // FSMC should split each word access into four byte transfers. The data
+    // checksum verifies that the NAND's sequential-read stream is unchanged.
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb() { return None; }
+    let _pcr_word = ecc_begin_chunk_size(1);
+    for word_index in 0..(FSMC_ECC_CHUNK_SIZE / 4) {
+        let word = unsafe { read_volatile(DATA.cast::<u32>()) };
+        data[word_index * 4..word_index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    let (ecc_word, _) = ecc_end_chunk();
+
     let non_ff = data.iter().filter(|&&byte| byte != 0xFF).count() as u32;
     let checksum = data.iter().fold(2_166_136_261u32, |h, &b| {
         h.wrapping_mul(16_777_619) ^ b as u32
@@ -951,7 +967,8 @@ pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 10]> {
     Some([
         stored, ecc_256_a & 0x00FF_FFFF, ecc_256_b & 0x00FF_FFFF,
         ecc_512 & 0x00FF_FFFF, pcr_256_a, pcr_256_b, pcr_512,
-        pcr_capture_512, non_ff, checksum,
+        pcr_capture_512, non_ff, checksum, ecc_word & 0x00FF_FFFF,
+        data.iter().fold(2_166_136_261u32, |h, &b| h.wrapping_mul(16_777_619) ^ b as u32),
     ])
 }
 
