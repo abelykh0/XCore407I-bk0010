@@ -1500,12 +1500,10 @@ pub fn service(
                                     write_hex_u32(chunk.calculated);
                                     write_status(b" syndrome=0x");
                                     write_hex_u32(stored[index] ^ chunk.calculated);
-                                    write_status(b" software=0x");
+                                    write_status(b" software-FSMC=0x");
                                     write_hex_u32(calculated_software[index]);
                                     write_status(b" sw_xor=0x");
                                     write_hex_u32(stored[index] ^ calculated_software[index]);
-                                    write_status(b" inv_sw_xor=0x");
-                                    write_hex_u32(stored[index] ^ ((!calculated_software[index]) & 0x00FF_FFFF));
                                     write_status(b" data=");
                                     write_hex_u32(chunk.first_byte as u32);
                                     write_status(b"/");
@@ -1524,12 +1522,16 @@ pub fn service(
                                     write_hex_u32(chunk.pcr_capture);
                                     write_status(b"\r\n");
                                 }
-                                write_status(b"256-byte ECCPS=000 probe (no OOB comparison):\r\n");
+                                write_status(b"256-byte ECCPS=000 vs converted Linux software (22 valid bits):\r\n");
                                 for index in 0..8 {
                                     write_status(b"256[");
                                     write_decimal(index);
-                                    write_status(b"] calculated=0x");
+                                    write_status(b"] FSMC=0x");
                                     write_hex_u32(calculated_256[index]);
+                                    write_status(b" software-FSMC=0x");
+                                    write_hex_u32(_calculated_software_256[index]);
+                                    write_status(b" xor=0x");
+                                    write_hex_u32((calculated_256[index] ^ _calculated_software_256[index]) & 0x003F_FFFF);
                                     write_status(b"\r\n");
                                 }
                                 write_status(b"2048-byte ECCPS=011 single-window probe: 0x");
