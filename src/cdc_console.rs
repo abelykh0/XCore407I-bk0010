@@ -576,6 +576,17 @@ pub fn service(
                                                         if stored != hardware { stored_hardware_mismatches += 1; }
                                                         if stored != software { stored_software_mismatches += 1; }
                                                         if hardware != software { hardware_software_mismatches += 1; }
+                                                        write_status(b"ECC mismatch: page=0x");
+                                                        write_hex_u32(page);
+                                                        write_status(b" chunk=");
+                                                        write_decimal(chunk);
+                                                        write_status(b" stored=0x");
+                                                        write_hex_u32(stored);
+                                                        write_status(b" FSMC=0x");
+                                                        write_hex_u32(hardware);
+                                                        write_status(b" software=0x");
+                                                        write_hex_u32(software);
+                                                        write_status(b"\r\n");
                                                         if first_mismatch {
                                                             first_mismatch = false; first_page = page; first_chunk = chunk as u32;
                                                             first_stored = stored; first_hardware = hardware; first_software = software;
