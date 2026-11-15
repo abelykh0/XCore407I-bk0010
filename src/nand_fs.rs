@@ -916,7 +916,7 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 12]> {
         return None;
     }
     if tag != ECC_TAG {
-        return Some([0; 7]);
+        return Some([0; 12]);
     }
 
     // Read each 512-byte chunk once with the FSMC ECC engine enabled only
