@@ -1293,7 +1293,7 @@ pub fn service(
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCPROBE") {
-                        const page = 1u32;
+                        const page: u32 = 1;
                         write_status(b"\r\nECCPROBE: read-only chunk-0 timing/repeatability test; page=0x");
                         write_hex_u32(page);
                         write_status(b"\r\n");
