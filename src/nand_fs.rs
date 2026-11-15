@@ -906,7 +906,7 @@ pub(crate) fn ecc_standalone_read(
 /// physical block, programs page 2 with four deterministic 512-byte patterns,
 /// then compares write-time, read-time, and software ECC. This bypasses Dhara
 /// and LittleFS; the selected physical block's prior contents are lost.
-pub(crate) fn ecc_destructive_test() -> Option<[u32; 19]> {
+pub(crate) fn ecc_destructive_test() -> Option<[u32; 30]> {
     let mut selected_block = None;
     for block in (0..PHYSICAL_BLOCKS).rev() {
         let first_page = block * PAGES_PER_BLOCK;
@@ -971,9 +971,9 @@ pub(crate) fn ecc_destructive_test() -> Option<[u32; 19]> {
     let data_mismatches = expected.iter().zip(actual.iter())
         .filter(|(expected, actual)| expected != actual).count() as u32;
 
-    let (stored, chunks, _ecc256, _ecc2048, software) = ecc_standalone_read(page)?;
+    let (stored, chunks, ecc256, ecc2048, software) = ecc_standalone_read(page)?;
     let write_diag = write_ecc_compare_diagnostic();
-    let mut result = [0u32; 19];
+    let mut result = [0u32; 30];
     result[0] = block;
     result[1] = page;
     result[2] = data_mismatches;
@@ -986,6 +986,12 @@ pub(crate) fn ecc_destructive_test() -> Option<[u32; 19]> {
         result[11 + index] = chunks[index].calculated;
         result[15 + index] = software[index];
     }
+    result[19] = chunks[0].pcr_enable;
+    result[20] = chunks[0].pcr_capture;
+    for index in 0..8 {
+        result[21 + index] = ecc256[index];
+    }
+    result[29] = ecc2048;
     Some(result)
 }
 
