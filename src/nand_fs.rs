@@ -600,7 +600,9 @@ pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[
     for i in 0..8 {
         for repeat in 0..3 {
             command(0xFF);
-            reset_ok[i][repeat] = wait_ready_status();
+            // Wait only on the physical R/B pin. Do not issue STATUS (0x70):
+            // the purpose of this test is to isolate RESET -> READ sequencing.
+            reset_ok[i][repeat] = wait_ready_rb();
             if reset_ok[i][repeat] {
                 read_ok[i][repeat] = read_page(pages[i], columns[i], &mut data[i][repeat]);
             }
