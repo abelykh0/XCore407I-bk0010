@@ -23,6 +23,8 @@ pub enum Error {
     Backpressure,
     #[cfg_attr(feature = "std", error("out of memory"))]
     OutOfMemory,
+    #[cfg_attr(feature = "std", error("ZMODEM subpacket exceeds receiver capacity"))]
+    SubpacketTooLarge,
     #[cfg_attr(feature = "std", error("unexpected CRC-16"))]
     UnexpectedCrc16,
     #[cfg_attr(feature = "std", error("unexpected CRC-32"))]
