@@ -711,8 +711,14 @@ pub fn service(
                         write_decimal(mismatching_chunks as usize);
                         write_status(b"\r\nFSMC ECC: disabled for this scan\r\n");
 
+                        // A full-device scan is valid only if every physical
+                        // block was classified as good. A nonzero count alone can
+                        // hide a broken marker-read path (for example, 1023 false
+                        // bad-block results and one apparently good block).
                         let marker_classification_sane =
-                            good_blocks > 0 && bad_blocks < crate::nand_fs::PHYSICAL_BLOCKS;
+                            good_blocks == crate::nand_fs::PHYSICAL_BLOCKS
+                                && bad_blocks == 0
+                                && block_read_errors == 0;
                         if !marker_classification_sane {
                             write_status(b"WARNING: marker scan classified every physical block as bad (or found no good blocks). Treat marker results as INVALID; do not format or retire blocks from this scan.\r\n");
                         }
