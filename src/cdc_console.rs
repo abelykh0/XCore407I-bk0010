@@ -323,7 +323,7 @@ fn parse_hex_u32(bytes: &[u8]) -> Option<u32> {
         return None;
     }
     let mut value = 0u32;
-    for byte in digits {
+    for &byte in digits {
         let digit = match byte {
             b'0'..=b'9' => (byte - b'0') as u32,
             b'a'..=b'f' => (byte - b'a' + 10) as u32,
@@ -509,11 +509,11 @@ pub fn service(
                             write_status(b"\r\n");
                             let vectors = crate::nand_fs::ecc_software_selftest();
                             let vectors_ok = vectors == [0x00FF_FFFF, 0x00FF_FFFF, 0x00AA_AAAA, 0x0069_5659];
-                            write_status(if vectors_ok {
-                                b"Software ECC reference vectors: PASS\r\n"
+                            if vectors_ok {
+                                write_status(b"Software ECC reference vectors: PASS\r\n");
                             } else {
-                                b"Software ECC reference vectors: FAIL\r\n"
-                            });
+                                write_status(b"Software ECC reference vectors: FAIL\r\n");
+                            }
                             match crate::nand_fs::ecc_software_compare_page(page) {
                                 Some(result) => {
                                     let mut mismatches = 0usize;
@@ -544,7 +544,7 @@ pub fn service(
                             write_status(b"\r\nUsage: ECCCHECK <hex physical page>, for example ECCCHECK 0x0000233F\r\n");
                         }
                         write_status(b"> ");
-                    } else if command_is(line, b"LIST") {} else if command_is(line, b"LIST") {
+                    } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
                             list_files(fs);
                         } else {
