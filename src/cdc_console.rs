@@ -594,118 +594,123 @@ pub fn service(
                         let vectors = crate::nand_fs::ecc_software_selftest();
                         let vectors_ok = vectors == [0x00FF_FFFF, 0x00FF_FFFF, 0x00AA_AAAA, 0x0069_5659];
                         write_status(if vectors_ok { b"Software ECC reference vectors: PASS\r\n" } else { b"Software ECC reference vectors: FAIL\r\n" });
+
                         let mut good_blocks = 0u32;
                         let mut bad_blocks = 0u32;
                         let mut block_read_errors = 0u32;
+                        let mut suspect_blocks = 0u32;
                         let mut tagged_pages = 0u32;
                         let mut untagged_pages = 0u32;
                         let mut page_read_errors = 0u32;
                         let mut matching_chunks = 0u32;
                         let mut mismatching_chunks = 0u32;
-                        let mut stored_software_mismatches = 0u32;
-                        let mut first_mismatch = true;
-                        let mut first_page = 0u32;
-                        let mut first_chunk = 0u32;
-                        let mut first_stored = 0u32;
-                        let mut first_software = 0u32;
-                        write_status(b"Progress: completed physical blocks (1024 total). Each line is one block.\r\n");
+
+                        write_status(b"Block map ('.'=clean, '!'=suspect):\r\n");
                         for block in 0..crate::nand_fs::PHYSICAL_BLOCKS {
-                            write_status(b"Block 0x");
-                            write_hex_u32(block);
-                            write_status(b": scanning markers/pages\r\n");
-                            // Report each factory-marker read separately. If a read
-                            // never returns, the last "reading" line identifies its page.
                             let first = block * crate::nand_fs::PAGES_PER_BLOCK;
                             let mut block_bad = false;
+                            let mut block_suspect = false;
                             let mut marker_error = false;
+
                             for marker_page in [first, first + 1] {
-                                write_status(b"  Marker page 0x");
-                                write_hex_u32(marker_page);
-                                write_status(b": reading\r\n");
                                 _service_background();
                                 match crate::nand_fs::ecc_scan_block_marker(marker_page) {
                                     Some(bytes) => {
-                                        write_status(b"  raw marker bytes: 0x");
-                                        write_hex_u32(u32::from(bytes[0]) | (u32::from(bytes[1]) << 8));
-                                        write_status(b"\r\n");
                                         if bytes != [0xFF, 0xFF] {
                                             block_bad = true;
-                                            write_status(b"  marker: non-erased\r\n");
-                                        } else {
-                                            write_status(b"  marker: erased\r\n");
                                         }
                                     }
                                     None => {
                                         marker_error = true;
-                                        write_status(b"  marker: read failed\r\n");
                                         break;
                                     }
                                 }
                             }
+
                             if marker_error {
                                 block_read_errors += 1;
-                                write_status(b"bad-block marker read failed\r\n");
+                                block_suspect = true;
                             } else if block_bad {
                                 bad_blocks += 1;
-                                write_status(b"bad\r\n");
+                                block_suspect = true;
                             } else {
                                 good_blocks += 1;
-                                    for page in first..first + crate::nand_fs::PAGES_PER_BLOCK {
-                                        match crate::nand_fs::ecc_scan_page_tagged(page) {
-                                            Some(false) => { untagged_pages += 1; continue; }
-                                            None => { page_read_errors += 1; continue; }
-                                            Some(true) => { tagged_pages += 1; }
+                                for page in first..first + crate::nand_fs::PAGES_PER_BLOCK {
+                                    match crate::nand_fs::ecc_scan_page_tagged(page) {
+                                        Some(false) => {
+                                            untagged_pages += 1;
+                                            continue;
                                         }
-                                        match crate::nand_fs::ecc_software_compare_page(page) {
-                                            Some(result) => {
-                                                for chunk in 0..4 {
-                                                    let stored = result.stored[chunk];
-                                                    let software = result.software[chunk];
-                                                    if stored == software { matching_chunks += 1; }
-                                                    else {
-                                                        mismatching_chunks += 1;
-                                                        stored_software_mismatches += 1;
-                                                        write_status(b"ECC mismatch: page=0x");
-                                                        write_hex_u32(page);
-                                                        write_status(b" chunk=");
-                                                        write_decimal(chunk);
-                                                        write_status(b" stored=0x");
-                                                        write_hex_u32(stored);
-                                                        write_status(b" software=0x");
-                                                        write_hex_u32(software);
-                                                        write_status(b"\\r\\n");
-                                                        if first_mismatch {
-                                                            first_mismatch = false; first_page = page; first_chunk = chunk as u32;
-                                                            first_stored = stored; first_software = software;
-                                                        }
-                                                    }
+                                        None => {
+                                            page_read_errors += 1;
+                                            block_suspect = true;
+                                            continue;
+                                        }
+                                        Some(true) => tagged_pages += 1,
+                                    }
+
+                                    match crate::nand_fs::ecc_software_compare_page(page) {
+                                        Some(result) => {
+                                            for chunk in 0..4 {
+                                                let stored = result.stored[chunk];
+                                                let software = result.software[chunk];
+                                                if stored == software {
+                                                    matching_chunks += 1;
+                                                } else {
+                                                    mismatching_chunks += 1;
+                                                    block_suspect = true;
+                                                    write_status(b"\r\nECC mismatch: page=0x");
+                                                    write_hex_u32(page);
+                                                    write_status(b" chunk=");
+                                                    write_decimal(chunk);
+                                                    write_status(b" stored=0x");
+                                                    write_hex_u32(stored);
+                                                    write_status(b" software=0x");
+                                                    write_hex_u32(software);
+                                                    write_status(b"\r\n");
                                                 }
                                             }
-                                            None => { page_read_errors += 1; }
+                                        }
+                                        None => {
+                                            page_read_errors += 1;
+                                            block_suspect = true;
                                         }
                                     }
-                                write_status(b"complete\r\n");
+                                }
+                            }
+
+                            if block_suspect {
+                                suspect_blocks += 1;
+                                write_status(b"!");
+                            } else {
+                                write_status(b".");
+                            }
+                            if (block + 1) % 64 == 0 {
+                                write_status(b"\r\n");
                             }
                             _service_background();
                         }
-                        write_status(b"\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
-                        write_status(b"  Bad blocks: "); write_decimal(bad_blocks as usize);
-                        write_status(b"  Marker read errors: "); write_decimal(block_read_errors as usize);
-                        write_status(b"\r\nTagged pages: "); write_decimal(tagged_pages as usize);
-                        write_status(b"  Untagged/erased pages: "); write_decimal(untagged_pages as usize);
-                        write_status(b"  Page read errors: "); write_decimal(page_read_errors as usize);
-                        write_status(b"\r\nMatching chunks: "); write_decimal(matching_chunks as usize);
-                        write_status(b"  Mismatching chunks: "); write_decimal(mismatching_chunks as usize);
-                        write_status(b"  Stored-vs-software mismatches: "); write_decimal(stored_software_mismatches as usize);
-                        write_status(b"\r\n");
-                        if !first_mismatch {
-                            write_status(b"First mismatch: page=0x"); write_hex_u32(first_page);
-                            write_status(b" chunk="); write_decimal(first_chunk as usize);
-                            write_status(b" stored=0x"); write_hex_u32(first_stored);
-                            write_status(b" software=0x"); write_hex_u32(first_software);
-                            write_status(b"\r\n");
-                        } else { write_status(b"No ECC mismatches found in tagged pages.\r\n"); }
-                        write_status(b"FSMC ECC: disabled for this scan\\r\\n");
+
+                        write_status(b"\r\nECCSCAN SUMMARY\r\nGood blocks: ");
+                        write_decimal(good_blocks as usize);
+                        write_status(b"  Bad blocks: ");
+                        write_decimal(bad_blocks as usize);
+                        write_status(b"  Marker read errors: ");
+                        write_decimal(block_read_errors as usize);
+                        write_status(b"\r\nSuspect blocks: ");
+                        write_decimal(suspect_blocks as usize);
+                        write_status(b"\r\nTagged pages: ");
+                        write_decimal(tagged_pages as usize);
+                        write_status(b"  Untagged/erased pages: ");
+                        write_decimal(untagged_pages as usize);
+                        write_status(b"  Page read errors: ");
+                        write_decimal(page_read_errors as usize);
+                        write_status(b"\r\nMatching chunks: ");
+                        write_decimal(matching_chunks as usize);
+                        write_status(b"  Mismatching chunks: ");
+                        write_decimal(mismatching_chunks as usize);
+                        write_status(b"\r\nFSMC ECC: disabled for this scan\r\n");
+
                         let marker_classification_sane =
                             good_blocks > 0 && bad_blocks < crate::nand_fs::PHYSICAL_BLOCKS;
                         if !marker_classification_sane {
