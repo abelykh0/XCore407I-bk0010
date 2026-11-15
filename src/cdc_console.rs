@@ -676,23 +676,6 @@ fn ecc_diagnostic_read(
             write_decimal(total);
             write_status(b"\\r\\n");
             if check_test_pattern {
-                let software_ecc = crate::nand_fs::software_ecc_compare_diagnostic();
-    write_status(b"SOFTWARE ECC comparison (Linux SM-order Hamming): chunks=");
-    write_decimal(software_ecc[0] as usize);
-    write_status(b" mismatches=");
-    write_decimal(software_ecc[1] as usize);
-    if software_ecc[1] != 0 {
-        write_status(b" first page=0x");
-        write_hex_u32(software_ecc[2]);
-        write_status(b" chunk=");
-        write_decimal(software_ecc[3] as usize);
-        write_status(b" stored=0x");
-        write_hex_u32(software_ecc[4]);
-        write_status(b" software=0x");
-        write_hex_u32(software_ecc[5]);
-    }
-    write_status(b"\\r\\n");
-
     if let Some((offset, expected, actual)) = mismatch {
                     write_status(b"Pattern mismatch at byte ");
                     write_decimal(offset);
@@ -961,6 +944,23 @@ fn storage_test(
     write_status(b" syndrome=0x");
     write_hex_u32(ecc[8]);
     write_status(b"\r\n");
+
+    let software_ecc = crate::nand_fs::software_ecc_compare_diagnostic();
+    write_status(b"SOFTWARE ECC comparison (Linux SM-order Hamming): chunks=");
+    write_decimal(software_ecc[0] as usize);
+    write_status(b" mismatches=");
+    write_decimal(software_ecc[1] as usize);
+    if software_ecc[1] != 0 {
+        write_status(b" first page=0x");
+        write_hex_u32(software_ecc[2]);
+        write_status(b" chunk=");
+        write_decimal(software_ecc[3] as usize);
+        write_status(b" stored=0x");
+        write_hex_u32(software_ecc[4]);
+        write_status(b" software=0x");
+        write_hex_u32(software_ecc[5]);
+    }
+    write_status(b"\\r\\n");
 
     if let Some((offset, expected, actual)) = mismatch {
         write_status(b"\r\nSTORAGETEST mismatch at byte ");
