@@ -164,7 +164,7 @@ fn ecc_begin_chunk() {
 
 /// Wait for the FSMC FIFO to empty before capturing the ECC result.
 fn wait_fsmc_fifo_empty() -> bool {
-    for iteration in 0..TIMEOUT {
+    for _ in 0..TIMEOUT {
         if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
             return true;
         }
