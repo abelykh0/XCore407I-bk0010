@@ -33,6 +33,7 @@ pub struct State {
     input_accepted: bool,
     response_queued: bool,
     response_sent: bool,
+    session_complete_pending: bool,
     last_error: u8,
     append_lfs_error: i32,
     append_storage_operation: u32,
@@ -61,6 +62,7 @@ impl State {
             input_accepted: false,
             response_queued: false,
             response_sent: false,
+            session_complete_pending: false,
             last_error: 0,
             append_lfs_error: 0,
             append_storage_operation: 0,
@@ -119,6 +121,7 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     state.wire_pos = 0;
     state.transfer_started = false;
     state.timeout_pending = false;
+    state.session_complete_pending = false;
 }
 
 fn make_path(name: &[u8], path: &mut [u8; NAME_CAPACITY + 2]) -> Option<usize> {
@@ -245,6 +248,7 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.input_accepted = false;
     state.response_queued = false;
     state.response_sent = false;
+    state.session_complete_pending = false;
     state.last_error = 0;
     state.append_lfs_error = 0;
     state.append_storage_operation = 0;
@@ -320,6 +324,16 @@ pub fn service(
                 receiver.wire_written(count);
                 state.last_activity_ms = now_ms;
                 if count < bytes_len {
+                    break;
+                }
+                if state.session_complete_pending {
+                    // ZFIN was received and SessionCompleted was surfaced,
+                    // but the receiver's final ZFIN reply must reach CDC IN
+                    // before the receiver state/storage can be released.
+                    finished = true;
+                    super::cdc_console::write_status(
+                        b"\r\nZMODEM upload complete\r\n> ",
+                    );
                     break;
                 }
             }
@@ -410,16 +424,9 @@ pub fn service(
                 }
             }
             Action::Event(Event::SessionCompleted) => {
-                finished = true;
-                remove_partial_file(fs, state);
-                if state.transfer_failed {
-                    super::cdc_console::write_status(
-                        b"\r\nZMODEM stopped: storage/protocol error\r\n> ",
-                    );
-                } else {
-                    super::cdc_console::write_status(b"\r\nZMODEM upload complete\r\n> ");
-                }
-                break;
+                // Receiver::poll() surfaces events before queued wire bytes.
+                // Defer teardown until the final ZFIN reply has been written.
+                state.session_complete_pending = true;
             }
             Action::Event(Event::Aborted) => {
                 finished = true;
@@ -546,6 +553,7 @@ pub fn service(
         state.transfer_failed = false;
         state.transfer_started = false;
         state.timeout_pending = false;
+        state.session_complete_pending = false;
         camera::release_cdc_receiver_storage();
     }
 }
