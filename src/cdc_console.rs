@@ -552,7 +552,10 @@ pub fn service(
                         for block in 0..crate::nand_fs::PHYSICAL_BLOCKS {
                             write_status(b"Block 0x");
                             write_hex_u32(block);
-                            write_status(b": ");
+                            write_status(b": scanning markers/pages\r\n");
+                            // Flush the block-start marker before entering synchronous NAND reads.
+                            // This makes a stalled read distinguishable from a stalled CDC output path.
+                            _service_background();
                             match crate::nand_fs::ecc_scan_block_bad(block) {
                                 Some(true) => { bad_blocks += 1; write_status(b"bad\r\n"); }
                                 Some(false) => {
