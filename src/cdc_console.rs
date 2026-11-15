@@ -677,9 +677,21 @@ pub fn service(
                             write_status(b"\r\n");
                         } else { write_status(b"No ECC mismatches found in tagged pages.\r\n"); }
                         write_status(b"FSMC ECC: disabled for this scan\\r\\n");
-                        write_status(if vectors_ok && mismatching_chunks == 0 && page_read_errors == 0 && block_read_errors == 0 {
+                        let marker_classification_sane =
+                            good_blocks > 0 && bad_blocks < crate::nand_fs::PHYSICAL_BLOCKS;
+                        if !marker_classification_sane {
+                            write_status(b"WARNING: marker scan classified every physical block as bad (or found no good blocks). Treat marker results as INVALID; do not format or retire blocks from this scan.\r\n");
+                        }
+                        write_status(if vectors_ok
+                            && marker_classification_sane
+                            && mismatching_chunks == 0
+                            && page_read_errors == 0
+                            && block_read_errors == 0
+                        {
                             b"ECCSCAN PASSED. NAND was not modified.\r\n> "
-                        } else { b"ECCSCAN completed with diagnostic findings. NAND was not modified.\r\n> " });
+                        } else {
+                            b"ECCSCAN completed with diagnostic findings. NAND was not modified.\r\n> "
+                        });
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
                             list_files(fs);
