@@ -1504,6 +1504,14 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         for byte in chunk.iter_mut() {
             *byte = read_data();
         }
+        // Match the standalone ECC probe: wait for the FSMC FIFO to drain
+        // before capturing ECCR2. Without this, the read path can capture
+        // an incomplete/zero ECC result even though all 512 bytes were read.
+        if !software_ecc && !wait_fsmc_fifo_empty() {
+            let _ = ecc_end_chunk();
+            record_nand_read_failure(4, page);
+            return false;
+        }
         let (chunk_ecc, pcr_capture) = if software_ecc {
             (ecc_software_512(chunk), unsafe { read_volatile(FSMC_PCR2) })
         } else {
