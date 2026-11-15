@@ -188,9 +188,15 @@ fn draw_keyboard_unavailable_screen() {
     line[9..9 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(16, &line, false);
 
+    line.fill(b' ');
+    line[..13].copy_from_slice(b"HOST RESTARTS");
+    let digits = decimal(usb_host::USB_FS_RESTART_COUNT.load(Ordering::Acquire), &mut number);
+    line[14..14 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(17, &line, false);
+
     show_file_browser_line(19, b"CHECK KEYBOARD USB CABLE/PORT", false);
     show_file_browser_line(20, b"USE USB BOOT-HID KEYBOARD", false);
-    show_file_browser_line(22, b"RECONNECT KEYBOARD THEN RESET", false);
+    show_file_browser_line(22, b"AUTO USB HOST RETRY", false);
     show_file_browser_line(24, b"NO EMULATOR STARTED", false);
 }
 
