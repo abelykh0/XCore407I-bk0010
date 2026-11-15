@@ -36,6 +36,10 @@ pub struct State {
     response_sent: bool,
     session_complete_pending: bool,
     last_error: u8,
+    protocol_error: u8,
+    protocol_error_detail: u8,
+    wire_received_bytes: u32,
+    wire_consumed_bytes: u32,
     append_lfs_error: i32,
     append_storage_operation: u32,
     append_storage_location: u32,
@@ -66,6 +70,10 @@ impl State {
             response_sent: false,
             session_complete_pending: false,
             last_error: 0,
+            protocol_error: 0,
+            protocol_error_detail: 0,
+            wire_received_bytes: 0,
+            wire_consumed_bytes: 0,
             append_lfs_error: 0,
             append_storage_operation: 0,
             append_storage_location: 0,
@@ -117,6 +125,10 @@ impl State {
 
     pub fn last_error(&self) -> u8 {
         self.last_error
+    }
+
+    pub fn protocol_diagnostics(&self) -> (u8, u8, u32, u32) {
+        (self.protocol_error, self.protocol_error_detail, self.wire_received_bytes, self.wire_consumed_bytes)
     }
 
     pub fn append_failure_details(&self) -> (i32, u32, u32, u32, u32, u32, u32, u32, u32) {
@@ -282,6 +294,10 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.response_sent = false;
     state.session_complete_pending = false;
     state.last_error = 0;
+    state.protocol_error = 0;
+    state.protocol_error_detail = 0;
+    state.wire_received_bytes = 0;
+    state.wire_consumed_bytes = 0;
     state.append_lfs_error = 0;
     state.append_storage_operation = 0;
     state.append_storage_location = 0;
@@ -476,9 +492,8 @@ pub fn service(
                 } else {
                     super::cdc_console::write_status(b"\r\nZMODEM session cancelled\r\n> ");
                 }
-                state.transfer_failed = false;
-                state.timeout_pending = false;
-                state.transfer_started = false;
+                // Keep failure flags set until the common teardown below captures
+                // them and enables the CDC input-discard window.
                 break;
             }
             Action::Idle => {
@@ -490,6 +505,7 @@ pub fn service(
                             WIRE_CAPACITY as u32,
                         )
                     } as usize;
+                    state.wire_received_bytes = state.wire_received_bytes.wrapping_add(state.wire_len as u32);
                     state.wire_pos = 0;
                     if state.wire_len != 0 {
                         state.last_activity_ms = now_ms;
@@ -502,6 +518,7 @@ pub fn service(
                     match receiver.submit_wire(input) {
                         Ok(consumed) if consumed != 0 => {
                             state.input_accepted = true;
+                            state.wire_consumed_bytes = state.wire_consumed_bytes.wrapping_add(consumed as u32);
                             state.wire_pos += consumed;
                         },
                         Ok(_) => {
@@ -527,6 +544,7 @@ pub fn service(
                                     (WIRE_CAPACITY - state.wire_len) as u32,
                                 )
                             } as usize;
+                            state.wire_received_bytes = state.wire_received_bytes.wrapping_add(count as u32);
                             if count == 0 {
                                 break;
                             }
@@ -535,6 +553,23 @@ pub fn service(
                         },
                         Err(error) => {
                             state.last_error = 6;
+                            let (code, detail) = match error {
+                                ZmodemError::MalformedEncoding(v) => (1, v),
+                                ZmodemError::MalformedFileSize => (2, 0),
+                                ZmodemError::MalformedFileName => (3, 0),
+                                ZmodemError::MalformedFrame(v) => (4, v),
+                                ZmodemError::MalformedHeader => (5, 0),
+                                ZmodemError::MalformedPacket(v) => (6, v),
+                                ZmodemError::InvalidState => (7, 0),
+                                ZmodemError::Backpressure => (8, 0),
+                                ZmodemError::OutOfMemory => (9, 0),
+                                ZmodemError::UnexpectedCrc16 => (10, 0),
+                                ZmodemError::UnexpectedCrc32 => (11, 0),
+                                ZmodemError::UnexpectedEof => (12, 0),
+                                ZmodemError::UnsupportedFeature => (13, 0),
+                            };
+                            state.protocol_error = code;
+                            state.protocol_error_detail = detail;
                             state.transfer_failed = true;
                             let message: &[u8] = match error {
                                 ZmodemError::MalformedEncoding(_) => b"\r\nZMODEM input: malformed encoding\r\n",
