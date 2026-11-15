@@ -542,7 +542,23 @@ pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<bool> {
     // NAND wait is actually returning. The caller services USB immediately
     // before and after each marker read.
     let hook = NAND_IO_SERVICE_HOOK.swap(core::ptr::null_mut(), Ordering::AcqRel);
+
+    // The FSMC NWAIT input is useful for normal NAND traffic, but it can
+    // stall a CPU load/store before the software ready/busy timeout gets a
+    // chance to run. For this diagnostic marker read, disable NWAIT and use
+    // the NAND R/B GPIO polling in read_page() as the sole readiness check.
+    // Restore the complete PCR2 value immediately after the bounded read.
+    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr & !(1 << 1));
+        let _ = read_volatile(FSMC_PCR2);
+    }
     let read_ok = read_page(page, PAGE_SIZE as u16, &mut marker);
+    unsafe {
+        write_volatile(FSMC_PCR2, pcr);
+        let _ = read_volatile(FSMC_PCR2);
+    }
+
     NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
 
     if !read_ok { return None; }
