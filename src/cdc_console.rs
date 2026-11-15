@@ -508,7 +508,7 @@ pub fn service(
                                 7 => b"Invalid receiver state", 8 => b"Backpressure",
                                 9 => b"Receiver buffer exhausted", 10 => b"CRC-16 mismatch",
                                 11 => b"CRC-32 mismatch", 12 => b"Unexpected EOF",
-                                13 => b"Unsupported feature", _ => b"Unclassified protocol error",
+                                13 => b"Unsupported feature", 14 => b"Data subpacket exceeded receiver capacity (ZRPOS retry)", _ => b"Unclassified protocol error",
                             };
                             write_status(b"Protocol detail: ");
                             write_status(description);
