@@ -21,7 +21,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCDIAG [path]  Read a file and report ECC registers (no writes)\r\n  ECCPROBE       Probe FSMC ECC read timing on physical page 1; read-only\r\n  ECCSCAN         Scan physical NAND pages for tagged ECC; read-only\r\n  STORAGETEST Write, read, and compare a test file (video paused)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -1294,9 +1294,9 @@ pub fn service(
                         write_status(b"> ");
                     } else if command_is(line, b"ECCPROBE") {
                         const page = 1u32;
-                        write_status(b"\\r\\nECCPROBE: read-only chunk-0 timing/repeatability test; page=0x");
+                        write_status(b"\r\nECCPROBE: read-only chunk-0 timing/repeatability test; page=0x");
                         write_hex_u32(page);
-                        write_status(b"\\r\\n");
+                        write_status(b"\r\n");
                         match crate::nand_fs::ecc_probe_chunk0(page) {
                             Some(r) => {
                                 write_status(b"stored=0x");
@@ -1307,21 +1307,21 @@ pub fn service(
                                 write_hex_u32(r[2]);
                                 write_status(b" after-ready-2=0x");
                                 write_hex_u32(r[3]);
-                                write_status(b"\\r\\nPCR-before=0x");
+                                write_status(b"\r\nPCR-before=0x");
                                 write_hex_u32(r[4]);
                                 write_status(b" PCR-after-1=0x");
                                 write_hex_u32(r[5]);
                                 write_status(b" PCR-after-2=0x");
                                 write_hex_u32(r[6]);
-                                write_status(b"\\r\\nnonFF=");
+                                write_status(b"\r\nnonFF=");
                                 write_decimal(r[7] as usize);
                                 write_status(b" first=");
                                 write_hex_u32(r[8]);
                                 write_status(b" last=");
                                 write_hex_u32(r[9]);
-                                write_status(b"\\r\\n");
+                                write_status(b"\r\n");
                             }
-                            None => write_status(b"ECCPROBE failed: NAND read timeout\\r\\n"),
+                            None => write_status(b"ECCPROBE failed: NAND read timeout\r\n"),
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"ECCSCAN") {
