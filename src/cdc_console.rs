@@ -595,7 +595,7 @@ pub fn service(
                             }
                             _service_background();
                         }
-                        write_status(b"]\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
+                        write_status(b"\r\nECCSCAN SUMMARY\r\nGood blocks: "); write_decimal(good_blocks as usize);
                         write_status(b"  Bad blocks: "); write_decimal(bad_blocks as usize);
                         write_status(b"  Marker read errors: "); write_decimal(block_read_errors as usize);
                         write_status(b"\r\nTagged pages: "); write_decimal(tagged_pages as usize);
