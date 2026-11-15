@@ -851,163 +851,6 @@ fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
     Some((byte_index, bit_index))
 }
 
-/// Exhaustively validate the production 512-byte correction decoder without NAND I/O.
-/// Returns [single-bit tested, single-bit failures, ECC-bit tested, ECC-bit failures,
-/// double-bit tested, double-bit miscorrections].
-pub(crate) fn ecc_correction_selftest() -> [u32; 6] {
-    let mut original = [0u8; FSMC_ECC_CHUNK_SIZE];
-    let mut state = 0xA341_316Cu32;
-    for byte in &mut original {
-        state ^= state << 13;
-        state ^= state >> 17;
-        state ^= state << 5;
-        *byte = state as u8;
-    }
-    let stored = ecc_software_512_fsmc(&original);
-
-    let mut bit_syndromes = [0u32; FSMC_ECC_CHUNK_SIZE * 8];
-    let mut single_tested = 0u32;
-    let mut single_failures = 0u32;
-    let mut damaged = original;
-    for bit in 0..bit_syndromes.len() {
-        // Start each trial from the same clean reference. The correction
-        // routine itself restores the flipped bit on success, so toggling
-        // the bit again after correction would reintroduce the error and
-        // contaminate every subsequent trial.
-        damaged.copy_from_slice(&original);
-        let byte_index = bit / 8;
-        let bit_mask = 1u8 << (bit % 8);
-        damaged[byte_index] ^= bit_mask;
-        let calculated = ecc_software_512_fsmc(&damaged);
-        let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
-        bit_syndromes[bit] = syndrome;
-        let corrected = correct_ecc_chunk(&mut damaged, stored, calculated);
-        single_tested += 1;
-        if !corrected || damaged != original {
-            single_failures += 1;
-        }
-    }
-
-    let mut ecc_tested = 0u32;
-    let mut ecc_failures = 0u32;
-    for bit in 0..24 {
-        let mut unchanged = original;
-        let accepted = correct_ecc_chunk(&mut unchanged, stored ^ (1 << bit), stored);
-        ecc_tested += 1;
-        if !accepted || unchanged != original {
-            ecc_failures += 1;
-        }
-    }
-
-    // For two data-bit errors, the syndrome is the XOR of the two
-    // corresponding single-bit syndromes. Exercise every distinct pair.
-    let mut double_tested = 0u32;
-    let mut double_miscorrections = 0u32;
-    for first in 0..bit_syndromes.len() {
-        for second in (first + 1)..bit_syndromes.len() {
-            let syndrome = bit_syndromes[first] ^ bit_syndromes[second];
-            double_tested += 1;
-            if ecc_error_location(syndrome).is_some() {
-                double_miscorrections += 1;
-            }
-        }
-    }
-
-    [
-        single_tested,
-        single_failures,
-        ecc_tested,
-        ecc_failures,
-        double_tested,
-        double_miscorrections,
-    ]
-}
-
-/// Validate correction against a real NAND page without modifying NAND.
-/// The page must contain the four tagged 512-byte ECC values written by ECCTEST.
-/// Returns [chunks checked, baseline ECC mismatches, single-bit tests,
-/// single-bit failures, ECC-bit tests, ECC-bit failures, double-bit tests,
-/// double-bit miscorrections].
-pub(crate) fn ecc_nand_correction_test(page: u32) -> Option<[u32; 8]> {
-    let mut original = [0u8; PAGE_SIZE];
-    if !read_page(page, 0, &mut original) {
-        return None;
-    }
-
-    // Refuse to treat arbitrary or legacy OOB contents as a valid ECC page.
-    let mut tag = [0u8; 2];
-    let tag_column = PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16;
-    if !read_page(page, tag_column, &mut tag) || tag != ECC_TAG {
-        return None;
-    }
-
-    // Capture the actual FSMC read ECC and stored OOB values independently.
-    let (stored, hardware_chunks, _, _, _, _) = ecc_standalone_read(page)?;
-    let mut result = [0u32; 8];
-
-    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
-        let start = index * FSMC_ECC_CHUNK_SIZE;
-        let end = start + FSMC_ECC_CHUNK_SIZE;
-        let source = &original[start..end];
-        let software_ecc = ecc_software_512_fsmc(source);
-        result[0] += 1;
-        if stored[index] != software_ecc
-            || stored[index] != hardware_chunks[index].calculated
-        {
-            result[1] += 1;
-        }
-
-        // Inject one data-bit error in RAM, then require exact restoration.
-        let mut damaged = [0u8; FSMC_ECC_CHUNK_SIZE];
-        damaged.copy_from_slice(source);
-        let bit = (index * 977 + 13) % (FSMC_ECC_CHUNK_SIZE * 8);
-        damaged[bit / 8] ^= 1 << (bit % 8);
-        let damaged_ecc = ecc_software_512_fsmc(&damaged);
-        let corrected = correct_ecc_chunk(&mut damaged, stored[index], damaged_ecc);
-        result[2] += 1;
-        if !corrected || damaged.as_slice() != source {
-            result[3] += 1;
-        }
-
-        // Every ECC parity bit must be recognized without changing data.
-        for ecc_bit in 0..24 {
-            let mut unchanged = [0u8; FSMC_ECC_CHUNK_SIZE];
-            unchanged.copy_from_slice(source);
-            let accepted = correct_ecc_chunk(
-                &mut unchanged,
-                stored[index] ^ (1 << ecc_bit),
-                hardware_chunks[index].calculated,
-            );
-            result[4] += 1;
-            if !accepted || unchanged.as_slice() != source {
-                result[5] += 1;
-            }
-        }
-
-        // Two independent data-bit flips must not be "corrected" as one bit.
-        let mut double_damaged = [0u8; FSMC_ECC_CHUNK_SIZE];
-        double_damaged.copy_from_slice(source);
-        double_damaged[13] ^= 1 << 2;
-        double_damaged[201] ^= 1 << 5;
-        let double_ecc = ecc_software_512_fsmc(&double_damaged);
-        // Rejection must leave the already-corrupted RAM buffer unchanged.
-        // Comparing against the pristine source would incorrectly count
-        // every correctly rejected double-bit error as a miscorrection.
-        let before_correction = double_damaged;
-        let accepted = correct_ecc_chunk(
-            &mut double_damaged,
-            stored[index],
-            double_ecc,
-        );
-        result[6] += 1;
-        if accepted || double_damaged != before_correction {
-            result[7] += 1;
-        }
-    }
-
-    Some(result)
-}
-
 fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     if data.len() != FSMC_ECC_CHUNK_SIZE {
         return false;
@@ -1030,28 +873,13 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
     true
 }
 
-/// Per-chunk evidence captured during the direct, read-only ECC diagnostic.
-#[derive(Clone, Copy)]
-pub(crate) struct EccStandaloneChunk {
-    pub calculated: u32,
-    pub pcr_enable: u32,
-    pub pcr_capture: u32,
-    pub first_byte: u8,
-    pub last_byte: u8,
-    pub first_bytes: [u8; 16],
-    pub checksum: u32,
-    pub non_ff_bytes: u16,
-}
-
-/// Deterministic reference vectors for checking the software ECC port.
-/// Expected values were generated with Linux ecc_sw_hamming_calculate()
-/// using 512-byte steps and NAND_ECC_SOFT_HAMMING_SM_ORDER.
+/// Reference vectors from Linux ecc_sw_hamming_calculate() using
+/// NAND_ECC_SOFT_HAMMING_SM_ORDER and 512-byte steps.
 pub(crate) fn ecc_software_selftest() -> [u32; 4] {
     let zero = [0u8; FSMC_ECC_CHUNK_SIZE];
     let erased = [0xFFu8; FSMC_ECC_CHUNK_SIZE];
     let mut single_bit = [0u8; FSMC_ECC_CHUNK_SIZE];
     single_bit[0] = 1;
-
     let mut pseudo_random = [0u8; FSMC_ECC_CHUNK_SIZE];
     let mut state = 0x1234_5678u32;
     for byte in &mut pseudo_random {
@@ -1060,7 +888,6 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
         state ^= state << 5;
         *byte = state as u8;
     }
-
     [
         ecc_software_512(&zero),
         ecc_software_512(&erased),
@@ -1069,159 +896,8 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
     ]
 }
 
-/// Read one physical NAND page directly and compare FSMC ECC with its OOB
-/// values. This bypasses Dhara and LittleFS and never changes NAND contents.
-pub(crate) fn ecc_standalone_read(
-    page: u32,
-) -> Option<(
-    [u32; 4],
-    [EccStandaloneChunk; FSMC_ECC_CHUNKS_PER_PAGE],
-    [u32; 8],
-    u32,
-    [u32; FSMC_ECC_CHUNKS_PER_PAGE],
-    [u32; 8],
-)> {
-    let mut data = [0u8; PAGE_SIZE];
-
-    // Complete NAND command/address/read-cycle setup before enabling ECC.
-    // RM0090's ECC procedure enables ECC immediately before the data transfer;
-    // command and address accesses must not be part of the ECC window.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() {
-        return None;
-    }
-
-    let mut chunks = [EccStandaloneChunk {
-        calculated: 0,
-        pcr_enable: 0,
-        pcr_capture: 0,
-        first_byte: 0,
-        last_byte: 0,
-        first_bytes: [0; 16],
-        checksum: 0,
-        non_ff_bytes: 0,
-    }; FSMC_ECC_CHUNKS_PER_PAGE];
-
-    for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let pcr_enable = ecc_begin_chunk();
-        let mut non_ff_bytes = 0u16;
-        let mut first_bytes = [0u8; 16];
-        let mut checksum = 2_166_136_261u32; // FNV-1a offset basis
-        for (offset, byte) in chunk.iter_mut().enumerate() {
-            *byte = read_data();
-            if offset < first_bytes.len() {
-                first_bytes[offset] = *byte;
-            }
-            checksum = checksum.wrapping_mul(16_777_619) ^ (*byte as u32);
-            if *byte != 0xFF {
-                non_ff_bytes += 1;
-            }
-        }
-        // Follow the reference sequence used by the STM32 NAND ECC example:
-        // drain the FSMC FIFO before reading ECCR2, then disable ECC to reset
-        // the accumulator before the next 512-byte chunk.
-        if !wait_fsmc_fifo_empty() {
-            let _ = ecc_end_chunk();
-            return None;
-        }
-        let (calculated, pcr_capture) = ecc_end_chunk();
-        chunks[index] = EccStandaloneChunk {
-            calculated: calculated & 0x00FF_FFFF,
-            pcr_enable,
-            pcr_capture,
-            first_byte: chunk[0],
-            last_byte: chunk[chunk.len() - 1],
-            first_bytes,
-            checksum,
-            non_ff_bytes,
-        };
-    }
-
-    // Read the four stored ECC words directly from the spare area.
-    let mut spare_ecc = [0u8; ECC_OOB_BYTES];
-    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut spare_ecc) {
-        return None;
-    }
-    let mut stored = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
-    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
-        let offset = index * ECC_BYTES_PER_CHUNK;
-        stored[index] = u32::from_le_bytes([
-            spare_ecc[offset],
-            spare_ecc[offset + 1],
-            spare_ecc[offset + 2],
-            0,
-        ]);
-    }
-    // Repeat the direct read using 256-byte ECC windows. This is a
-    // read-only probe of ECCPS=000 and does not compare against OOB values.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() {
-        return None;
-    }
-    let mut calculated_256 = [0u32; 8];
-    let mut remaining = PAGE_SIZE;
-    for value in &mut calculated_256 {
-        let _ = ecc_begin_chunk_size(0);
-        for _ in 0..256 {
-            let _ = read_data();
-        }
-        if !wait_fsmc_fifo_empty() {
-            let _ = ecc_end_chunk();
-            return None;
-        }
-        *value = ecc_end_chunk().0 & 0x00FF_FFFF;
-        remaining -= 256;
-    }
-    debug_assert_eq!(remaining, 0);
-
-    // Finally calculate ECC over the entire 2 KiB page in one window.
-    // ECCPS=011 selects 2048 bytes, so this avoids all per-512-byte
-    // accumulator resets. This is read-only and is not compared with OOB,
-    // whose current layout stores four independent 512-byte ECC values.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() {
-        return None;
-    }
-    let _ = ecc_begin_chunk_size(3);
-    for _ in 0..PAGE_SIZE {
-        let _ = read_data();
-    }
-    if !wait_fsmc_fifo_empty() {
-        let _ = ecc_end_chunk();
-        return None;
-    }
-    let calculated_2048 = ecc_end_chunk().0 & 0x0FFF_FFFF;
-
-    let mut calculated_software = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
-    for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        calculated_software[index] = ecc_software_512_fsmc(chunk);
-    }
-    let mut calculated_software_256 = [0u32; 8];
-    for (index, chunk) in data.chunks_exact(256).enumerate() {
-        calculated_software_256[index] = ecc_software_256_fsmc(chunk);
-    }
-
-    Some((stored, chunks, calculated_256, calculated_2048, calculated_software, calculated_software_256))
-}
-
-
-
-/// One read-only comparison of stored, FSMC, and software ECC on a tagged page.
+/// Read one tagged physical page and compare OOB, FSMC, and software ECC.
+/// This bypasses Dhara/LittleFS and never writes or alters NAND contents.
 pub(crate) struct EccPageComparison {
     pub stored: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub hardware: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -1232,197 +908,8 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK {
         return None;
     }
-    let mut tag = [0u8; 2];
-    let tag_column = PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16;
-    if !read_page(page, tag_column, &mut tag) || tag != ECC_TAG {
-        return None;
-    }
-    let (stored, chunks, _, _, software, _) = ecc_standalone_read(page)?;
-    let hardware = core::array::from_fn(|index| chunks[index].calculated);
-    Some(EccPageComparison { stored, hardware, software })
-}
 
-/// Destructive, isolated FSMC ECC test. Erases the highest-numbered good
-/// physical block, programs page 2 with four independent pseudorandom 512-byte chunks,
-/// then compares write-time, read-time, and software ECC. This bypasses Dhara
-/// and LittleFS; the selected physical block's prior contents are lost.
-pub(crate) fn ecc_destructive_test() -> Option<[u32; 38]> {
-    let mut selected_block = None;
-    for block in (0..PHYSICAL_BLOCKS).rev() {
-        let first_page = block * PAGES_PER_BLOCK;
-        let mut marker0 = [0u8; 1];
-        let mut marker1 = [0u8; 1];
-        if !read_page(first_page, PAGE_SIZE as u16, &mut marker0)
-            || !read_page(first_page + 1, PAGE_SIZE as u16, &mut marker1)
-        {
-            return None;
-        }
-        if marker0[0] == 0xFF && marker1[0] == 0xFF {
-            selected_block = Some(block);
-            break;
-        }
-    }
-    let block = selected_block?;
-    let page = block * PAGES_PER_BLOCK + 2;
-
-    if !erase_physical_block(block as u16) {
-        return None;
-    }
-
-    let mut expected = [0u8; PAGE_SIZE];
-    // Use independent deterministic pseudorandom data in every ECC window.
-    // Uniform and short-period patterns can legitimately produce zero
-    // Hamming parity, which makes them poor tests of the ECC datapath.
-    for (chunk_index, chunk) in expected.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let mut random_state = 0x6D2B_79F5u32
-            ^ (chunk_index as u32).wrapping_mul(0x9E37_79B9);
-        for byte in chunk {
-            random_state ^= random_state << 13;
-            random_state ^= random_state >> 17;
-            random_state ^= random_state << 5;
-            *byte = random_state as u8;
-        }
-    }
-
-    for count in &WRITE_ECC_COMPARE_COUNTS {
-        count.store(0, Ordering::Release);
-    }
-    WRITE_ECC_FIRST_PAGE.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_HARDWARE.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_SOFTWARE.store(0, Ordering::Release);
-    SOFTWARE_ECC_COMPARE_TEST_MODE.store(true, Ordering::SeqCst);
-    let programmed = program_physical_page(page, &expected);
-    SOFTWARE_ECC_COMPARE_TEST_MODE.store(false, Ordering::SeqCst);
-    if !programmed {
-        return None;
-    }
-
-    let mut actual = [0u8; PAGE_SIZE];
-    if !read_page(page, 0, &mut actual) {
-        return None;
-    }
-    let data_mismatches = expected.iter().zip(actual.iter())
-        .filter(|(expected, actual)| expected != actual).count() as u32;
-
-    let (stored, chunks, ecc256, ecc2048, software, software256) = ecc_standalone_read(page)?;
-    let write_diag = write_ecc_compare_diagnostic();
-    let mut result = [0u32; 38];
-    result[0] = block;
-    result[1] = page;
-    result[2] = data_mismatches;
-    result[3] = write_diag[0];
-    result[4] = write_diag[1];
-    result[5] = write_diag[4];
-    result[6] = write_diag[5];
-    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
-        result[7 + index] = stored[index];
-        result[11 + index] = chunks[index].calculated;
-        result[15 + index] = software[index];
-    }
-    result[19] = chunks[0].pcr_enable;
-    result[20] = chunks[0].pcr_capture;
-    for index in 0..8 {
-        result[21 + index] = ecc256[index];
-    }
-    result[29] = ecc2048;
-    for index in 0..8 { result[30 + index] = software256[index]; }
-    Some(result)
-}
-
-/// Probe ECC for chunk 0 of a physical page using three read sequences:
-/// ECC enabled before the NAND command, then enabled after ready (twice).
-/// This isolates ECC-enable timing and repeatability without writing NAND.
-pub(crate) fn ecc_probe_chunk0(page: u32) -> Option<[u32; 12]> {
-    let mut stored_bytes = [0u8; ECC_BYTES_PER_CHUNK];
-    if !read_page(page, (PAGE_SIZE + ECC_OOB_OFFSET as usize) as u16, &mut stored_bytes) {
-        return None;
-    }
-    let stored = u32::from_le_bytes([stored_bytes[0], stored_bytes[1], stored_bytes[2], 0]);
-    let mut data = [0u8; FSMC_ECC_CHUNK_SIZE];
-
-    // Test each 256-byte half with ECCPS=000. Capture only at the
-    // configured boundary, then disable/re-enable ECC before the next half.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() { return None; }
-
-    let pcr_256_a = ecc_begin_chunk_size(0);
-    for byte in &mut data[..256] { *byte = read_data(); }
-    let (ecc_256_a, _) = ecc_end_chunk();
-
-    let pcr_256_b = ecc_begin_chunk_size(0);
-    for byte in &mut data[256..] { *byte = read_data(); }
-    let (ecc_256_b, _) = ecc_end_chunk();
-
-    // Repeat the same page read as one 512-byte calculation using byte loads.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() { return None; }
-    let pcr_512 = ecc_begin_chunk_size(1);
-    for byte in &mut data { *byte = read_data(); }
-    let (ecc_512, pcr_capture_512) = ecc_end_chunk();
-
-    // Repeat with 32-bit CPU loads. On the configured 8-bit NAND bus the
-    // FSMC should split each word access into four byte transfers. The data
-    // checksum verifies that the NAND's sequential-read stream is unchanged.
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() { return None; }
-    let _pcr_word = ecc_begin_chunk_size(1);
-    for word_index in 0..(FSMC_ECC_CHUNK_SIZE / 4) {
-        let word = unsafe { read_volatile(DATA.cast::<u32>()) };
-        data[word_index * 4..word_index * 4 + 4].copy_from_slice(&word.to_le_bytes());
-    }
-    let (ecc_word, _) = ecc_end_chunk();
-
-    let non_ff = data.iter().filter(|&&byte| byte != 0xFF).count() as u32;
-    let checksum = data.iter().fold(2_166_136_261u32, |h, &b| {
-        h.wrapping_mul(16_777_619) ^ b as u32
-    });
-    Some([
-        stored, ecc_256_a & 0x00FF_FFFF, ecc_256_b & 0x00FF_FFFF,
-        ecc_512 & 0x00FF_FFFF, pcr_256_a, pcr_256_b, pcr_512,
-        pcr_capture_512, non_ff, checksum, ecc_word & 0x00FF_FFFF,
-        data.iter().fold(2_166_136_261u32, |h, &b| h.wrapping_mul(16_777_619) ^ b as u32),
-    ])
-}
-
-/// Read-only raw NAND ECC scan for one physical page.
-/// Returns None on NAND I/O failure; untagged pages return an all-zero record.
-/// Record: tagged, hardware mismatches, software mismatches, first chunk,
-/// first stored ECC, first FSMC ECC, first software ECC.
-pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 12]> {
-    let mut tag = [0u8; 2];
-    if !read_page(
-        page,
-        (PAGE_SIZE + ECC_OOB_OFFSET as usize + ECC_OOB_BYTES) as u16,
-        &mut tag,
-    ) {
-        return None;
-    }
-    if tag != ECC_TAG {
-        return Some([0; 12]);
-    }
-
-    // Read each 512-byte chunk once with the FSMC ECC engine enabled only
-    // for the data transfer. Retain the bytes for the independent SW result.
     let mut data = [0u8; PAGE_SIZE];
-    let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
-    let mut pcr_enable = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
-    let mut pcr_capture = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     command(0x00);
     address(0);
     address(0);
@@ -1432,8 +919,10 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 12]> {
     if !wait_ready_rb() {
         return None;
     }
+
+    let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        pcr_enable[index] = ecc_begin_chunk();
+        let _ = ecc_begin_chunk();
         for byte in chunk.iter_mut() {
             *byte = read_data();
         }
@@ -1441,45 +930,28 @@ pub(crate) fn ecc_scan_physical_page(page: u32) -> Option<[u32; 12]> {
             let _ = ecc_end_chunk();
             return None;
         }
-        let (calculated, capture) = ecc_end_chunk();
-        hardware[index] = calculated & 0x00FF_FFFF;
-        pcr_capture[index] = capture;
+        hardware[index] = ecc_end_chunk().0 & 0x00FF_FFFF;
     }
 
-    let mut stored_bytes = [0u8; ECC_OOB_BYTES];
-    if !read_page(page, (PAGE_SIZE + ECC_OOB_OFFSET as usize) as u16, &mut stored_bytes) {
+    let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
+    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut spare) {
+        return None;
+    }
+    if spare[ECC_OOB_BYTES..] != ECC_TAG {
         return None;
     }
 
-    let mut result = [0u32; 12];
-    result[0] = 1;
-    result[3] = u32::MAX;
-    for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+    let mut result = EccPageComparison {
+        stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        hardware,
+        software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    };
+    for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
         let offset = index * ECC_BYTES_PER_CHUNK;
-        let stored = u32::from_le_bytes([
-            stored_bytes[offset], stored_bytes[offset + 1], stored_bytes[offset + 2], 0,
+        result.stored[index] = u32::from_le_bytes([
+            spare[offset], spare[offset + 1], spare[offset + 2], 0,
         ]);
-        let software = ecc_software_512(
-            &data[index * FSMC_ECC_CHUNK_SIZE..(index + 1) * FSMC_ECC_CHUNK_SIZE],
-        );
-        if stored != hardware[index] {
-            result[1] += 1;
-        }
-        if stored != software {
-            result[2] += 1;
-        }
-        if result[3] == u32::MAX && (stored != hardware[index] || stored != software) {
-            result[3] = index as u32;
-            result[4] = stored;
-            result[5] = hardware[index];
-            result[6] = software;
-            let chunk_data = &data[index * FSMC_ECC_CHUNK_SIZE..(index + 1) * FSMC_ECC_CHUNK_SIZE];
-            result[7] = chunk_data.iter().filter(|&&byte| byte != 0xFF).count() as u32;
-            result[8] = chunk_data[0] as u32;
-            result[9] = chunk_data[chunk_data.len() - 1] as u32;
-            result[10] = pcr_enable[index];
-            result[11] = pcr_capture[index];
-        }
+        result.software[index] = ecc_software_512_fsmc(chunk);
     }
     Some(result)
 }
