@@ -564,11 +564,17 @@ pub fn service(
                                 write_status(b": reading\r\n");
                                 _service_background();
                                 match crate::nand_fs::ecc_scan_block_marker(marker_page) {
-                                    Some(true) => {
-                                        block_bad = true;
-                                        write_status(b"  marker: bad\r\n");
+                                    Some(bytes) => {
+                                        write_status(b"  raw marker bytes: 0x");
+                                        write_hex_u32(u32::from(bytes[0]) | (u32::from(bytes[1]) << 8));
+                                        write_status(b"\r\n");
+                                        if bytes != [0xFF, 0xFF] {
+                                            block_bad = true;
+                                            write_status(b"  marker: non-erased\r\n");
+                                        } else {
+                                            write_status(b"  marker: erased\r\n");
+                                        }
                                     }
-                                    Some(false) => write_status(b"  marker: erased\r\n"),
                                     None => {
                                         marker_error = true;
                                         write_status(b"  marker: read failed\r\n");
