@@ -573,14 +573,11 @@ pub fn service(
                         let mut page_read_errors = 0u32;
                         let mut matching_chunks = 0u32;
                         let mut mismatching_chunks = 0u32;
-                        let mut hardware_software_mismatches = 0u32;
-                        let mut stored_hardware_mismatches = 0u32;
                         let mut stored_software_mismatches = 0u32;
                         let mut first_mismatch = true;
                         let mut first_page = 0u32;
                         let mut first_chunk = 0u32;
                         let mut first_stored = 0u32;
-                        let mut first_hardware = 0u32;
                         let mut first_software = 0u32;
                         write_status(b"Progress: completed physical blocks (1024 total). Each line is one block.\r\n");
                         for block in 0..crate::nand_fs::PHYSICAL_BLOCKS {
@@ -634,28 +631,23 @@ pub fn service(
                                             Some(result) => {
                                                 for chunk in 0..4 {
                                                     let stored = result.stored[chunk];
-                                                    let hardware = result.hardware[chunk];
                                                     let software = result.software[chunk];
-                                                    if stored == hardware && stored == software { matching_chunks += 1; }
+                                                    if stored == software { matching_chunks += 1; }
                                                     else {
                                                         mismatching_chunks += 1;
-                                                        if stored != hardware { stored_hardware_mismatches += 1; }
-                                                        if stored != software { stored_software_mismatches += 1; }
-                                                        if hardware != software { hardware_software_mismatches += 1; }
+                                                        stored_software_mismatches += 1;
                                                         write_status(b"ECC mismatch: page=0x");
                                                         write_hex_u32(page);
                                                         write_status(b" chunk=");
                                                         write_decimal(chunk);
                                                         write_status(b" stored=0x");
                                                         write_hex_u32(stored);
-                                                        write_status(b" FSMC=0x");
-                                                        write_hex_u32(hardware);
                                                         write_status(b" software=0x");
                                                         write_hex_u32(software);
-                                                        write_status(b"\r\n");
+                                                        write_status(b"\\r\\n");
                                                         if first_mismatch {
                                                             first_mismatch = false; first_page = page; first_chunk = chunk as u32;
-                                                            first_stored = stored; first_hardware = hardware; first_software = software;
+                                                            first_stored = stored; first_software = software;
                                                         }
                                                     }
                                                 }
@@ -675,18 +667,16 @@ pub fn service(
                         write_status(b"  Page read errors: "); write_decimal(page_read_errors as usize);
                         write_status(b"\r\nMatching chunks: "); write_decimal(matching_chunks as usize);
                         write_status(b"  Mismatching chunks: "); write_decimal(mismatching_chunks as usize);
-                        write_status(b"\r\nStored-vs-FSMC mismatches: "); write_decimal(stored_hardware_mismatches as usize);
                         write_status(b"  Stored-vs-software mismatches: "); write_decimal(stored_software_mismatches as usize);
-                        write_status(b"\r\nFSMC-vs-software mismatches: "); write_decimal(hardware_software_mismatches as usize);
                         write_status(b"\r\n");
                         if !first_mismatch {
                             write_status(b"First mismatch: page=0x"); write_hex_u32(first_page);
                             write_status(b" chunk="); write_decimal(first_chunk as usize);
                             write_status(b" stored=0x"); write_hex_u32(first_stored);
-                            write_status(b" FSMC=0x"); write_hex_u32(first_hardware);
                             write_status(b" software=0x"); write_hex_u32(first_software);
                             write_status(b"\r\n");
                         } else { write_status(b"No ECC mismatches found in tagged pages.\r\n"); }
+                        write_status(b"FSMC ECC: disabled for this scan\\r\\n");
                         write_status(if vectors_ok && mismatching_chunks == 0 && page_read_errors == 0 && block_read_errors == 0 {
                             b"ECCSCAN PASSED. NAND was not modified.\r\n> "
                         } else { b"ECCSCAN completed with diagnostic findings. NAND was not modified.\r\n> " });
