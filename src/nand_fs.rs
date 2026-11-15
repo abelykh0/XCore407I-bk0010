@@ -930,6 +930,7 @@ pub(crate) fn ecc_destructive_test() -> Option<[u32; 30]> {
     }
 
     let mut expected = [0u8; PAGE_SIZE];
+    let mut random_state = 0x6D2B_79F5u32;
     for (index, byte) in expected.iter_mut().enumerate() {
         let chunk = index / FSMC_ECC_CHUNK_SIZE;
         let offset = index % FSMC_ECC_CHUNK_SIZE;
@@ -939,13 +940,10 @@ pub(crate) fn ecc_destructive_test() -> Option<[u32; 30]> {
             2 => if offset & 1 == 0 { 0xAA } else { 0x55 },
             _ => {
                 // Deterministic xorshift stream, independent of ECC code.
-                let mut state = 0x6D2B_79F5u32;
-                for _ in 0..=offset {
-                    state ^= state << 13;
-                    state ^= state >> 17;
-                    state ^= state << 5;
-                }
-                state as u8
+                random_state ^= random_state << 13;
+                random_state ^= random_state >> 17;
+                random_state ^= random_state << 5;
+                random_state as u8
             }
         };
     }
