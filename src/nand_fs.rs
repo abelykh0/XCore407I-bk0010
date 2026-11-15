@@ -10,7 +10,7 @@
 //! single-bit data errors and reject uncorrectable ECC syndromes.
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -33,77 +33,6 @@ const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
 
-// Explicitly scoped raw-data diagnostic mode; normal operation keeps ECC enabled.
-static RAW_NAND_TEST_MODE: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn set_raw_nand_test_mode(enabled: bool) {
-    RAW_NAND_TEST_MODE.store(enabled, Ordering::SeqCst);
-}
-
-// Diagnostic mode: generate/store ECC on writes, but read data without correction.
-static ECC_WRITE_RAW_READ_TEST_MODE: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn set_ecc_write_raw_read_test_mode(enabled: bool) {
-    ECC_WRITE_RAW_READ_TEST_MODE.store(enabled, Ordering::SeqCst);
-}
-
-// Diagnostic mode: calculate/compare ECC on reads, but never mutate page data.
-static ECC_CHECK_NO_CORRECT_TEST_MODE: AtomicBool = AtomicBool::new(false);
-static SOFTWARE_ECC_TEST_MODE: AtomicBool = AtomicBool::new(false);
-static SOFTWARE_ECC_COMPARE_TEST_MODE: AtomicBool = AtomicBool::new(false);
-static SOFTWARE_ECC_COMPARE_COUNTS: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
-static SOFTWARE_ECC_FIRST_PAGE: AtomicU32 = AtomicU32::new(0);
-static SOFTWARE_ECC_FIRST_CHUNK: AtomicU32 = AtomicU32::new(0);
-static SOFTWARE_ECC_FIRST_STORED: AtomicU32 = AtomicU32::new(0);
-static SOFTWARE_ECC_FIRST_CALCULATED: AtomicU32 = AtomicU32::new(0);
-static WRITE_ECC_COMPARE_COUNTS: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
-static WRITE_ECC_FIRST_PAGE: AtomicU32 = AtomicU32::new(0);
-static WRITE_ECC_FIRST_CHUNK: AtomicU32 = AtomicU32::new(0);
-static WRITE_ECC_FIRST_HARDWARE: AtomicU32 = AtomicU32::new(0);
-static WRITE_ECC_FIRST_SOFTWARE: AtomicU32 = AtomicU32::new(0);
-
-pub(crate) fn set_ecc_check_no_correct_test_mode(enabled: bool) {
-    ECC_CHECK_NO_CORRECT_TEST_MODE.store(enabled, Ordering::SeqCst);
-}
-
-pub(crate) fn set_software_ecc_compare_test_mode(enabled: bool) {
-    SOFTWARE_ECC_COMPARE_TEST_MODE.store(enabled, Ordering::SeqCst);
-}
-
-pub(crate) fn clear_write_ecc_compare_diagnostic() {
-    for count in &WRITE_ECC_COMPARE_COUNTS {
-        count.store(0, Ordering::Release);
-    }
-    WRITE_ECC_FIRST_PAGE.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_HARDWARE.store(0, Ordering::Release);
-    WRITE_ECC_FIRST_SOFTWARE.store(0, Ordering::Release);
-}
-
-pub(crate) fn software_ecc_compare_diagnostic() -> [u32; 6] {
-    [
-        SOFTWARE_ECC_COMPARE_COUNTS[0].load(Ordering::Acquire),
-        SOFTWARE_ECC_COMPARE_COUNTS[1].load(Ordering::Acquire),
-        SOFTWARE_ECC_FIRST_PAGE.load(Ordering::Acquire),
-        SOFTWARE_ECC_FIRST_CHUNK.load(Ordering::Acquire),
-        SOFTWARE_ECC_FIRST_STORED.load(Ordering::Acquire),
-        SOFTWARE_ECC_FIRST_CALCULATED.load(Ordering::Acquire),
-    ]
-}
-
-pub(crate) fn set_software_ecc_test_mode(enabled: bool) {
-    SOFTWARE_ECC_TEST_MODE.store(enabled, Ordering::SeqCst);
-}
-pub(crate) fn write_ecc_compare_diagnostic() -> [u32; 6] {
-    [
-        WRITE_ECC_COMPARE_COUNTS[0].load(Ordering::Acquire),
-        WRITE_ECC_COMPARE_COUNTS[1].load(Ordering::Acquire),
-        WRITE_ECC_FIRST_PAGE.load(Ordering::Acquire),
-        WRITE_ECC_FIRST_CHUNK.load(Ordering::Acquire),
-        WRITE_ECC_FIRST_HARDWARE.load(Ordering::Acquire),
-        WRITE_ECC_FIRST_SOFTWARE.load(Ordering::Acquire),
-    ]
-}
 const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 
 pub(crate) const RB_MASK: u32 = 1 << 6;
@@ -119,53 +48,12 @@ pub const PHYSICAL_BLOCKS: u32 = 1024;
 pub const ERASE_BLOCK_SIZE: usize = PAGE_SIZE * PAGES_PER_BLOCK as usize;
 pub type ActiveStorage = crate::dhara_fs::DharaStorage;
 
-// First failure inside the raw NAND page-read/ECC path.
-// Stages: 1=data read ready timeout, 2=OOB read timeout,
-// 3=invalid ECC tag, 4=uncorrectable ECC syndrome.
+// Preserve the first low-level failure for storage error reports.
 static NAND_READ_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_DETAIL: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_PAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_STORED_ECC: AtomicU32 = AtomicU32::new(0);
 static NAND_READ_FAILURE_CALCULATED_ECC: AtomicU32 = AtomicU32::new(0);
-static ECC_READ_COUNTS: [AtomicU32; 5] = [
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0), AtomicU32::new(0),
-];
-// Last completed ECC page read: page, tag class (1=valid, 2=legacy),
-// chunk, syndrome, stored/calculated ECC, corrected byte and bit values.
-static ECC_LAST_PAGE: AtomicU32 = AtomicU32::new(0);
-static ECC_LAST_TAG: AtomicU32 = AtomicU32::new(0);
-static ECC_LAST_CHUNK: AtomicU32 = AtomicU32::new(0);
-static ECC_LAST_SYNDROME: AtomicU32 = AtomicU32::new(0);
-static ECC_LAST_STORED: AtomicU32 = AtomicU32::new(0);
-static ECC_LAST_CALCULATED: AtomicU32 = AtomicU32::new(0);
-// Preserve the first nonzero syndrome in a scan; the "last" values otherwise
-// tend to describe an unrelated clean page by the time ECCDIAG finishes.
-static ECC_FIRST_PAGE: AtomicU32 = AtomicU32::new(0);
-static ECC_FIRST_CHUNK: AtomicU32 = AtomicU32::new(0);
-static ECC_FIRST_SYNDROME: AtomicU32 = AtomicU32::new(0);
-static ECC_FIRST_STORED: AtomicU32 = AtomicU32::new(0);
-static ECC_FIRST_CALCULATED: AtomicU32 = AtomicU32::new(0);
-static ECC_LAST_BYTE: AtomicU32 = AtomicU32::new(u32::MAX);
-static ECC_LAST_BEFORE: AtomicU32 = AtomicU32::new(0);
-static ECC_LAST_AFTER: AtomicU32 = AtomicU32::new(0);
-// Calculated ECC for each 512-byte chunk of the most recently read page.
-static ECC_LAST_PAGE_CHUNKS: [AtomicU32; FSMC_ECC_CHUNKS_PER_PAGE] = [
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-];
-// PCR2 read-back immediately after ECC enable and immediately before ECCR2 capture.
-static ECC_LAST_PCR_ENABLE: [AtomicU32; FSMC_ECC_CHUNKS_PER_PAGE] = [
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-];
-static ECC_LAST_PCR_CAPTURE: [AtomicU32; FSMC_ECC_CHUNKS_PER_PAGE] = [
-    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-];
-
-
-// First raw NAND command failure during a storage operation.
-// Stages: 1=page-read timeout, 2=block-erase timeout, 3=block-erase
-// status failure, 4=page-program timeout, 5=page-program status failure,
-// 6=FSMC write FIFO did not drain before ECC capture.
 static NAND_DEVICE_FAILURE_STAGE: AtomicU32 = AtomicU32::new(0);
 static NAND_DEVICE_FAILURE_LOCATION: AtomicU32 = AtomicU32::new(0);
 static NAND_DEVICE_FAILURE_STATUS: AtomicU32 = AtomicU32::new(0);
@@ -212,73 +100,12 @@ pub(crate) fn clear_nand_read_diagnostic() {
     NAND_READ_FAILURE_PAGE.store(0, Ordering::Release);
     NAND_READ_FAILURE_STORED_ECC.store(0, Ordering::Release);
     NAND_READ_FAILURE_CALCULATED_ECC.store(0, Ordering::Release);
-    for count in &ECC_READ_COUNTS { count.store(0, Ordering::Release); }
-    for count in &SOFTWARE_ECC_COMPARE_COUNTS { count.store(0, Ordering::Release); }
-    SOFTWARE_ECC_FIRST_PAGE.store(0, Ordering::Release);
-    SOFTWARE_ECC_FIRST_CHUNK.store(0, Ordering::Release);
-    SOFTWARE_ECC_FIRST_STORED.store(0, Ordering::Release);
-    SOFTWARE_ECC_FIRST_CALCULATED.store(0, Ordering::Release);
-    ECC_LAST_PAGE.store(0, Ordering::Release);
-    ECC_LAST_TAG.store(0, Ordering::Release);
-    ECC_LAST_CHUNK.store(0, Ordering::Release);
-    ECC_LAST_SYNDROME.store(0, Ordering::Release);
-    ECC_LAST_STORED.store(0, Ordering::Release);
-    ECC_LAST_CALCULATED.store(0, Ordering::Release);
-    ECC_FIRST_PAGE.store(0, Ordering::Release);
-    ECC_FIRST_CHUNK.store(0, Ordering::Release);
-    ECC_FIRST_SYNDROME.store(0, Ordering::Release);
-    ECC_FIRST_STORED.store(0, Ordering::Release);
-    ECC_FIRST_CALCULATED.store(0, Ordering::Release);
-    ECC_LAST_BYTE.store(u32::MAX, Ordering::Release);
-    ECC_LAST_BEFORE.store(0, Ordering::Release);
-    ECC_LAST_AFTER.store(0, Ordering::Release);
-    for value in &ECC_LAST_PAGE_CHUNKS { value.store(0, Ordering::Release); }
-    for value in &ECC_LAST_PCR_ENABLE { value.store(0, Ordering::Release); }
-    for value in &ECC_LAST_PCR_CAPTURE { value.store(0, Ordering::Release); }
     clear_nand_device_diagnostic();
 }
 
-
-pub(crate) fn ecc_read_diagnostic() -> [u32; 31] {
-    [
-        ECC_READ_COUNTS[0].load(Ordering::Acquire),
-        ECC_READ_COUNTS[1].load(Ordering::Acquire),
-        ECC_READ_COUNTS[2].load(Ordering::Acquire),
-        ECC_READ_COUNTS[3].load(Ordering::Acquire),
-        ECC_READ_COUNTS[4].load(Ordering::Acquire),
-        ECC_LAST_PAGE.load(Ordering::Acquire),
-        ECC_LAST_TAG.load(Ordering::Acquire),
-        ECC_LAST_CHUNK.load(Ordering::Acquire),
-        ECC_LAST_SYNDROME.load(Ordering::Acquire),
-        ECC_LAST_STORED.load(Ordering::Acquire),
-        ECC_LAST_CALCULATED.load(Ordering::Acquire),
-        ECC_LAST_BYTE.load(Ordering::Acquire),
-        ECC_LAST_BEFORE.load(Ordering::Acquire),
-        ECC_LAST_AFTER.load(Ordering::Acquire),
-        ECC_LAST_PAGE_CHUNKS[0].load(Ordering::Acquire),
-        ECC_LAST_PAGE_CHUNKS[1].load(Ordering::Acquire),
-        ECC_LAST_PAGE_CHUNKS[2].load(Ordering::Acquire),
-        ECC_LAST_PAGE_CHUNKS[3].load(Ordering::Acquire),
-        ECC_LAST_PCR_ENABLE[0].load(Ordering::Acquire),
-        ECC_LAST_PCR_ENABLE[1].load(Ordering::Acquire),
-        ECC_LAST_PCR_ENABLE[2].load(Ordering::Acquire),
-        ECC_LAST_PCR_ENABLE[3].load(Ordering::Acquire),
-        ECC_LAST_PCR_CAPTURE[0].load(Ordering::Acquire),
-        ECC_LAST_PCR_CAPTURE[1].load(Ordering::Acquire),
-        ECC_LAST_PCR_CAPTURE[2].load(Ordering::Acquire),
-        ECC_LAST_PCR_CAPTURE[3].load(Ordering::Acquire),
-        ECC_FIRST_PAGE.load(Ordering::Acquire),
-        ECC_FIRST_CHUNK.load(Ordering::Acquire),
-        ECC_FIRST_SYNDROME.load(Ordering::Acquire),
-        ECC_FIRST_STORED.load(Ordering::Acquire),
-        ECC_FIRST_CALCULATED.load(Ordering::Acquire),
-    ]
-}
-
 pub(crate) fn nand_read_diagnostic() -> (u32, u32, u32, u32, u32) {
-    let stage = NAND_READ_FAILURE_STAGE.load(Ordering::Acquire);
     (
-        stage,
+        NAND_READ_FAILURE_STAGE.load(Ordering::Acquire),
         NAND_READ_FAILURE_DETAIL.load(Ordering::Acquire),
         NAND_READ_FAILURE_PAGE.load(Ordering::Relaxed),
         NAND_READ_FAILURE_STORED_ECC.load(Ordering::Relaxed),
@@ -302,27 +129,20 @@ pub(crate) fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
 pub(crate) fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
 pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
-/// Prepare the FSMC ECC engine for one data chunk. ECCPS is the
-/// RM0090 encoding: 0=256 bytes, 1=512 bytes, etc.
-fn ecc_begin_chunk_size(eccps: u32) -> u32 {
+/// Prepare the FSMC ECC engine for one 512-byte data chunk.
+fn ecc_begin_chunk() {
     unsafe {
         let pcr = read_volatile(FSMC_PCR2);
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         write_volatile(
             FSMC_PCR2,
-            (pcr & !FSMC_PCR_ECCPS_MASK) | ((eccps & 0x7) << 17) | FSMC_PCR_ECCEN,
+            (pcr & !FSMC_PCR_ECCPS_MASK) | (1 << 17) | FSMC_PCR_ECCEN,
         );
-        read_volatile(FSMC_PCR2)
+        let _ = read_volatile(FSMC_PCR2);
     }
 }
 
-/// Prepare the FSMC ECC engine for one 512-byte data chunk.
-fn ecc_begin_chunk() -> u32 {
-    ecc_begin_chunk_size(1)
-}
-
-/// Wait until all buffered FSMC writes have reached the NAND data bus.
-/// RM0090 requires FEMPT=1 before reading ECC after a NAND write.
+/// Wait for the FSMC FIFO to empty before capturing the ECC result.
 fn wait_fsmc_fifo_empty() -> bool {
     for _ in 0..TIMEOUT {
         if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
@@ -334,15 +154,13 @@ fn wait_fsmc_fifo_empty() -> bool {
 }
 
 /// Read the 24-bit ECC result and disable the engine before reuse.
-fn ecc_end_chunk() -> (u32, u32) {
+fn ecc_end_chunk() -> u32 {
     unsafe {
-        // Capture both registers before disabling ECC so the diagnostic
-        // reflects the state at the exact end of the 512-byte transfer.
-        let pcr = read_volatile(FSMC_PCR2);
         let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
+        let pcr = read_volatile(FSMC_PCR2);
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
-        (ecc, pcr)
+        ecc
     }
 }
 
@@ -355,38 +173,13 @@ pub(crate) fn wait_ready_status() -> bool {
     false
 }
 
-static NAND_RB_WAIT_CALLS: AtomicU32 = AtomicU32::new(0);
-static NAND_RB_WAIT_ITERATIONS: AtomicU32 = AtomicU32::new(0);
-static NAND_RB_WAIT_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
-
-pub(crate) fn clear_nand_rb_wait_diagnostic() {
-    NAND_RB_WAIT_CALLS.store(0, Ordering::Release);
-    NAND_RB_WAIT_ITERATIONS.store(0, Ordering::Release);
-    NAND_RB_WAIT_TIMEOUTS.store(0, Ordering::Release);
-}
-
-pub(crate) fn nand_rb_wait_diagnostic() -> (u32, u32, u32) {
-    (NAND_RB_WAIT_CALLS.load(Ordering::Acquire), NAND_RB_WAIT_ITERATIONS.load(Ordering::Acquire), NAND_RB_WAIT_TIMEOUTS.load(Ordering::Acquire))
-}
-
 pub(crate) fn wait_ready_rb() -> bool {
-    let mut busy_seen = false;
-    let mut iterations = 0u32;
     for _ in 0..TIMEOUT {
-        iterations += 1;
-        let ready = unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0;
-        if !ready {
-            busy_seen = true;
-        } else if busy_seen {
-            NAND_RB_WAIT_CALLS.fetch_add(1, Ordering::Relaxed);
-            NAND_RB_WAIT_ITERATIONS.fetch_add(iterations, Ordering::Relaxed);
+        if unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0 {
             return true;
         }
         core::hint::spin_loop();
     }
-    NAND_RB_WAIT_CALLS.fetch_add(1, Ordering::Relaxed);
-    NAND_RB_WAIT_ITERATIONS.fetch_add(iterations, Ordering::Relaxed);
-    NAND_RB_WAIT_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
     false
 }
 
@@ -580,137 +373,6 @@ fn ecc_software_512(data: &[u8]) -> u32 {
 
 
 /// Linux SM-order Hamming ECC for one 256-byte half-window.
-fn ecc_software_256(data: &[u8]) -> u32 {
-    if data.len() != 256 {
-        return 0;
-    }
-
-    #[inline]
-    fn inv_parity(value: u8) -> u8 {
-        ((!value.count_ones()) & 1) as u8
-    }
-
-    let mut rp4 = 0u32;
-    let mut rp6 = 0u32;
-    let mut rp8 = 0u32;
-    let mut rp10 = 0u32;
-    let mut rp12 = 0u32;
-    let mut rp14 = 0u32;
-    let mut par = 0u32;
-
-    // Linux ecc_sw_hamming_calculate(): 4 groups x 16 little-endian words.
-    let words: [u32; 64] = core::array::from_fn(|i| {
-        u32::from_le_bytes([
-            data[i * 4],
-            data[i * 4 + 1],
-            data[i * 4 + 2],
-            data[i * 4 + 3],
-        ])
-    });
-
-    for group in 0..4 {
-        let base = group * 16;
-        let mut t = words[base];
-        rp4 ^= words[base];
-        t ^= words[base + 1];
-        rp6 ^= t;
-        t ^= words[base + 2];
-        rp4 ^= words[base + 2];
-        t ^= words[base + 3];
-        rp8 ^= t;
-
-        t ^= words[base + 4];
-        rp4 ^= words[base + 4];
-        rp6 ^= words[base + 4];
-        t ^= words[base + 5];
-        rp6 ^= words[base + 5];
-        t ^= words[base + 6];
-        rp4 ^= words[base + 6];
-        t ^= words[base + 7];
-        rp10 ^= t;
-
-        t ^= words[base + 8];
-        rp4 ^= words[base + 8];
-        rp6 ^= words[base + 8];
-        rp8 ^= words[base + 8];
-        t ^= words[base + 9];
-        rp6 ^= words[base + 9];
-        rp8 ^= words[base + 9];
-        t ^= words[base + 10];
-        rp4 ^= words[base + 10];
-        rp8 ^= words[base + 10];
-        t ^= words[base + 11];
-        rp8 ^= words[base + 11];
-
-        t ^= words[base + 12];
-        rp4 ^= words[base + 12];
-        rp6 ^= words[base + 12];
-        t ^= words[base + 13];
-        rp6 ^= words[base + 13];
-        t ^= words[base + 14];
-        rp4 ^= words[base + 14];
-        t ^= words[base + 15];
-
-        par ^= t;
-        if group & 1 == 0 { rp12 ^= t; }
-        if group & 2 == 0 { rp14 ^= t; }
-    }
-
-    let fold = |v: u32| -> u8 {
-        let v = v ^ (v >> 16);
-        let v = v ^ (v >> 8);
-        v as u8
-    };
-    let rp4 = fold(rp4);
-    let rp6 = fold(rp6);
-    let rp8 = fold(rp8);
-    let rp10 = fold(rp10);
-    let rp12 = fold(rp12);
-    let rp14 = fold(rp14);
-
-    // Little-endian Linux SM-order parity packing.
-    let rp3 = fold(par >> 16);
-    let low16 = par & 0xFFFF;
-    let rp2 = (low16 ^ (low16 >> 8)) as u8;
-    let p16 = par ^ (par >> 16);
-    let rp1 = ((p16 >> 8) & 0xFF) as u8;
-    let rp0 = p16 as u8;
-    let par8 = (p16 ^ (p16 >> 8)) as u8;
-
-    let rp5 = par8 ^ rp4;
-    let rp7 = par8 ^ rp6;
-    let rp9 = par8 ^ rp8;
-    let rp11 = par8 ^ rp10;
-    let rp13 = par8 ^ rp12;
-    let rp15 = par8 ^ rp14;
-
-    let ecc0 = (inv_parity(rp7) << 7)
-        | (inv_parity(rp6) << 6)
-        | (inv_parity(rp5) << 5)
-        | (inv_parity(rp4) << 4)
-        | (inv_parity(rp3) << 3)
-        | (inv_parity(rp2) << 2)
-        | (inv_parity(rp1) << 1)
-        | inv_parity(rp0);
-    let ecc1 = (inv_parity(rp15) << 7)
-        | (inv_parity(rp14) << 6)
-        | (inv_parity(rp13) << 5)
-        | (inv_parity(rp12) << 4)
-        | (inv_parity(rp11) << 3)
-        | (inv_parity(rp10) << 2)
-        | (inv_parity(rp9) << 1)
-        | inv_parity(rp8);
-    let ecc2 = (inv_parity(par8 & 0xF0) << 7)
-        | (inv_parity(par8 & 0x0F) << 6)
-        | (inv_parity(par8 & 0xCC) << 5)
-        | (inv_parity(par8 & 0x33) << 4)
-        | (inv_parity(par8 & 0xAA) << 3)
-        | (inv_parity(par8 & 0x55) << 2)
-        | 0x03;
-
-    (ecc0 as u32) | ((ecc1 as u32) << 8) | ((ecc2 as u32) << 16)
-}
-
 /// Convert Linux SM-order Hamming ECC to the STM32 FSMC ECCR bit layout.
 ///
 /// Captured hardware/software comparisons show that the FSMC layout is the
@@ -726,11 +388,6 @@ fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
     ecc_linux_to_fsmc(ecc_software_512(data), 24)
 }
 
-fn ecc_software_256_fsmc(data: &[u8]) -> u32 {
-    ecc_linux_to_fsmc(ecc_software_256(data), 22)
-}
-
-
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
 
@@ -739,55 +396,25 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     address(0);
     address(page as u8);
     address((page >> 8) as u8);
-    // K9F1G08U0E tADL minimum is 100 ns.
     cortex_m::asm::delay(1_000);
 
-    let raw_mode = RAW_NAND_TEST_MODE.load(Ordering::SeqCst);
-    let software_ecc = SOFTWARE_ECC_TEST_MODE.load(Ordering::SeqCst);
-    let write_ecc = !raw_mode;
     let mut ecc = [0xFFu8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        if write_ecc && !software_ecc { let _ = ecc_begin_chunk(); }
+        ecc_begin_chunk();
         for &byte in chunk { write_data(byte); }
-        // The FSMC buffers NAND writes. Wait for the bus transfer to finish
-        // before moving to the next chunk or storing its software ECC.
         if !wait_fsmc_fifo_empty() {
             let status = unsafe { read_volatile(FSMC_SR2) };
             record_nand_device_failure(6, page, status);
             return false;
         }
-        if write_ecc {
-            let chunk_ecc = if software_ecc {
-                ecc_software_512_fsmc(chunk)
-            } else {
-                ecc_end_chunk().0
-            };
-            // Compare both algorithms over the exact same source bytes during
-            // the NAND program operation. This isolates write-path ECC capture
-            // from later NAND reads and historical pages.
-            if !software_ecc && SOFTWARE_ECC_COMPARE_TEST_MODE.load(Ordering::SeqCst) {
-                let software_ecc = ecc_software_512_fsmc(chunk);
-                WRITE_ECC_COMPARE_COUNTS[0].fetch_add(1, Ordering::Relaxed);
-                if software_ecc != chunk_ecc {
-                    if WRITE_ECC_COMPARE_COUNTS[1].fetch_add(1, Ordering::Relaxed) == 0 {
-                        WRITE_ECC_FIRST_PAGE.store(page, Ordering::Relaxed);
-                        WRITE_ECC_FIRST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
-                        WRITE_ECC_FIRST_HARDWARE.store(chunk_ecc & 0x00FF_FFFF, Ordering::Relaxed);
-                        WRITE_ECC_FIRST_SOFTWARE.store(software_ecc, Ordering::Release);
-                    }
-                }
-            }
-            encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
-        }
+        let chunk_ecc = ecc_end_chunk();
+        encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
 
-    // Continue the same sequential page-program operation into the spare area.
-    // The two leading 0xFF bytes leave the factory marker positions untouched.
     write_data(0xFF);
     write_data(0xFF);
     for &byte in &ecc { write_data(byte); }
-    let tag = if write_ecc { ECC_TAG } else { [0xFF; 2] };
-    for &byte in &tag { write_data(byte); }
+    for &byte in &ECC_TAG { write_data(byte); }
 
     command(0x10);
     if !wait_ready_rb() {
@@ -922,7 +549,7 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
 
     let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let _ = ecc_begin_chunk();
+        ecc_begin_chunk();
         for byte in chunk.iter_mut() {
             *byte = read_data();
         }
@@ -930,7 +557,7 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
             let _ = ecc_end_chunk();
             return None;
         }
-        hardware[index] = ecc_end_chunk().0 & 0x00FF_FFFF;
+        hardware[index] = ecc_end_chunk() & 0x00FF_FFFF;
     }
 
     let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
@@ -957,20 +584,8 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
 }
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
-    if out.len() != PAGE_SIZE {
-        return false;
-    }
+    if out.len() != PAGE_SIZE { return false; }
 
-    let raw_read = RAW_NAND_TEST_MODE.load(Ordering::SeqCst)
-        || ECC_WRITE_RAW_READ_TEST_MODE.load(Ordering::SeqCst);
-    let software_ecc = SOFTWARE_ECC_TEST_MODE.load(Ordering::SeqCst);
-
-    // In the software-ECC experiment, leave the FSMC ECC engine disabled:
-    // calculate the reference code from the bytes actually read from NAND.
-    // For hardware ECC, do not enable the accumulator until the NAND read
-    // command/address cycle has completed and the device is ready. Enable it
-    // immediately before each 512-byte data transfer, matching the standalone
-    // probe and the FSMC NAND ECC procedure.
     command(0x00);
     address(0);
     address(0);
@@ -983,36 +598,16 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return false;
     }
 
-    if raw_read {
-        for byte in out.iter_mut() { *byte = read_data(); }
-        return true;
-    }
-
     let mut calculated = [0u8; ECC_OOB_BYTES];
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        if !software_ecc {
-            let _ = ecc_begin_chunk();
-        }
-        let pcr_enable = unsafe { read_volatile(FSMC_PCR2) };
-        ECC_LAST_PCR_ENABLE[chunk_index].store(pcr_enable, Ordering::Relaxed);
-        for byte in chunk.iter_mut() {
-            *byte = read_data();
-        }
-        // Match the standalone ECC probe: wait for the FSMC FIFO to drain
-        // before capturing ECCR2. Without this, the read path can capture
-        // an incomplete/zero ECC result even though all 512 bytes were read.
-        if !software_ecc && !wait_fsmc_fifo_empty() {
+        ecc_begin_chunk();
+        for byte in chunk.iter_mut() { *byte = read_data(); }
+        if !wait_fsmc_fifo_empty() {
             let _ = ecc_end_chunk();
-            record_nand_read_failure(4, page);
+            record_nand_read_failure(5, page);
             return false;
         }
-        let (chunk_ecc, pcr_capture) = if software_ecc {
-            (ecc_software_512(chunk), unsafe { read_volatile(FSMC_PCR2) })
-        } else {
-            ecc_end_chunk()
-        };
-        ECC_LAST_PCR_CAPTURE[chunk_index].store(pcr_capture, Ordering::Relaxed);
-        ECC_LAST_PAGE_CHUNKS[chunk_index].store(chunk_ecc, Ordering::Relaxed);
+        let chunk_ecc = ecc_end_chunk();
         encode_ecc(chunk_ecc, &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
 
@@ -1023,95 +618,27 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     }
 
     let tag = &stored[ECC_OOB_BYTES..];
-    ECC_LAST_PAGE.store(page, Ordering::Relaxed);
-    if tag == [0xFF, 0xFF] {
-        ECC_READ_COUNTS[1].fetch_add(1, Ordering::Relaxed);
-        ECC_LAST_TAG.store(2, Ordering::Release);
-        return true;
-    }
+    if tag == [0xFF, 0xFF] { return true; }
     if tag != ECC_TAG {
         record_nand_read_failure(3, u32::from(tag[0]) | (u32::from(tag[1]) << 8));
         return false;
     }
 
-    ECC_READ_COUNTS[0].fetch_add(1, Ordering::Relaxed);
-    ECC_LAST_TAG.store(1, Ordering::Release);
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
         let offset = chunk_index * ECC_BYTES_PER_CHUNK;
         let stored_ecc = u32::from_le_bytes([
-            stored[offset],
-            stored[offset + 1],
-            stored[offset + 2],
-            0,
+            stored[offset], stored[offset + 1], stored[offset + 2], 0,
         ]);
         let calculated_ecc = u32::from_le_bytes([
-            calculated[offset],
-            calculated[offset + 1],
-            calculated[offset + 2],
-            0,
+            calculated[offset], calculated[offset + 1], calculated[offset + 2], 0,
         ]);
-        let syndrome = (stored_ecc ^ calculated_ecc) & 0x00FF_FFFF;
-        if SOFTWARE_ECC_COMPARE_TEST_MODE.load(Ordering::SeqCst) {
-            let software_calculated = ecc_software_512(chunk);
-            SOFTWARE_ECC_COMPARE_COUNTS[0].fetch_add(1, Ordering::Relaxed);
-            if software_calculated != stored_ecc {
-                if SOFTWARE_ECC_COMPARE_COUNTS[1].fetch_add(1, Ordering::Relaxed) == 0 {
-                    SOFTWARE_ECC_FIRST_PAGE.store(page, Ordering::Relaxed);
-                    SOFTWARE_ECC_FIRST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
-                    SOFTWARE_ECC_FIRST_STORED.store(stored_ecc, Ordering::Relaxed);
-                    SOFTWARE_ECC_FIRST_CALCULATED.store(software_calculated, Ordering::Release);
-                }
-            }
-        }
-        ECC_LAST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
-        ECC_LAST_SYNDROME.store(syndrome, Ordering::Relaxed);
-        ECC_LAST_STORED.store(stored_ecc, Ordering::Relaxed);
-        ECC_LAST_CALCULATED.store(calculated_ecc, Ordering::Relaxed);
-        ECC_LAST_BYTE.store(u32::MAX, Ordering::Relaxed);
-        if syndrome != 0 {
-            if ECC_READ_COUNTS[2].fetch_add(1, Ordering::Relaxed) == 0 {
-                ECC_FIRST_PAGE.store(page, Ordering::Relaxed);
-                ECC_FIRST_CHUNK.store(chunk_index as u32, Ordering::Relaxed);
-                ECC_FIRST_SYNDROME.store(syndrome, Ordering::Relaxed);
-                ECC_FIRST_STORED.store(stored_ecc, Ordering::Relaxed);
-                ECC_FIRST_CALCULATED.store(calculated_ecc, Ordering::Relaxed);
-            }
-            if syndrome.count_ones() == 1 {
-                ECC_READ_COUNTS[3].fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        // Decode the candidate correction for telemetry; the actual decoder
-        // below remains the sole code that mutates the page buffer.
-        let mut changed_byte = u32::MAX;
-        let mut before = 0u32;
-        let mut after = 0u32;
-        if syndrome != 0 && syndrome.count_ones() != 1 {
-            if let Some((byte_index, bit_index)) = ecc_error_location(syndrome) {
-                if byte_index < chunk.len() {
-                    changed_byte = byte_index as u32;
-                    before = chunk[byte_index] as u32;
-                    after = (chunk[byte_index] ^ (1 << bit_index)) as u32;
-                }
-            }
-        }
-        if ECC_CHECK_NO_CORRECT_TEST_MODE.load(Ordering::SeqCst) {
-            // Preserve raw data while collecting ECC syndromes for comparison.
-            continue;
-        }
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
             record_ecc_read_failure(page, chunk_index as u32, stored_ecc, calculated_ecc);
             return false;
         }
-        if changed_byte != u32::MAX {
-            ECC_READ_COUNTS[4].fetch_add(1, Ordering::Relaxed);
-            ECC_LAST_BYTE.store(changed_byte, Ordering::Relaxed);
-            ECC_LAST_BEFORE.store(before, Ordering::Relaxed);
-            ECC_LAST_AFTER.store(after, Ordering::Relaxed);
-        }
     }
     true
 }
-
 
 pub(crate) fn configure_fsmc() {
     unsafe {
