@@ -659,8 +659,6 @@ pub(crate) struct EccStandaloneChunk {
     pub non_ff_bytes: u16,
 }
 
-/// Read one physical NAND page directly and compare FSMC ECC with its OOB
-/// values. This bypasses Dhara and LittleFS and never changes NAND contents.
 /// Deterministic reference vectors for checking the software ECC port.
 /// Expected values were generated with Linux ecc_sw_hamming_calculate()
 /// using 512-byte steps and NAND_ECC_SOFT_HAMMING_SM_ORDER.
@@ -687,6 +685,8 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
     ]
 }
 
+/// Read one physical NAND page directly and compare FSMC ECC with its OOB
+/// values. This bypasses Dhara and LittleFS and never changes NAND contents.
 pub(crate) fn ecc_standalone_read(
     page: u32,
 ) -> Option<(
