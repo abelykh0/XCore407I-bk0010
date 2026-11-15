@@ -372,20 +372,16 @@ fn ecc_software_512(data: &[u8]) -> u32 {
 }
 
 
-/// Linux SM-order Hamming ECC for one 256-byte half-window.
-/// Convert Linux SM-order Hamming ECC to the STM32 FSMC ECCR bit layout.
-///
-/// Captured hardware/software comparisons show that the FSMC layout is the
-/// 24-bit Linux value rotated left by six bits, then complemented. The 256-byte
-/// mode uses only ECC[21:0]; the 512-byte mode uses all 24 bits.
-fn ecc_linux_to_fsmc(ecc: u32, valid_bits: u32) -> u32 {
+/// Convert 512-byte Linux SM-order Hamming ECC to the STM32 FSMC ECCR layout.
+/// Hardware comparisons establish a six-bit left rotation followed by inversion.
+fn ecc_linux_to_fsmc(ecc: u32) -> u32 {
     let ecc = ecc & 0x00FF_FFFF;
     let rotated = ((ecc << 6) | (ecc >> 18)) & 0x00FF_FFFF;
-    (!rotated) & ((1u32 << valid_bits) - 1)
+    (!rotated) & 0x00FF_FFFF
 }
 
 fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
-    ecc_linux_to_fsmc(ecc_software_512(data), 24)
+    ecc_linux_to_fsmc(ecc_software_512(data))
 }
 
 /// Program a full page and store four FSMC-generated 512-byte ECC values.
