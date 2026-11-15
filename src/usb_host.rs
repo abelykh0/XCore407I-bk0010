@@ -12,6 +12,7 @@ pub(crate) static USB_FS_READY: AtomicBool = AtomicBool::new(false);
 pub(crate) static USB_FS_RETRY_AT: AtomicU32 = AtomicU32::new(0);
 pub(crate) static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
 pub(crate) static USB_FS_LAST_ACTIVITY_TICK: AtomicU32 = AtomicU32::new(0);
+pub(crate) static USB_FS_RESTART_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn note_usb_host_activity() {
     USB_FS_LAST_ACTIVITY_TICK.store(crate::board::TICKS.load(Ordering::Relaxed), Ordering::Release);
@@ -93,6 +94,7 @@ pub(crate) fn restart_usb_fs_host(
     tim3: &pac::TIM3,
     nvic: &mut NVIC,
 ) -> bool {
+    USB_FS_RESTART_COUNT.fetch_add(1, Ordering::Relaxed);
     // Quiesce the host task scheduler and interrupt before tearing down the
     // stack. OTG_HS device operation is independent and remains untouched.
     tim3.cr1().modify(|_, w| w.cen().clear_bit());
