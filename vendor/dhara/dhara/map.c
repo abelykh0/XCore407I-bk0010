@@ -507,8 +507,6 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 	 * backlog while keeping the loop bounded by the physical journal. */
 	const dhara_page_t max_steps = dhara_journal_size(&m->journal) + 1;
 
-	/* Capture queue position and work performed if the bounded sync fails. */
-
 	while (!dhara_journal_is_clean(&m->journal)) {
 		if (++steps > max_steps) {
 			dhara_set_error(err, DHARA_E_TOO_BAD);
@@ -522,10 +520,8 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 			ret = pad_queue(m, &my_err);
 		} else {
 			ret = raw_gc(m, p, &my_err);
-			if (!ret) {
+			if (!ret)
 				dhara_journal_dequeue(&m->journal);
-			} else {
-			}
 		}
 
 		if (ret < 0) {
