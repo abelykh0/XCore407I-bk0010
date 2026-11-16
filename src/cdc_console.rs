@@ -188,6 +188,7 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
     // Isolate this operation's lower-level failure from earlier filesystem
     // diagnostics so an LFS_ERR_IO can be traced to a Dhara callback.
     crate::dhara_fs::clear_storage_io_diagnostic();
+    crate::nand_fs::clear_nand_read_diagnostic();
     match fs.remove(path) {
         Ok(()) => {
             write_status(b"DELETE: removed /");
@@ -217,6 +218,46 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
                 write_status(b", error 0x");
                 write_hex_u32(storage_error);
                 write_status(b"\r\n");
+                if operation == 3 {
+                    let (stage, page, dhara_error, steps) = crate::dhara_fs::map_sync_diagnostic();
+                    let stage_name: &[u8] = match stage {
+                        1 => b"step limit",
+                        2 => b"pad_queue",
+                        3 => b"raw_gc",
+                        4 => b"recovery",
+                        _ => b"unknown/not captured",
+                    };
+                    write_status(b"DELETE: map_sync stage ");
+                    write_status(stage_name);
+                    write_status(b", journal page 0x");
+                    write_hex_u32(page);
+                    write_status(b", Dhara error 0x");
+                    write_hex_u32(dhara_error);
+                    write_status(b", steps ");
+                    write_decimal(steps as usize);
+                    write_status(b"\r\n");
+                    let (nand_stage, detail, nand_page, stored, calculated) =
+                        crate::nand_fs::nand_read_diagnostic();
+                    if nand_stage == 4 {
+                        write_status(b"DELETE: ECC failure at physical page 0x");
+                        write_hex_u32(nand_page);
+                        write_status(b", detail 0x");
+                        write_hex_u32(detail);
+                        write_status(b", stored ECC 0x");
+                        write_hex_u32(stored);
+                        write_status(b", calculated ECC 0x");
+                        write_hex_u32(calculated);
+                        write_status(b"\r\n");
+                    } else if nand_stage != 0 {
+                        write_status(b"DELETE: NAND read failure stage ");
+                        write_decimal(nand_stage as usize);
+                        write_status(b", detail 0x");
+                        write_hex_u32(detail);
+                        write_status(b"\r\n");
+                    } else {
+                        write_status(b"DELETE: no lower-level NAND read failure recorded.\r\n");
+                    }
+                }
             }
             write_status(b"> ");
         }
