@@ -720,13 +720,6 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         }
         encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
 
-        // Timing experiment: ECCWRITE's per-chunk software calculations add
-        // several thousand core cycles between ECCEN clear/set operations.
-        // Insert a comparable settling interval without doing readback or
-        // changing the ECC data path. Remove or tune after hardware testing.
-        if chunk_index + 1 < FSMC_ECC_CHUNKS_PER_PAGE {
-            cortex_m::asm::delay(5_000);
-        }
     }
 
     write_data(0xFF);
