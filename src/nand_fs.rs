@@ -558,6 +558,8 @@ pub(crate) struct EccSequenceTrace {
     pub pcr_before: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub pcr_enabled: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub ecc_before_data: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub input_fingerprint: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub input_non_ff: [u16; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_before_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub ecc_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -574,6 +576,8 @@ static mut LAST_ECC_SEQUENCE_TRACE: EccSequenceTrace = EccSequenceTrace {
     pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_before_data: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    input_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    input_non_ff: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -593,6 +597,10 @@ pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
                     pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_before_data: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        input_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        input_non_ff: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+            input_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+            input_non_ff: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -702,6 +710,11 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if sequence_trace_enabled {
             sequence_trace.pcr_enabled[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
             sequence_trace.ecc_before_data[chunk_index] = unsafe { read_volatile(FSMC_ECCR2) } & 0x00FF_FFFF;
+        }
+        if sequence_trace_enabled {
+            sequence_trace.input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
+            sequence_trace.input_non_ff[chunk_index] =
+                chunk.iter().filter(|&&byte| byte != 0xFF).count() as u16;
         }
         for &byte in chunk { write_data(byte); }
         if sequence_trace_enabled {
