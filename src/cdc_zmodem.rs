@@ -335,7 +335,7 @@ pub fn run_ecc_storage_diagnostic(
                     for i in 0..count {
                         let absolute = offset + i;
                         let expected = ((absolute as u32).wrapping_mul(37).wrapping_add(0x5A) ^ (absolute as u32 >> 3)) as u8;
-                        if data[i] != expected { return Err(LfsError::CORRUPT); }
+                        if data[i] != expected { return Err(LfsError::IO); }
                     }
                     offset += count;
                 }
