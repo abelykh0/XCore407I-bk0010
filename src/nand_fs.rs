@@ -19,14 +19,14 @@ core::arch::global_asm!(
     ".type __xcore_call_on_stack, %function",
     ".thumb_func",
     "__xcore_call_on_stack:",
-    "push {{r4, r5, lr}}",
+    "push {{r4, r5, r6, lr}}",
     "mov r4, sp",
     "mov r5, r0",
     "mov sp, r2",
     "mov r0, r1",
     "blx r5",
     "mov sp, r4",
-    "pop {{r4, r5, pc}}",
+    "pop {{r4, r5, r6, pc}}",
 );
 
 unsafe extern "C" {
