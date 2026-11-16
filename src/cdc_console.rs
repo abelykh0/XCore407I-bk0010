@@ -983,7 +983,8 @@ pub fn service(
                                 3 => write_status(b"ECCFILETEST FAIL stage 3: create test file failed.\r\n> "),
                                 4 => write_status(b"ECCFILETEST FAIL stage 4: write/flush failed.\r\n> "),
                                 5 => write_status(b"ECCFILETEST FAIL stage 5: ECC-bypassed read failed or data mismatch.\r\n> "),
-                                _ => write_status(b"ECCFILETEST FAIL stage 6: ECC-checked read failed or data mismatch.\r\n> "),
+                                6 => write_status(b"ECCFILETEST FAIL stage 6: ECC-checked read failed or data mismatch.\r\n> "),
+                                _ => write_status(b"ECCFILETEST: data checks passed, but temporary-file cleanup failed.\r\n> "),
                             }
                             let (stage, detail, page, stored, calculated) = crate::nand_fs::nand_read_diagnostic();
                             if stage != 0 {
