@@ -587,7 +587,11 @@ pub fn service(
                             write_hex_u32(trace.page);
                             write_status(b" flags=0x");
                             write_hex_u32(trace.flags);
-                            write_status(b" (bit0=program-ok bit1=data-readback-ok bit2=OOB-readback-ok bit3=tag-ok)\r\n");
+                            write_status(b" program-count=");
+                            write_decimal(trace.program_count as usize);
+                            write_status(b" mismatch-chunks=0x");
+                            write_hex_u32(trace.mismatch_chunks);
+                            write_status(b"\r\n  (flags: bit0=program-ok bit1=data-readback-ok bit2=OOB-readback-ok bit3=tag-ok)\r\n");
                             for chunk in 0..4 {
                                 write_status(b"  chunk ");
                                 write_decimal(chunk);
