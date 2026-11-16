@@ -1154,7 +1154,7 @@ pub fn service(
                         write_status(b"Unknown command. Type HELP.\r\n> ");
                     }
                     LINE_LEN = 0;
-                    if format_requested {
+                    if format_requested != FormatRequest::None {
                         break;
                     }
                 }
