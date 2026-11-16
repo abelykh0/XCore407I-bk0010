@@ -17,9 +17,7 @@ fn main() {
             println!("cargo:rustc-env=ZMODEM_RZ_BIN={}", rz_path.display());
             println!("cargo:rustc-env=ZMODEM_SZ_BIN={}", sz_path.display());
         }
-        _ => {
-            println!("cargo:warning=lrzsz not found");
-        }
+        _ => {}
     }
 }
 
