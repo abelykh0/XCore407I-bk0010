@@ -503,8 +503,8 @@ pub fn service(
     zmodem: &mut cdc_zmodem::State,
     now_ms: u32,
     _service_background: &mut impl FnMut(),
-) -> bool {
-    let mut format_requested = false;
+) -> FormatRequest {
+    let mut format_requested = FormatRequest::None;
     unsafe {
         let connected = tusb::tud_cdc_n_connected(0);
         if connected && !WAS_CONNECTED {
@@ -522,7 +522,7 @@ pub fn service(
             WAS_CONNECTED = false;
             STORAGE_ERROR_REPORTED = false;
             cdc_zmodem::cancel(zmodem, fs);
-            return false;
+            return FormatRequest::None;
         }
         WAS_CONNECTED = true;
 
@@ -1127,6 +1127,9 @@ pub fn service(
                         write_status(
                             b"WARNING: FORMAT YES erases the NAND and creates a new Dhara/LittleFS volume.\r\nType FORMAT YES to confirm.\r\n> ",
                         );
+                    } else if command_is(line, b"FORMAT LFS YES") {
+                        write_status(b"LittleFS-only format requested. Dhara journal will be preserved; operation aborts if Dhara cannot resume.\r\n");
+                        format_requested = FormatRequest::LittleFs;
                     } else if command_is(line, b"FORMAT YES") {
                         if fs.is_some() {
                             write_status(
@@ -1137,7 +1140,7 @@ pub fn service(
                                 b"Storage is unavailable. Formatting NAND...\r\n",
                             );
                         }
-                        format_requested = true;
+                        format_requested = FormatRequest::WholeNand;
                     } else if LINE_LEN == 0 {
                         write_status(b"> ");
                     } else {
