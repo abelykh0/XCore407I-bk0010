@@ -60,7 +60,7 @@ static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
 // callback: renderer work can monopolize the scan between completed blocks.
 fn service_cdc_scan_io() {
     unsafe {
-        let _ = tusb::tud_task_ext(0, false);
+        let _ = tusb::tud_task_ext(1, false);
         xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
     }
     xcore407i_blinker::cdc_console::service_connection();
@@ -78,7 +78,7 @@ fn service_cdc_scan_io() {
 
 fn service_file_browser_io() {
     unsafe {
-        let _ = tusb::tud_task_ext(0, false);
+        let _ = tusb::tud_task_ext(1, false);
         xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
     }
     if USB_FS_READY.load(Ordering::Acquire)
@@ -421,7 +421,7 @@ fn main() -> ! {
                             }
                             loop {
                                 unsafe {
-                                    let _ = tusb::tud_task_ext(0, false);
+                                    let _ = tusb::tud_task_ext(1, false);
                                     xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                                 }
                                 // Keep USB/UVC and the video producer alive inside synchronous
@@ -451,7 +451,7 @@ fn main() -> ! {
                             xcore407i_blinker::cdc_console::report_storage_error(error);
                             loop {
                                 unsafe {
-                                    let _ = tusb::tud_task_ext(0, false);
+                                    let _ = tusb::tud_task_ext(1, false);
                                     xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                                 }
                                 let requested = xcore407i_blinker::cdc_console::service(
@@ -460,7 +460,7 @@ fn main() -> ! {
                                     TICKS.load(Ordering::Relaxed),
                                     &mut || {
                                         unsafe {
-                                            let _ = tusb::tud_task_ext(0, false);
+                                            let _ = tusb::tud_task_ext(1, false);
                                             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                                         }
                                         while prepare_next_video_batch(&mut video_renderer) {}
@@ -505,7 +505,7 @@ fn main() -> ! {
                 xcore407i_blinker::nand_fs::initialize_nand_volume_with_progress(
                     |completed, total| {
                         unsafe {
-                            let _ = tusb::tud_task_ext(0, false);
+                            let _ = tusb::tud_task_ext(1, false);
                             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                         }
                         while prepare_next_video_batch(&mut video_renderer) {}
@@ -571,7 +571,7 @@ fn main() -> ! {
         // Drain TinyUSB device control/bus events in thread context. ISO data
         // endpoints are re-armed directly by their class xfer_isr callbacks.
         unsafe {
-            let _ = tusb::tud_task_ext(0, false);
+            let _ = tusb::tud_task_ext(1, false);
             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
         }
 
