@@ -579,7 +579,24 @@ fn service_sender(
                             }
                             state.send_last_activity_ms = now_ms;
                         }
-                        Err(_) => {
+                        Err(error) => {
+                            let message: &[u8] = match error {
+                                ZmodemError::MalformedEncoding(_) => b"\r\nZMODEM send: malformed receiver encoding\r\n",
+                                ZmodemError::MalformedFileSize => b"\r\nZMODEM send: malformed receiver file size\r\n",
+                                ZmodemError::MalformedFileName => b"\r\nZMODEM send: malformed receiver filename\r\n",
+                                ZmodemError::MalformedFrame(_) => b"\r\nZMODEM send: malformed receiver frame\r\n",
+                                ZmodemError::MalformedHeader => b"\r\nZMODEM send: malformed receiver header\r\n",
+                                ZmodemError::MalformedPacket(_) => b"\r\nZMODEM send: malformed receiver packet\r\n",
+                                ZmodemError::InvalidState => b"\r\nZMODEM send: invalid sender state\r\n",
+                                ZmodemError::Backpressure => b"\r\nZMODEM send: protocol backpressure\r\n",
+                                ZmodemError::OutOfMemory => b"\r\nZMODEM send: protocol buffer exhausted\r\n",
+                                ZmodemError::UnexpectedCrc16 => b"\r\nZMODEM send: receiver CRC-16 mismatch\r\n",
+                                ZmodemError::UnexpectedCrc32 => b"\r\nZMODEM send: receiver CRC-32 mismatch\r\n",
+                                ZmodemError::UnexpectedEof => b"\r\nZMODEM send: unexpected receiver EOF\r\n",
+                                ZmodemError::UnsupportedFeature => b"\r\nZMODEM send: unsupported receiver feature\r\n",
+                                ZmodemError::SubpacketTooLarge => b"\r\nZMODEM send: receiver packet too large\r\n",
+                            };
+                            super::cdc_console::write_status(message);
                             sender.abort();
                         }
                     }
