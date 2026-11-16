@@ -405,7 +405,7 @@ fn main() -> ! {
                 unsafe {
                     xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
                         let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
-                        xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
+                        let mount_result = xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
                             if just_formatted {
                                 xcore407i_blinker::cdc_console::report_format_status(
                                     b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
@@ -434,42 +434,43 @@ fn main() -> ! {
                                     break Ok(true);
                                 }
                             }
-                        })
+                        });
+
+                        // Keep the state on the alternate stack in the storage-unavailable
+                        // console too; do not construct another large state on the main stack.
+                        if let Err(error) = mount_result {
+                            xcore407i_blinker::cdc_console::report_storage_error(error);
+                            loop {
+                                unsafe {
+                                    let _ = tusb::tud_task_ext(0, false);
+                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                }
+                                let requested = xcore407i_blinker::cdc_console::service(
+                                    None,
+                                    &mut zmodem_state,
+                                    TICKS.load(Ordering::Relaxed),
+                                    &mut || {
+                                        unsafe {
+                                            let _ = tusb::tud_task_ext(0, false);
+                                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                        }
+                                        while prepare_next_video_batch(&mut video_renderer) {}
+                                    },
+                                );
+                                while prepare_next_video_batch(&mut video_renderer) {}
+                                if requested {
+                                    break Ok(true);
+                                }
+                            }
+                        } else {
+                            mount_result
+                        }
                     })
                 };
 
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
         let mut format_requested = matches!(&mount_result, Ok(true));
-
-        // If the volume could not be mounted, keep the console available and
-        // allow FORMAT YES to recover it through the same provisioning path.
-        if let Err(error) = mount_result {
-            loop {
-                unsafe {
-                    let _ = tusb::tud_task_ext(0, false);
-                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                }
-                let requested = xcore407i_blinker::cdc_console::service(
-                    None,
-                    &mut zmodem_state,
-                    TICKS.load(Ordering::Relaxed),
-                    &mut || {
-                        unsafe {
-                            let _ = tusb::tud_task_ext(0, false);
-                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                        }
-                        while prepare_next_video_batch(&mut video_renderer) {}
-                    },
-                );
-                xcore407i_blinker::cdc_console::report_storage_error(error);
-                while prepare_next_video_batch(&mut video_renderer) {}
-                if requested {
-                    format_requested = true;
-                    break;
-                }
-            }
-        }
 
         if format_requested {
             xcore407i_blinker::cdc_console::report_format_status(
