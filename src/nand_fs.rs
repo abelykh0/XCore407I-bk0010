@@ -1145,7 +1145,7 @@ pub(crate) fn ecc_hardware_compare_page(
         }
         result.data_fingerprint[index] = fingerprint;
     }
-    Some(result)
+    Ok(result)
 }
 
 static NAND_ECC_CHECK_ENABLED: AtomicBool = AtomicBool::new(true);
