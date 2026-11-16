@@ -1,7 +1,7 @@
 //! Minimal CDC command console and ZMODEM upload entry point.
 
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use littlefs2::{fs::Filesystem, path::Path};
 
@@ -18,6 +18,16 @@ static mut ZMODEM_START_FAILED: bool = false;
 static mut WAS_CONNECTED: bool = false;
 static DTR_ASSERTED: AtomicBool = AtomicBool::new(false);
 static BANNER_PENDING: AtomicBool = AtomicBool::new(false);
+
+// Temporary CDC connection/TX diagnostics, reported by STATUS.
+static CDC_LINE_CB_COUNT: AtomicU32 = AtomicU32::new(0);
+static CDC_LINE_STATE: AtomicU32 = AtomicU32::new(0);
+static CDC_SERVICE_COUNT: AtomicU32 = AtomicU32::new(0);
+static CDC_CONNECTED_COUNT: AtomicU32 = AtomicU32::new(0);
+static CDC_READY_COUNT: AtomicU32 = AtomicU32::new(0);
+static CDC_FLUSH_COUNT: AtomicU32 = AtomicU32::new(0);
+static CDC_FLUSH_STARTED: AtomicU32 = AtomicU32::new(0);
+static CDC_LAST_FLUSH: AtomicU32 = AtomicU32::new(0);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
@@ -37,6 +47,8 @@ pub extern "C" fn tud_cdc_line_state_cb(itf: u8, dtr: bool, _rts: bool) {
         return;
     }
 
+    CDC_LINE_CB_COUNT.fetch_add(1, Ordering::Relaxed);
+    CDC_LINE_STATE.store((dtr as u32) | ((_rts as u32) << 1), Ordering::Release);
     let was_asserted = DTR_ASSERTED.swap(dtr, Ordering::AcqRel);
     if dtr && !was_asserted {
         BANNER_PENDING.store(true, Ordering::Release);
@@ -48,8 +60,12 @@ pub extern "C" fn tud_cdc_line_state_cb(itf: u8, dtr: bool, _rts: bool) {
 /// Detect a host opening the CDC port and print the banner once its
 /// configuration has opened both CDC data endpoints.
 pub fn service_connection() {
+    CDC_SERVICE_COUNT.fetch_add(1, Ordering::Relaxed);
     unsafe {
         let connected = tusb::tud_cdc_n_connected(0);
+        if connected {
+            CDC_CONNECTED_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
         if connected && !WAS_CONNECTED {
             LINE_LEN = 0;
             ZMODEM_PROBE_LEN = 0;
@@ -64,7 +80,9 @@ pub fn service_connection() {
             BANNER_PENDING.store(false, Ordering::Release);
         }
 
-        if connected && tusb::tud_cdc_n_ready(0) {
+        let ready = tusb::tud_cdc_n_ready(0);
+        if connected && ready {
+            CDC_READY_COUNT.fetch_add(1, Ordering::Relaxed);
             // Queue the banner only once. A failed endpoint claim does not
             // discard TinyUSB's TX FIFO, so keep retrying flush below.
             if BANNER_PENDING.load(Ordering::Acquire) {
@@ -75,9 +93,47 @@ pub fn service_connection() {
             // CDC write_flush() may return zero while the IN endpoint is
             // busy. Retry from the foreground loop until the FIFO drains;
             // do not wait for another character to trigger the next flush.
-            let _ = tusb::tud_cdc_n_write_flush(0);
+            let flushed = tusb::tud_cdc_n_write_flush(0);
+            CDC_FLUSH_COUNT.fetch_add(1, Ordering::Relaxed);
+            CDC_LAST_FLUSH.store(flushed, Ordering::Release);
+            if flushed != 0 {
+                CDC_FLUSH_STARTED.fetch_add(flushed, Ordering::Relaxed);
+            }
         }
     }
+}
+
+/// Append a snapshot of CDC connection and transmit-path diagnostics to STATUS.
+fn write_cdc_diagnostics() {
+    let connected = unsafe { tusb::tud_cdc_n_connected(0) };
+    let ready = unsafe { tusb::tud_cdc_n_ready(0) };
+    write_status(b"CDC diagnostics: connected=");
+    write_decimal(connected as usize);
+    write_status(b" ready=");
+    write_decimal(ready as usize);
+    write_status(b" DTR=");
+    write_decimal(DTR_ASSERTED.load(Ordering::Acquire) as usize);
+    write_status(b" RTS=");
+    write_decimal(((CDC_LINE_STATE.load(Ordering::Acquire) >> 1) & 1) as usize);
+    write_status(b" banner_pending=");
+    write_decimal(BANNER_PENDING.load(Ordering::Acquire) as usize);
+    write_status(b"\r\n  line_cb=");
+    write_decimal(CDC_LINE_CB_COUNT.load(Ordering::Relaxed) as usize);
+    write_status(b" line_state=0x");
+    write_hex_u32(CDC_LINE_STATE.load(Ordering::Acquire));
+    write_status(b" service=");
+    write_decimal(CDC_SERVICE_COUNT.load(Ordering::Relaxed) as usize);
+    write_status(b" connected_passes=");
+    write_decimal(CDC_CONNECTED_COUNT.load(Ordering::Relaxed) as usize);
+    write_status(b" ready_passes=");
+    write_decimal(CDC_READY_COUNT.load(Ordering::Relaxed) as usize);
+    write_status(b"\r\n  flush_calls=");
+    write_decimal(CDC_FLUSH_COUNT.load(Ordering::Relaxed) as usize);
+    write_status(b" flush_started_bytes=");
+    write_decimal(CDC_FLUSH_STARTED.load(Ordering::Relaxed) as usize);
+    write_status(b" last_flush_return=");
+    write_decimal(CDC_LAST_FLUSH.load(Ordering::Acquire) as usize);
+    write_status(b"\r\n");
 }
 
 /// Print the exact non-destructive storage initialization or mount failure.
@@ -708,6 +764,7 @@ pub fn service(
                         } else {
                             STATUS_UNAVAILABLE
                         });
+                        write_cdc_diagnostics();
                         write_status(if ZMODEM_START_FAILED {
                             b"ZMODEM startup: header detected, receiver did not start.\r\n"
                         } else if ZMODEM_PROBE_MATCHED {
