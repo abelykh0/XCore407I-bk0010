@@ -1363,17 +1363,23 @@ pub fn with_mounted_detailed_with_progress<R>(
 /// The path slice includes its trailing NUL; size is meaningful for files.
 pub fn read_root_directory(
     fs: &Filesystem<'_, ActiveStorage>,
+    include_file_sizes: bool,
     mut visit: impl FnMut(&[u8], bool, usize) -> LfsResult<()>,
 ) -> LfsResult<()> {
     fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
         for item in directory {
             let entry = item?;
-            let metadata = entry.metadata();
+            let is_dir = entry.file_type().is_dir();
+            let size = if include_file_sizes && !is_dir {
+                entry.metadata().len()
+            } else {
+                0
+            };
             let path = entry.path();
             visit(
                 path.as_str_ref_with_trailing_nul().as_bytes(),
-                metadata.is_dir(),
-                metadata.len(),
+                is_dir,
+                size,
             )?;
         }
         Ok(())
