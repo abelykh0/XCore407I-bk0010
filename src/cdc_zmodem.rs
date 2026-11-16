@@ -53,6 +53,8 @@ pub struct State {
     append_nand_page: u32,
     append_nand_stored_ecc: u32,
     append_nand_calculated_ecc: u32,
+    commit_stage: u32,
+    commit_lfs_error: i32,
 }
 
 impl State {
@@ -88,6 +90,8 @@ impl State {
             append_nand_page: 0,
             append_nand_stored_ecc: 0,
             append_nand_calculated_ecc: 0,
+            commit_stage: 0,
+            commit_lfs_error: 0,
         }
     }
 
@@ -134,6 +138,10 @@ impl State {
 
     pub fn protocol_diagnostics(&self) -> (u8, u8, u32, u32) {
         (self.protocol_error, self.protocol_error_detail, self.wire_received_bytes, self.wire_consumed_bytes)
+    }
+
+    pub fn commit_failure_details(&self) -> (u32, i32) {
+        (self.commit_stage, self.commit_lfs_error)
     }
 
     pub fn append_failure_details(&self) -> (i32, u32, u32, u32, u32, u32, u32, u32, u32) {
@@ -233,23 +241,19 @@ fn create_temp_file(
     create_new_file(fs, allocation, TEMP_PATH)
 }
 
-fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> bool {
+fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Result<(), (u32, i32)> {
     if state.final_path_len == 0 {
-        return true;
+        return Ok(());
     }
-    let Ok(temp) = Path::from_bytes_with_nul(TEMP_PATH) else {
-        return false;
-    };
-    let Ok(final_path) = Path::from_bytes_with_nul(&state.final_path[..state.final_path_len]) else {
-        return false;
-    };
-    if fs.exists(final_path) || fs.rename(temp, final_path).is_err() {
-        let _ = fs.remove(temp);
-        state.final_path_len = 0;
-        return false;
+    let temp = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| (1, LfsError::IO.code()))?;
+    let final_path = Path::from_bytes_with_nul(&state.final_path[..state.final_path_len])
+        .map_err(|_| (2, LfsError::IO.code()))?;
+    if fs.exists(final_path) {
+        return Err((3, 0));
     }
+    fs.rename(temp, final_path).map_err(|error| (4, error.code()))?;
     state.final_path_len = 0;
-    true
+    Ok(())
 }
 
 fn append_file(
@@ -322,6 +326,8 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.append_nand_page = 0;
     state.append_nand_stored_ecc = 0;
     state.append_nand_calculated_ecc = 0;
+    state.commit_stage = 0;
+    state.commit_lfs_error = 0;
     state.receiver = Some(receiver);
     Ok(())
 }
@@ -477,10 +483,16 @@ pub fn service(
                 }
             }
             Action::Event(Event::FileCompleted) => {
-                if !commit_temp_file(fs, state) {
+                if let Err((stage, error)) = commit_temp_file(fs, state) {
                     state.last_error = 5;
+                    state.commit_stage = stage;
+                    state.commit_lfs_error = error;
+                    // Preserve the completed temporary upload for diagnosis or
+                    // manual recovery. Clearing final_path_len prevents the
+                    // common abort cleanup from deleting it.
+                    state.final_path_len = 0;
                     super::cdc_console::write_status(
-                        b"\r\nZMODEM storage error: final rename/commit failed\r\n",
+                        b"\r\nZMODEM storage error: final commit failed; temporary file preserved\r\n",
                     );
                     state.transfer_failed = true;
                     let _ = receiver.abort();
