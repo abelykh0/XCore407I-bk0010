@@ -765,19 +765,23 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             }
         }
     }
+    // Experimental: always perform the same raw data and OOB readback
+    // transactions used by ECCWRITE, but do not calculate or compare ECC.
+    // This isolates the effect of the NAND read sequence from the extra CPU
+    // work performed by the full ECCWRITE verification path. Readback errors
+    // remain diagnostic-only and do not alter the completed program result.
+    let readback = unsafe {
+        &mut *core::ptr::addr_of_mut!(ECC_DIAGNOSTIC_PAGE_BUFFER)
+    };
+    let data_ok = read_page(page, 0, readback);
+    let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
+    let spare_ok = read_page(
+        page,
+        PAGE_SIZE as u16 + ECC_OOB_OFFSET,
+        &mut spare,
+    );
+
     if trace_enabled {
-        // Verify what was actually committed, without changing the result of
-        // the NAND program operation if this additional diagnostic read fails.
-        let readback = unsafe {
-            &mut *core::ptr::addr_of_mut!(ECC_DIAGNOSTIC_PAGE_BUFFER)
-        };
-        let data_ok = read_page(page, 0, readback);
-        let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
-        let spare_ok = read_page(
-            page,
-            PAGE_SIZE as u16 + ECC_OOB_OFFSET,
-            &mut spare,
-        );
         let tag_ok = spare_ok && spare[ECC_OOB_BYTES..] == ECC_TAG;
         let mut trace = EccWriteTrace {
             page,
