@@ -685,6 +685,9 @@ int lfs_dir_close(lfs_t *lfs, lfs_dir_t *dir);
 // or a negative error code on failure.
 int lfs_dir_read(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info);
 
+// Read a directory entry without looking up its file size.
+int lfs_dir_read_short(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info);
+
 // Change the position of the directory
 //
 // The new off must be a value previous returned from tell and specifies
