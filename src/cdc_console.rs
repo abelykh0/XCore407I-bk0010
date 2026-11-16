@@ -101,6 +101,12 @@ pub fn service_connection() {
                 let accepted = write_status_counted(BANNER);
                 CDC_BANNER_ACCEPTED.fetch_add(accepted as u32, Ordering::Relaxed);
                 BANNER_PENDING.store(false, Ordering::Release);
+
+                // The banner is queued after the caller's normal TinyUSB task
+                // pass. Run one device-task pass now so the newly queued CDC IN
+                // data is serviced without waiting for host input to trigger
+                // another console write.
+                let _ = tusb::tud_task_ext(1, false);
             }
 
             // CDC write_flush() may return zero while the IN endpoint is
