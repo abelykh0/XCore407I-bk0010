@@ -156,27 +156,28 @@ fn write_decimal(mut value: usize) {
 }
 
 fn write_decimal_grouped(mut value: usize) {
-    let mut digits = [0u8; 10];
+    // A 32-bit usize needs at most 10 digits and 3 separators.
+    let mut digits = [0u8; 13];
     let mut start = digits.len();
-    let mut count = 0usize;
+    let mut group_digits = 0usize;
+
     loop {
         start -= 1;
         digits[start] = b'0' + (value % 10) as u8;
         value /= 10;
-        count += 1;
+        group_digits += 1;
+
         if value == 0 {
             break;
         }
+        if group_digits == 3 {
+            start -= 1;
+            digits[start] = b',';
+            group_digits = 0;
+        }
     }
 
-    while count > 3 {
-        let group_start = start + count - 3;
-        write_status(&digits[start..group_start]);
-        write_status(b",");
-        start = group_start;
-        count -= 3;
-    }
-    write_status(&digits[start..start + count]);
+    write_status(&digits[start..]);
 }
 
 pub(crate) fn write_send_complete(name: &[u8], size: u32) {
