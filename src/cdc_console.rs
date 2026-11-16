@@ -533,7 +533,7 @@ pub fn service(
             return FormatRequest::None;
         }
         if zmodem.discard_trailing_input(now_ms) {
-            return false;
+            return FormatRequest::None;
         }
 
         let mut byte = 0u8;
