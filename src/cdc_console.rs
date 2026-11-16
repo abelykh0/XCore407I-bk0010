@@ -30,6 +30,8 @@ static CDC_FLUSH_STARTED: AtomicU32 = AtomicU32::new(0);
 static CDC_LAST_FLUSH: AtomicU32 = AtomicU32::new(0);
 static CDC_BANNER_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 static CDC_BANNER_ACCEPTED: AtomicU32 = AtomicU32::new(0);
+static CDC_BANNER_TX_PENDING: AtomicBool = AtomicBool::new(false);
+static CDC_BANNER_TX_COMPLETE: AtomicU32 = AtomicU32::new(0);
 static CDC_TX_COMPLETE_COUNT: AtomicU32 = AtomicU32::new(0);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
@@ -65,6 +67,9 @@ pub extern "C" fn tud_cdc_line_state_cb(itf: u8, dtr: bool, _rts: bool) {
 pub extern "C" fn tud_cdc_tx_complete_cb(itf: u8) {
     if itf == 0 {
         CDC_TX_COMPLETE_COUNT.fetch_add(1, Ordering::Relaxed);
+        if CDC_BANNER_TX_PENDING.swap(false, Ordering::AcqRel) {
+            CDC_BANNER_TX_COMPLETE.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -98,6 +103,7 @@ pub fn service_connection() {
             // discard TinyUSB's TX FIFO, so keep retrying flush below.
             if BANNER_PENDING.load(Ordering::Acquire) {
                 CDC_BANNER_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                CDC_BANNER_TX_PENDING.store(true, Ordering::Release);
                 let accepted = write_status_counted(BANNER);
                 CDC_BANNER_ACCEPTED.fetch_add(accepted as u32, Ordering::Relaxed);
                 BANNER_PENDING.store(false, Ordering::Release);
@@ -156,6 +162,10 @@ fn write_cdc_diagnostics() {
     write_decimal(CDC_BANNER_ATTEMPTS.load(Ordering::Relaxed) as usize);
     write_status(b" banner_accepted_bytes=");
     write_decimal(CDC_BANNER_ACCEPTED.load(Ordering::Relaxed) as usize);
+    write_status(b" banner_tx_complete=");
+    write_decimal(CDC_BANNER_TX_COMPLETE.load(Ordering::Relaxed) as usize);
+    write_status(b" banner_tx_pending=");
+    write_decimal(CDC_BANNER_TX_PENDING.load(Ordering::Acquire) as usize);
     write_status(b" tx_complete=");
     write_decimal(CDC_TX_COMPLETE_COUNT.load(Ordering::Relaxed) as usize);
     write_status(b"\r\n");
