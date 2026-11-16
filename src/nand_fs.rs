@@ -94,7 +94,6 @@ const FSMC_SR_FEMPT: u32 = 1 << 6;
 // PMEM2 +0x68, PATT2 +0x6C, reserved +0x70, ECCR2 +0x74).
 const FSMC_ECCR2: *const u32 = (FSMC_BASE + 0x74) as *const u32;
 const FSMC_PCR_ECCEN: u32 = 1 << 6;
-const FSMC_PCR_ECCPS_MASK: u32 = 0b111 << 17;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
 
