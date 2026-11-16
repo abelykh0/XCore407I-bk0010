@@ -700,6 +700,45 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
+                    } else if command_is(line, b"ECCSEQ ON") {
+                        crate::nand_fs::set_ecc_sequence_trace_enabled(true);
+                        write_status(b"\\r\\nECCSEQ: armed for the next successful page program; no readback will be performed.\\r\\n> ");
+                    } else if command_is(line, b"ECCSEQ OFF") {
+                        crate::nand_fs::set_ecc_sequence_trace_enabled(false);
+                        write_status(b"\\r\\nECCSEQ: disabled.\\r\\n> ");
+                    } else if command_is(line, b"ECCSEQSTATUS") {
+                        let trace = crate::nand_fs::ecc_sequence_trace();
+                        if trace.page == u32::MAX {
+                            write_status(b"\\r\\nECCSEQSTATUS: no page program captured. Enable ECCSEQ, then create/write a file.\\r\\n> ");
+                        } else {
+                            write_status(b"\\r\\nECCSEQSTATUS: FSMC program sequence (no NAND readback)\\r\\nPage: 0x");
+                            write_hex_u32(trace.page);
+                            write_status(b" flags=0x");
+                            write_hex_u32(trace.flags);
+                            write_status(b" (bit0=OOB FIFO drained bit1=program/status success)\\r\\n");
+                            for chunk in 0..4 {
+                                write_status(b"  chunk ");
+                                write_decimal(chunk);
+                                write_status(b" PCR-before=0x");
+                                write_hex_u32(trace.pcr_before[chunk]);
+                                write_status(b" PCR-enabled=0x");
+                                write_hex_u32(trace.pcr_enabled[chunk]);
+                                write_status(b" SR-before-wait=0x");
+                                write_hex_u32(trace.status_before_wait[chunk]);
+                                write_status(b" SR-after-wait=0x");
+                                write_hex_u32(trace.status_after_wait[chunk]);
+                                write_status(b" ECC-after-wait=0x");
+                                write_hex_u32(trace.ecc_after_wait[chunk]);
+                                write_status(b" PCR-after-disable=0x");
+                                write_hex_u32(trace.pcr_after_disable[chunk]);
+                                write_status(b"\\r\\n");
+                            }
+                            write_status(b"  OOB SR-before-wait=0x");
+                            write_hex_u32(trace.oob_status_before_wait);
+                            write_status(b" SR-after-wait=0x");
+                            write_hex_u32(trace.oob_status_after_wait);
+                            write_status(b"\\r\\nECCSEQSTATUS complete.\\r\\n> ");
+                        }
                     } else if command_is(line, b"ECCWRITE ON") {
                         crate::nand_fs::set_ecc_write_trace_enabled(true);
                         write_status(b"\r\nECCWRITE: enabled. Subsequent NAND page programs will be read back and checked.\r\n> ");
