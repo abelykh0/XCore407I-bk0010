@@ -485,27 +485,18 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     write_status(b" bytes\r\n");
 
     write_status(b"LIST: reading root directory...\r\n");
-    let Ok(root) = Path::from_bytes_with_nul(b"/\0") else {
-        write_status(b"Cannot construct root path.\r\n> ");
-        return;
-    };
-
-    let result = fs.read_dir_and_then(root, |entries| {
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
+    let result = crate::nand_fs::read_root_directory(fs, |path_bytes, is_dir, size| {
+        let path = &path_bytes[..path_bytes.len() - 1];
+        write_status(b"  ");
+        write_status(path);
+        if is_dir {
+            write_status(b" [DIR]");
+        } else {
             write_status(b"  ");
-            write_status(path.as_str().as_bytes());
-            let metadata = entry.metadata();
-            if metadata.is_dir() {
-                write_status(b" [DIR]");
-            } else {
-                write_status(b"  ");
-                write_decimal_grouped(metadata.len());
-                write_status(b" bytes");
-            }
-            write_status(b"\r\n");
+            write_decimal_grouped(size);
+            write_status(b" bytes");
         }
+        write_status(b"\\r\\n");
         Ok(())
     });
 
