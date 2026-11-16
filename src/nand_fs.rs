@@ -302,7 +302,7 @@ fn wait_ready_rb_timeout(timeout: u32) -> bool {
     // First observe that the command was accepted and the NAND became busy.
     let mut saw_busy = false;
     for _ in 0..timeout {
-        if read_volatile(rb) & RB_MASK == 0 {
+        if unsafe { read_volatile(rb) } & RB_MASK == 0 {
             saw_busy = true;
             break;
         }
@@ -314,7 +314,7 @@ fn wait_ready_rb_timeout(timeout: u32) -> bool {
 
     // Then wait for the actual completion edge.
     for _ in 0..timeout {
-        if read_volatile(rb) & RB_MASK != 0 {
+        if unsafe { read_volatile(rb) } & RB_MASK != 0 {
             return true;
         }
         core::hint::spin_loop();
