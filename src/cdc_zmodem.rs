@@ -283,7 +283,7 @@ pub fn run_ecc_storage_diagnostic(
     fs: &Filesystem<'_, ActiveStorage>,
     state: &mut State,
 ) -> u8 {
-    const TEST_PATH: &[u8] = b"/eccdiag.bin\\0";
+    const TEST_PATH: &[u8] = b"/eccdiag.bin\0";
     const TEST_SIZE: usize = 4096;
     const CHUNK: usize = 512;
     let Ok(path) = Path::from_bytes_with_nul(TEST_PATH) else { return 1; };
