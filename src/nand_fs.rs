@@ -262,33 +262,22 @@ fn ecc_begin_chunk() {
     }
 }
 
-/// Wait for the FSMC FIFO to empty, performing one volatile scratch
-/// store per status poll to preserve the observed timing perturbation.
-fn wait_fsmc_fifo_empty_counted() -> (bool, u32) {
-    let mut sample = 0u32;
+/// Wait for all preceding NAND data writes to reach the FSMC, then wait
+/// until its write FIFO is empty before reading ECCR2.
+///
+/// NAND data is mapped at 0x7000_0000, in the Cortex-M4 default External RAM
+/// (Normal memory) region, while FSMC status registers are at 0xA000_0000
+/// (External Device memory). PM0214 §2.2.4 says ordering between these
+/// different memory types is not guaranteed without a memory barrier.
+fn wait_fsmc_fifo_empty() -> (bool, u32) {
+    cortex_m::asm::dsb();
     for iteration in 0..TIMEOUT {
-        let status = unsafe { read_volatile(FSMC_SR2) };
-        // Volatile prevents the compiler from removing this diagnostic store.
-        unsafe {
-            core::ptr::write_volatile(core::ptr::addr_of_mut!(sample), status);
-        }
-        if status & FSMC_SR_FEMPT != 0 {
+        if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
             return (true, iteration + 1);
         }
         core::hint::spin_loop();
     }
     (false, TIMEOUT)
-}
-
-/// Wait for the FSMC FIFO to empty before capturing the ECC result.
-fn wait_fsmc_fifo_empty() -> bool {
-    for _ in 0..TIMEOUT {
-        if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
 }
 
 /// Read the 24-bit ECC result and disable the engine before reuse.
@@ -703,10 +692,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     cortex_m::asm::delay(1_000);
 
     let trace_enabled = ECC_WRITE_TRACE_ENABLED.load(Ordering::Acquire) != 0;
-    // Keep the sample-storage polling perturbation active for every page while
-    // retaining the detailed ECC sequence report as a one-shot capture.
-    let fifo_sample_mode = ECC_SEQUENCE_TRACE_ENABLED.load(Ordering::Acquire) != 0;
-    let sequence_trace_enabled = fifo_sample_mode
+    let sequence_trace_enabled = ECC_SEQUENCE_TRACE_ENABLED.load(Ordering::Acquire) != 0
         && ECC_SEQUENCE_TRACE_CAPTURED.load(Ordering::Acquire) == 0;
     let mut sequence_trace = EccSequenceTrace {
         page, flags: 0,
@@ -746,11 +732,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if sequence_trace_enabled {
             sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
         }
-        let (fifo_empty, fifo_polls) = if fifo_sample_mode {
-            wait_fsmc_fifo_empty_counted()
-        } else {
-            (wait_fsmc_fifo_empty(), 0)
-        };
+        let (fifo_empty, fifo_polls) = wait_fsmc_fifo_empty();
         if sequence_trace_enabled {
             sequence_trace.fifo_poll_count[chunk_index] = fifo_polls;
         }
@@ -795,11 +777,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if sequence_trace_enabled {
         sequence_trace.oob_status_before_wait = unsafe { read_volatile(FSMC_SR2) };
     }
-    let (oob_fifo_empty, oob_fifo_polls) = if fifo_sample_mode {
-        wait_fsmc_fifo_empty_counted()
-    } else {
-        (wait_fsmc_fifo_empty(), 0)
-    };
+    let (oob_fifo_empty, oob_fifo_polls) = wait_fsmc_fifo_empty();
     if sequence_trace_enabled {
         sequence_trace.oob_fifo_poll_count = oob_fifo_polls;
     }
