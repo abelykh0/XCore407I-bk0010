@@ -27,6 +27,7 @@ pub struct State {
     sender: Option<Sender>,
     send_path: [u8; NAME_CAPACITY + 2],
     send_path_len: usize,
+    send_size: u32,
     send_buffer: [u8; 1024],
     send_wire: [u8; WIRE_CAPACITY],
     send_wire_len: usize,
@@ -73,6 +74,7 @@ impl State {
             sender: None,
             send_path: [0; NAME_CAPACITY + 2],
             send_path_len: 0,
+            send_size: 0,
             send_buffer: [0; 1024],
             send_wire: [0; WIRE_CAPACITY],
             send_wire_len: 0,
@@ -449,6 +451,7 @@ pub fn start_send(
 
     state.send_path = path_bytes;
     state.send_path_len = path_len;
+    state.send_size = size;
     state.send_wire_len = 0;
     state.send_wire_pos = 0;
     state.send_last_activity_ms = now_ms;
@@ -470,7 +473,7 @@ fn service_sender(
             state.send_path_len = 0;
             state.send_wire_len = 0;
             state.send_wire_pos = 0;
-            super::cdc_console::write_status(b"\r\nZMODEM send complete.\r\n> ");
+            super::cdc_console::write_send_complete(\n                &state.send_path[1..state.send_path_len - 1],\n                state.send_size,\n            );
             return true;
         }
         return false;
