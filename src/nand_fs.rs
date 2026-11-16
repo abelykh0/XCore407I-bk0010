@@ -291,8 +291,30 @@ pub(crate) fn wait_ready_rb() -> bool {
 }
 
 fn wait_ready_rb_timeout(timeout: u32) -> bool {
+    // K9F1G08U0E R/B is normally high. After READ, PROGRAM, ERASE, or
+    // RESET starts, it first transitions low and returns high on completion.
+    // Waiting only for high can therefore accept the idle-high level before
+    // the NAND has even entered its busy phase (notably after PROGRAM CONFIRM).
+    let rb = unsafe {
+        &*(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>())
+    };
+
+    // First observe that the command was accepted and the NAND became busy.
+    let mut saw_busy = false;
     for _ in 0..timeout {
-        if unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0 {
+        if read_volatile(rb) & RB_MASK == 0 {
+            saw_busy = true;
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    if !saw_busy {
+        return false;
+    }
+
+    // Then wait for the actual completion edge.
+    for _ in 0..timeout {
+        if read_volatile(rb) & RB_MASK != 0 {
             return true;
         }
         core::hint::spin_loop();
