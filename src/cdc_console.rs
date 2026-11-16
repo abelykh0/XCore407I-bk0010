@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -612,6 +612,63 @@ pub fn service(
                         write_hex_u32(status as u32);
                         write_status(if ready { b"  R/B=READY\\r\\n" } else { b"  R/B=BUSY\\r\\n" });
                         write_status(b"> ");
+                    } else if line.len() > 8
+                        && line[..8].eq_ignore_ascii_case(b"ECCPAGE ")
+                    {
+                        let Some(page) = parse_hex_u32(&line[8..]) else {
+                            write_status(b"ECCPAGE: use ECCPAGE followed by a hexadecimal physical page number.\\r\\n> ");
+                            LINE_LEN = 0;
+                            continue;
+                        };
+                        if page >= crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK {
+                            write_status(b"ECCPAGE: physical page is out of range.\\r\\n> ");
+                        } else {
+                            write_status(b"\\r\\nECCPAGE: read-only; no NAND writes or erases. FSMC ECC disabled. Three independent raw reads.\\r\\nPage: 0x");
+                            write_hex_u32(page);
+                            write_status(b"\\r\\n");
+                            let mut previous: Option<crate::nand_fs::EccPageComparison> = None;
+                            for pass in 0..3 {
+                                match crate::nand_fs::ecc_software_compare_page(page) {
+                                    Some(result) => {
+                                        write_status(b"Read ");
+                                        write_decimal(pass + 1);
+                                        write_status(b":\\r\\n");
+                                        for chunk in 0..4 {
+                                            write_status(b"  chunk ");
+                                            write_decimal(chunk);
+                                            write_status(b" stored=0x");
+                                            write_hex_u32(result.stored[chunk]);
+                                            write_status(b" software=0x");
+                                            write_hex_u32(result.software[chunk]);
+                                            write_status(b" data-fingerprint=0x");
+                                            write_hex_u32(result.data_fingerprint[chunk]);
+                                            if result.stored[chunk] == result.software[chunk] {
+                                                write_status(b" ECC=MATCH");
+                                            } else {
+                                                write_status(b" ECC=MISMATCH");
+                                            }
+                                            if let Some(old) = previous {
+                                                if result.stored[chunk] != old.stored[chunk]
+                                                    || result.software[chunk] != old.software[chunk]
+                                                    || result.data_fingerprint[chunk] != old.data_fingerprint[chunk]
+                                                {
+                                                    write_status(b" READ-CHANGED");
+                                                }
+                                            }
+                                            write_status(b"\\r\\n");
+                                        }
+                                        previous = Some(result);
+                                    }
+                                    None => {
+                                        write_status(b"Read ");
+                                        write_decimal(pass + 1);
+                                        write_status(b": READ FAILED, page untagged, or ECC tag invalid.\\r\\n");
+                                        previous = None;
+                                    }
+                                }
+                            }
+                            write_status(b"ECCPAGE complete. Compare all three reads; repeat command if needed.\\r\\n> ");
+                        }
                     } else if command_is(line, b"ECCSCAN") {
                         write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
                         let vectors = crate::nand_fs::ecc_software_selftest();
