@@ -8,10 +8,10 @@ use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 use littlefs2::{
     fs::Filesystem,
     fs::FileAllocation,
-    io::{Error as LfsError, Read, Write},
+    io::{Error as LfsError, Read, Seek, SeekFrom, Write},
     path::Path,
 };
-use zmodem2::{Action, Error as ZmodemError, Event, Receiver};
+use zmodem2::{Action, Error as ZmodemError, Event, FileInfo, Position, Receiver, Sender};
 
 use crate::{camera, nand_fs::ActiveStorage, tusb};
 
@@ -24,6 +24,15 @@ const TEMP_PATH: &[u8] = b"/.zmodem-upload\0";
 
 pub struct State {
     receiver: Option<NonNull<Receiver>>,
+    sender: Option<Sender>,
+    send_path: [u8; NAME_CAPACITY + 2],
+    send_path_len: usize,
+    send_buffer: [u8; 1024],
+    send_wire: [u8; WIRE_CAPACITY],
+    send_wire_len: usize,
+    send_wire_pos: usize,
+    send_last_activity_ms: u32,
+    send_last_handshake_ms: u32,
     file_allocation: FileAllocation<ActiveStorage>,
     final_path: [u8; NAME_CAPACITY + 2],
     final_path_len: usize,
@@ -61,6 +70,15 @@ impl State {
     pub fn new() -> Self {
         Self {
             receiver: None,
+            sender: None,
+            send_path: [0; NAME_CAPACITY + 2],
+            send_path_len: 0,
+            send_buffer: [0; 1024],
+            send_wire: [0; WIRE_CAPACITY],
+            send_wire_len: 0,
+            send_wire_pos: 0,
+            send_last_activity_ms: 0,
+            send_last_handshake_ms: 0,
             file_allocation: FileAllocation::new(),
             final_path: [0; NAME_CAPACITY + 2],
             final_path_len: 0,
@@ -96,7 +114,7 @@ impl State {
     }
 
     pub fn active(&self) -> bool {
-        self.receiver.is_some()
+        self.receiver.is_some() || self.sender.is_some()
     }
 
     /// Discard trailing sender bytes after a failed session so they cannot
@@ -172,6 +190,10 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     if state.receiver.take().is_some() {
         camera::release_cdc_receiver_storage();
     }
+    state.sender = None;
+    state.send_path_len = 0;
+    state.send_wire_len = 0;
+    state.send_wire_pos = 0;
     state.final_path_len = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
@@ -353,7 +375,7 @@ pub fn run_ecc_storage_diagnostic(
 }
 
 pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<(), ()> {
-    if !storage_available || state.receiver.is_some() {
+    if !storage_available || state.active() {
         return Err(());
     }
     let (storage, storage_len) = camera::claim_cdc_receiver_storage().ok_or(())?;
@@ -404,6 +426,184 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     Ok(())
 }
 
+/// Start a device-to-terminal ZMODEM transfer for one root-level LittleFS file.
+pub fn start_send(
+    fs: &Filesystem<'_, ActiveStorage>,
+    state: &mut State,
+    name: &[u8],
+    now_ms: u32,
+) -> Result<(), u8> {
+    if state.active() {
+        return Err(1);
+    }
+    let mut path_bytes = [0u8; NAME_CAPACITY + 2];
+    let path_len = make_path(name, &mut path_bytes).ok_or(2)?;
+    let path = Path::from_bytes_with_nul(&path_bytes[..path_len]).map_err(|_| 2)?;
+    let metadata = fs.metadata(path).map_err(|_| 3)?;
+    let size = u32::try_from(metadata.len()).map_err(|_| 4)?;
+
+    let mut sender = Sender::new().map_err(|_| 5)?;
+    let info = FileInfo::new(name, Some(Position::new(size))).with_mode(0x8000 | 0o644);
+    sender.start_file(info).map_err(|_| 5)?;
+
+    state.send_path = path_bytes;
+    state.send_path_len = path_len;
+    state.send_wire_len = 0;
+    state.send_wire_pos = 0;
+    state.send_last_activity_ms = now_ms;
+    state.send_last_handshake_ms = now_ms;
+    state.sender = Some(sender);
+    Ok(())
+}
+
+/// Drive the sender while the CDC terminal receives the file.
+fn service_sender(
+    fs: &Filesystem<'_, ActiveStorage>,
+    state: &mut State,
+    now_ms: u32,
+) -> bool {
+    let Some(mut sender) = state.sender.take() else {
+        return false;
+    };
+    let mut finished = false;
+
+    for _ in 0..8 {
+        match sender.poll() {
+            Action::WriteWire(bytes) => {
+                let len = bytes.len();
+                let count = unsafe {
+                    tusb::tud_cdc_n_write(0, bytes.as_ptr().cast::<c_void>(), len as u32)
+                } as usize;
+                if count == 0 {
+                    break;
+                }
+                unsafe { let _ = tusb::tud_cdc_n_write_flush(0); }
+                sender.wire_written(count);
+                state.send_last_activity_ms = now_ms;
+                if count < len {
+                    break;
+                }
+            }
+            Action::ReadFile { offset, max_len } => {
+                if state.send_path_len == 0 || max_len == 0 || max_len > state.send_buffer.len() {
+                    sender.abort();
+                    break;
+                }
+                let path = match Path::from_bytes_with_nul(&state.send_path[..state.send_path_len]) {
+                    Ok(path) => path,
+                    Err(_) => {
+                        sender.abort();
+                        break;
+                    }
+                };
+                let read_result = fs.open_file_with_options_and_then_with_allocation(
+                    |options| options.read(true),
+                    path,
+                    &mut state.file_allocation,
+                    |file| {
+                        file.seek(SeekFrom::Start(offset.get()))?;
+                        file.read(&mut state.send_buffer[..max_len])
+                    },
+                );
+                match read_result {
+                    Ok(count) if count != 0 => {
+                        if sender.submit_file(&state.send_buffer[..count]).is_err() {
+                            sender.abort();
+                            break;
+                        }
+                        state.send_last_activity_ms = now_ms;
+                    }
+                    _ => {
+                        sender.abort();
+                        break;
+                    }
+                }
+            }
+            Action::Event(Event::FileCompleted) => {}
+            Action::Event(Event::SessionCompleted) => {
+                super::cdc_console::write_status(b"\r\nZMODEM send complete.\r\n> ");
+                finished = true;
+                break;
+            }
+            Action::Event(Event::Aborted) => {
+                super::cdc_console::write_status(b"\r\nZMODEM send aborted or failed.\r\n> ");
+                finished = true;
+                break;
+            }
+            Action::Event(_) | Action::WriteFile(_) => {
+                sender.abort();
+                break;
+            }
+            Action::Idle => {
+                if now_ms.wrapping_sub(state.send_last_activity_ms) >= TRANSFER_TIMEOUT_MS {
+                    sender.abort();
+                    continue;
+                }
+
+                if state.send_wire_pos == state.send_wire_len {
+                    state.send_wire_len = unsafe {
+                        tusb::tud_cdc_n_read(
+                            0,
+                            state.send_wire.as_mut_ptr().cast::<c_void>(),
+                            WIRE_CAPACITY as u32,
+                        )
+                    } as usize;
+                    state.send_wire_pos = 0;
+                    if state.send_wire_len != 0 {
+                        state.send_last_activity_ms = now_ms;
+                    }
+                }
+
+                if state.send_wire_pos < state.send_wire_len {
+                    let input = &state.send_wire[state.send_wire_pos..state.send_wire_len];
+                    match sender.submit_wire(input) {
+                        Ok(consumed) if consumed != 0 => {
+                            state.send_wire_pos += consumed;
+                            state.send_last_activity_ms = now_ms;
+                        }
+                        Ok(_) => {
+                            let remaining = state.send_wire_len - state.send_wire_pos;
+                            state.send_wire.copy_within(state.send_wire_pos..state.send_wire_len, 0);
+                            state.send_wire_pos = 0;
+                            state.send_wire_len = remaining;
+                            let count = unsafe {
+                                tusb::tud_cdc_n_read(
+                                    0,
+                                    state.send_wire[state.send_wire_len..].as_mut_ptr().cast::<c_void>(),
+                                    (WIRE_CAPACITY - state.send_wire_len) as u32,
+                                )
+                            } as usize;
+                            state.send_wire_len += count;
+                            if count == 0 {
+                                break;
+                            }
+                            state.send_last_activity_ms = now_ms;
+                        }
+                        Err(_) => {
+                            sender.abort();
+                        }
+                    }
+                } else if now_ms.wrapping_sub(state.send_last_handshake_ms) >= 2_000 {
+                    let _ = sender.timeout();
+                    state.send_last_handshake_ms = now_ms;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    if finished {
+        state.sender = None;
+        state.send_path_len = 0;
+        state.send_wire_len = 0;
+        state.send_wire_pos = 0;
+    } else {
+        state.sender = Some(sender);
+    }
+    true
+}
+
 /// Preserve the ZMODEM startup header detected by the CDC console.
 pub fn seed_input(state: &mut State, bytes: &[u8]) -> bool {
     if state.receiver.is_none() || bytes.len() > WIRE_CAPACITY || state.wire_len != 0 {
@@ -422,6 +622,9 @@ pub fn service(
     state: &mut State,
     now_ms: u32,
 ) {
+    if service_sender(fs, state, now_ms) {
+        return;
+    }
     let Some(mut receiver_ptr) = state.receiver else {
         return;
     };
