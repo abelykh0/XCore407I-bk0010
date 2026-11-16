@@ -85,44 +85,35 @@ pub(crate) fn list_root_files(
     progress: impl FnMut(u32, u32),
 ) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
     xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
-        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
-            let mut count = 0usize;
-            for item in directory {
-                let entry = item?;
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-
-                let full_path = entry.path();
-                let path_bytes = full_path.as_str_ref_with_trailing_nul().as_bytes();
-                if path_bytes.len() < 3
-                    || path_bytes.len() > MAX_BROWSER_PATH
-                    || !path_bytes[..path_bytes.len() - 1]
-                        .iter()
-                        .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
-                {
-                    continue;
-                }
-
-                // Only expose .bin files in the browser (case-insensitive).
-                // The stored path is NUL-terminated and begins with '/'.
-                let filename = &path_bytes[1..path_bytes.len() - 1];
-                if filename.len() < 4
-                    || filename.len() > MAX_BROWSER_FILENAME
-                    || !filename[filename.len() - 4..].eq_ignore_ascii_case(b".bin")
-                {
-                    continue;
-                }
-
-                paths[count][..path_bytes.len()].copy_from_slice(path_bytes);
-                path_lengths[count] = path_bytes.len() as u16;
-                count += 1;
-                if count == MAX_BROWSER_FILES {
-                    break;
-                }
+        let mut count = 0usize;
+        xcore407i_blinker::nand_fs::read_root_directory(fs, |path_bytes, is_dir, _size| {
+            if is_dir || count == MAX_BROWSER_FILES {
+                return Ok(());
             }
-            Ok(count)
-        })
+            if path_bytes.len() < 3
+                || path_bytes.len() > MAX_BROWSER_PATH
+                || !path_bytes[..path_bytes.len() - 1]
+                    .iter()
+                    .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+            {
+                return Ok(());
+            }
+
+            // Only expose .bin files in the browser (case-insensitive).
+            let filename = &path_bytes[1..path_bytes.len() - 1];
+            if filename.len() < 4
+                || filename.len() > MAX_BROWSER_FILENAME
+                || !filename[filename.len() - 4..].eq_ignore_ascii_case(b".bin")
+            {
+                return Ok(());
+            }
+
+            paths[count][..path_bytes.len()].copy_from_slice(path_bytes);
+            path_lengths[count] = path_bytes.len() as u16;
+            count += 1;
+            Ok(())
+        })?;
+        Ok(count)
     }, progress)
 }
 
