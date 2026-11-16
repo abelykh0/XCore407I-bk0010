@@ -78,13 +78,13 @@ where
     }
     buf.push(b'\0').map_err(|_| Error::OutOfMemory)?;
 
-    if Header::new(Encoding::ZBIN32, Frame::ZFILE, [0; 4])
+    if Header::new(Encoding::ZBIN, Frame::ZFILE, [0; 4])
         .write(port)?
         .is_none()
     {
         return Ok(None);
     }
-    write_subpacket(port, Encoding::ZBIN32, SubpacketType::ZCRCW, buf)
+    write_subpacket(port, Encoding::ZBIN, SubpacketType::ZCRCW, buf)
 }
 
 #[cfg(test)]
