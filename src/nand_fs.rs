@@ -534,6 +534,15 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     for &byte in &ecc { write_data(byte); }
     for &byte in &ECC_TAG { write_data(byte); }
 
+    // Drain the FSMC write FIFO after the spare-area ECC and tag bytes too.
+    // The program-confirm command must not be issued while OOB data remains
+    // buffered in the FSMC NAND write FIFO.
+    if !wait_fsmc_fifo_empty() {
+        let status = unsafe { read_volatile(FSMC_SR2) };
+        record_nand_device_failure(7, page, status);
+        return false;
+    }
+
     command(0x10);
     if !wait_ready_rb() {
         record_nand_device_failure(4, page, 0);
