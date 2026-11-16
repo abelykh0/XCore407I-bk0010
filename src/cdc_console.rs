@@ -545,6 +545,23 @@ pub fn service(
                             write_hex_u32(consumed);
                             write_status(b"\r\n");
                         }
+                        if zmodem.last_error() == 5 {
+                            let (stage, error) = zmodem.commit_failure_details();
+                            let description: &[u8] = match stage {
+                                1 => b"Temporary path construction failed",
+                                2 => b"Destination path construction failed",
+                                3 => b"Destination already exists",
+                                4 => b"LittleFS rename returned an error",
+                                _ => b"Unclassified commit failure",
+                            };
+                            write_status(b"Commit stage: ");
+                            write_status(description);
+                            write_status(b" (0x");
+                            write_hex_u32(stage);
+                            write_status(b") LittleFS error: 0x");
+                            write_hex_u32(error as u32);
+                            write_status(b"\r\nTemporary upload: /.zmodem-upload (preserved)\r\n");
+                        }
                         if zmodem.last_error() == 2 {
                             let (
                                 lfs_error, operation, location, storage_error,
