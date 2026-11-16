@@ -46,7 +46,6 @@ unsafe extern "C" {
     fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
 }
 
-#[unsafe(link_section = ".ccmram.nand")]
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
     [0; PAGE_SIZE + SPARE_SIZE];
 #[unsafe(link_section = ".ccmram.nand")]
