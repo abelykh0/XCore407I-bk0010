@@ -978,7 +978,7 @@ pub fn service(
                                         write_status(description);
                                         write_status(b" detail=0x");
                                         write_hex_u32(detail);
-                                        write_status(b"\\r\\n");
+                                        write_status(b"\r\n");
                                         break;
                                     }
                                 }
