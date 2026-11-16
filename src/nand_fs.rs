@@ -1072,8 +1072,10 @@ pub(crate) struct EccPageHardwareComparison {
 
 /// Read-only diagnostic: NAND RESET, raw data read with FSMC ECC capture,
 /// then OOB read with ECC disabled. No ECC correction and no NAND writes.
-pub(crate) fn ecc_hardware_compare_page(page: u32) -> Option<EccPageHardwareComparison> {
-    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
+pub(crate) fn ecc_hardware_compare_page(
+    page: u32,
+) -> Result<EccPageHardwareComparison, (u8, u32)> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return Err((0, page)); }
 
     let data = unsafe {
         core::slice::from_raw_parts_mut(
@@ -1084,10 +1086,10 @@ pub(crate) fn ecc_hardware_compare_page(page: u32) -> Option<EccPageHardwareComp
 
     // Start each sample from a known NAND command state.
     command(0xFF);
-    if !wait_ready_rb_timeout(ECC_DIAGNOSTIC_TIMEOUT) { return None; }
+    if !wait_ready_rb_timeout(ECC_DIAGNOSTIC_TIMEOUT) { return Err((1, 0)); }
     command(0x70);
     let reset_status = read_data();
-    if reset_status & 0x40 == 0 { return None; }
+    if reset_status & 0x40 == 0 { return Err((2, reset_status as u32)); }
 
     command(0x00);
     address(0);
@@ -1095,7 +1097,7 @@ pub(crate) fn ecc_hardware_compare_page(page: u32) -> Option<EccPageHardwareComp
     address(page as u8);
     address((page >> 8) as u8);
     command(0x30);
-    if !wait_ready_rb_timeout(ECC_DIAGNOSTIC_TIMEOUT) { return None; }
+    if !wait_ready_rb_timeout(ECC_DIAGNOSTIC_TIMEOUT) { return Err((3, page)); }
 
     let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
@@ -1103,7 +1105,7 @@ pub(crate) fn ecc_hardware_compare_page(page: u32) -> Option<EccPageHardwareComp
         for byte in chunk.iter_mut() { *byte = read_data(); }
         if !wait_fsmc_fifo_empty() {
             let _ = ecc_end_chunk();
-            return None;
+            return Err((4, index as u32));
         }
         hardware[index] = ecc_end_chunk();
         service_io_hook();
@@ -1115,8 +1117,13 @@ pub(crate) fn ecc_hardware_compare_page(page: u32) -> Option<EccPageHardwareComp
         PAGE_SIZE as u16 + ECC_OOB_OFFSET,
         &mut spare,
         ECC_DIAGNOSTIC_TIMEOUT,
-    ) || spare[ECC_OOB_BYTES..] != ECC_TAG {
-        return None;
+    ) {
+        return Err((5, page));
+    }
+    if spare[ECC_OOB_BYTES..] != ECC_TAG {
+        return Err((6, u32::from_le_bytes([
+            spare[ECC_OOB_BYTES], spare[ECC_OOB_BYTES + 1], 0, 0,
+        ])));
     }
 
     let mut result = EccPageHardwareComparison {
