@@ -41,6 +41,8 @@ pub(crate) const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
 pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
 pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
+// Keep the interactive ECCPAGE diagnostic responsive if NAND R/B never rises.
+const ECC_DIAGNOSTIC_TIMEOUT: u32 = 500_000;
 
 // Optional main-context service hook used while synchronous NAND operations
 // wait for the device. The hook is installed only around the file-browser
@@ -219,7 +221,11 @@ pub(crate) fn wait_ready_status() -> bool {
 }
 
 pub(crate) fn wait_ready_rb() -> bool {
-    for iteration in 0..TIMEOUT {
+    wait_ready_rb_timeout(TIMEOUT)
+}
+
+fn wait_ready_rb_timeout(timeout: u32) -> bool {
+    for _ in 0..timeout {
         if unsafe { read_volatile(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()) } & RB_MASK != 0 {
             return true;
         }
@@ -229,6 +235,10 @@ pub(crate) fn wait_ready_rb() -> bool {
 }
 
 pub(crate) fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
+    read_page_with_timeout(page, column, out, TIMEOUT)
+}
+
+fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) -> bool {
     if out.is_empty() || column as usize + out.len() > PAGE_SIZE + SPARE_SIZE {
         return false;
     }
@@ -238,7 +248,7 @@ pub(crate) fn read_page(page: u32, column: u16, out: &mut [u8]) -> bool {
     address(page as u8);
     address((page >> 8) as u8);
     command(0x30);
-    if !wait_ready_rb() {
+    if !wait_ready_rb_timeout(timeout) {
         record_nand_device_failure(1, page, 0);
         return false;
     }
@@ -682,9 +692,14 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
     }
-    let data_ok = read_page(page, 0, &mut data);
+    let data_ok = read_page_with_timeout(page, 0, &mut data, ECC_DIAGNOSTIC_TIMEOUT);
     let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
-    let spare_ok = data_ok && read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut spare);
+    let spare_ok = data_ok && read_page_with_timeout(
+        page,
+        PAGE_SIZE as u16 + ECC_OOB_OFFSET,
+        &mut spare,
+        ECC_DIAGNOSTIC_TIMEOUT,
+    );
     unsafe {
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
