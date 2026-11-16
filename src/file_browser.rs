@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8};
 
-use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line, show_usb_status};
+use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line};
 
 pub(crate) const FILE_BROWSER_OPEN: u8 = 1;
 pub(crate) const FILE_BROWSER_UP: u8 = 2;
