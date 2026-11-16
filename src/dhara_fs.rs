@@ -44,6 +44,18 @@ unsafe extern "C" {
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_trim(sector: u32, error: *mut i32) -> c_int;
     fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
+    fn xcore_dhara_map_sync_diagnostic(stage: *mut u32, page: *mut u32, error: *mut u32, steps: *mut u32);
+}
+
+pub(crate) fn map_sync_diagnostic() -> (u32, u32, u32, u32) {
+    let mut stage = 0;
+    let mut page = u32::MAX;
+    let mut error = 0;
+    let mut steps = 0;
+    unsafe {
+        xcore_dhara_map_sync_diagnostic(&mut stage, &mut page, &mut error, &mut steps);
+    }
+    (stage, page, error, steps)
 }
 
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
