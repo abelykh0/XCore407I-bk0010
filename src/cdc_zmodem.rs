@@ -12,16 +12,12 @@ use littlefs2::{
 };
 use zmodem2::{Action, Error as ZmodemError, Event, Receiver};
 
-use crate::{nand_fs::ActiveStorage, tusb};
+use crate::{camera, nand_fs::ActiveStorage, tusb};
 
 const NAME_CAPACITY: usize = 64;
 const WIRE_CAPACITY: usize = 64;
 const TRANSFER_TIMEOUT_MS: u32 = 60_000;
 const TEMP_PATH: &[u8] = b"/.zmodem-upload\0";
-
-// CPU-only protocol state belongs in CCM, not the USB DMA/SRAM region.
-#[unsafe(link_section = ".ccmram.zmodem")]
-static mut RECEIVER_STORAGE: MaybeUninit<Receiver> = MaybeUninit::uninit();
 
 pub struct State {
     receiver: Option<NonNull<Receiver>>,
@@ -160,7 +156,9 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     if let Some(fs) = fs {
         remove_partial_file(fs, state);
     }
-    state.receiver = None;
+    if state.receiver.take().is_some() {
+        camera::release_cdc_receiver_storage();
+    }
     state.final_path_len = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
@@ -267,10 +265,21 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     if !storage_available || state.receiver.is_some() {
         return Err(());
     }
-    // SAFETY: ZMODEM has one foreground session; state.receiver is the
-    // ownership flag and is cleared on every teardown path.
-    let storage = unsafe { &mut *core::ptr::addr_of_mut!(RECEIVER_STORAGE) };
-    let receiver = Receiver::new_in_place(storage).map_err(|_| ())?;
+    let (storage, storage_len) = camera::claim_cdc_receiver_storage().ok_or(())?;
+    if storage_len < core::mem::size_of::<Receiver>()
+        || (storage as usize) % core::mem::align_of::<Receiver>() != 0
+    {
+        camera::release_cdc_receiver_storage();
+        return Err(());
+    }
+    let storage = unsafe { &mut *storage.cast::<MaybeUninit<Receiver>>() };
+    let receiver = match Receiver::new_in_place(storage) {
+        Ok(receiver) => receiver,
+        Err(_) => {
+            camera::release_cdc_receiver_storage();
+            return Err(());
+        }
+    };
     receiver.set_manual_file_accept(true);
     let receiver = NonNull::from(receiver);
     state.final_path_len = 0;
@@ -619,5 +628,6 @@ pub fn service(
         if failed {
             state.discard_input_until_ms = now_ms.wrapping_add(1_000);
         }
+        camera::release_cdc_receiver_storage();
     }
 }
