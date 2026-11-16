@@ -713,8 +713,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         }
         hardware_ecc[chunk_index] = chunk_ecc;
         // Software ECC is diagnostic-only; it is not needed to program NAND.
-        // Keep it out of the normal path and preserve the known-good settling
-        // interval after each 512-byte FSMC ECC capture.
+        // Keep it out of the normal page-program path.
         if trace_enabled || sequence_trace_enabled {
             input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
             if sequence_trace_enabled {
@@ -724,7 +723,6 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if trace_enabled {
             input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
         }
-        cortex_m::asm::delay(10_000);
         encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
 
     }
