@@ -8,7 +8,7 @@ use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 use littlefs2::{
     fs::Filesystem,
     fs::FileAllocation,
-    io::{Error as LfsError, Read, Seek, SeekFrom, Write},
+    io::{Error as LfsError, SeekFrom, Write},
     path::Path,
 };
 use zmodem2::{Action, Error as ZmodemError, Event, FileInfo, Position, Receiver, Sender};
