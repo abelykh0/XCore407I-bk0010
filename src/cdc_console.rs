@@ -1,6 +1,7 @@
 //! Minimal CDC command console and ZMODEM upload entry point.
 
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use littlefs2::{fs::Filesystem, path::Path};
 
@@ -15,7 +16,8 @@ static mut ZMODEM_PROBE_LEN: usize = 0;
 static mut ZMODEM_PROBE_MATCHED: bool = false;
 static mut ZMODEM_START_FAILED: bool = false;
 static mut WAS_CONNECTED: bool = false;
-static mut BANNER_PENDING: bool = false;
+static DTR_ASSERTED: AtomicBool = AtomicBool::new(false);
+static BANNER_PENDING: AtomicBool = AtomicBool::new(false);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
@@ -25,6 +27,23 @@ const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
+
+/// TinyUSB reports DTR changes while processing SET_CONTROL_LINE_STATE.
+/// Keep the callback limited to publishing state; all console I/O stays in
+/// the foreground service below.
+#[unsafe(no_mangle)]
+pub extern "C" fn tud_cdc_line_state_cb(itf: u8, dtr: bool, _rts: bool) {
+    if itf != 0 {
+        return;
+    }
+
+    let was_asserted = DTR_ASSERTED.swap(dtr, Ordering::AcqRel);
+    if dtr && !was_asserted {
+        BANNER_PENDING.store(true, Ordering::Release);
+    } else if !dtr {
+        BANNER_PENDING.store(false, Ordering::Release);
+    }
+}
 
 /// Detect a host opening the CDC port and print the banner once its
 /// configuration has opened both CDC data endpoints.
@@ -37,18 +56,26 @@ pub fn service_connection() {
             ZMODEM_PROBE_MATCHED = false;
             ZMODEM_START_FAILED = false;
             WAS_CONNECTED = true;
-            BANNER_PENDING = true;
+            // Fallback for a DTR edge observed before this foreground pass.
+            BANNER_PENDING.store(true, Ordering::Release);
         } else if !connected {
             WAS_CONNECTED = false;
-            BANNER_PENDING = false;
+            DTR_ASSERTED.store(false, Ordering::Release);
+            BANNER_PENDING.store(false, Ordering::Release);
         }
 
-        // DTR can be asserted before SET_CONFIGURATION has opened the CDC
-        // bulk endpoints. Keep the banner pending instead of writing into an
-        // unopened TX stream; retry on each foreground USB service pass.
-        if BANNER_PENDING && connected && tusb::tud_cdc_n_ready(0) {
-            write_status(BANNER);
-            BANNER_PENDING = false;
+        if connected && tusb::tud_cdc_n_ready(0) {
+            // Queue the banner only once. A failed endpoint claim does not
+            // discard TinyUSB's TX FIFO, so keep retrying flush below.
+            if BANNER_PENDING.load(Ordering::Acquire) {
+                write_status(BANNER);
+                BANNER_PENDING.store(false, Ordering::Release);
+            }
+
+            // CDC write_flush() may return zero while the IN endpoint is
+            // busy. Retry from the foreground loop until the FIFO drains;
+            // do not wait for another character to trigger the next flush.
+            let _ = tusb::tud_cdc_n_write_flush(0);
         }
     }
 }
