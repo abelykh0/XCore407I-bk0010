@@ -164,17 +164,6 @@ pub(crate) fn release_cdc_receiver_storage() {
 
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);
 
-fn write_canvas(index: usize, value: u8) {
-    unsafe {
-        if index < CANVAS_MAIN_BYTES {
-            core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(index).write(value);
-        } else {
-            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>()
-                .add(index - CANVAS_MAIN_BYTES).write(value);
-        }
-    }
-}
-
 fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
     unsafe {
         if offset < CANVAS_MAIN_BYTES {
@@ -542,7 +531,7 @@ pub fn show_usb_status(message: &[u8]) {
 }
 
 /// Draw one fixed 8-pixel text row for the NAND file browser.
-pub fn show_file_browser_line(row: usize, message: &[u8], selected: bool) {
+pub fn show_file_browser_line(row: usize, message: &[u8], _selected: bool) {
     use crate::font8x8::FONT8X8;
 
     if row >= CANVAS_HEIGHT / 8 {
@@ -727,17 +716,6 @@ impl Nv12DemoImage {
         self.offset = 0;
         self.frame_id = false;
         self.pc_connect_screen = true;
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.offset = 0;
-        self.frame_id = false;
-        self.cpu_available_percent = 100;
-        self.cpu_generate_percent = 0;
-        self.cpu_submit_percent = 0;
-        self.cached_y_source_row = u16::MAX;
-        self.cached_uv_source_row = u16::MAX;
-        self.cached_clock_version = CLOCK_VERSION.load(Ordering::Relaxed);
     }
 
     /// Set the estimated CPU percentage available outside measured UVC work.
