@@ -505,6 +505,47 @@ fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
     ecc_linux_to_fsmc(ecc_software_512(data))
 }
 
+/// Snapshot of the most recent page-program ECC verification.
+#[derive(Clone, Copy)]
+pub(crate) struct EccWriteTrace {
+    pub page: u32,
+    pub flags: u32,
+    pub hardware: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub input_software: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub stored: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub readback_software: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub input_fingerprint: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub readback_fingerprint: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+}
+
+static ECC_WRITE_TRACE_ENABLED: AtomicU32 = AtomicU32::new(0);
+static mut LAST_ECC_WRITE_TRACE: EccWriteTrace = EccWriteTrace {
+    page: u32::MAX,
+    flags: 0,
+    hardware: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    input_software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    readback_software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    input_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    readback_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+};
+
+pub(crate) fn set_ecc_write_trace_enabled(enabled: bool) {
+    ECC_WRITE_TRACE_ENABLED.store(enabled as u32, Ordering::Release);
+}
+
+pub(crate) fn ecc_write_trace() -> EccWriteTrace {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LAST_ECC_WRITE_TRACE)) }
+}
+
+fn ecc_data_fingerprint(data: &[u8]) -> u32 {
+    let mut fingerprint = 0x811C_9DC5u32;
+    for &byte in data {
+        fingerprint = (fingerprint ^ byte as u32).wrapping_mul(0x0100_0193);
+    }
+    fingerprint
+}
+
 /// Program a full page and store four FSMC-generated 512-byte ECC values.
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
@@ -516,7 +557,11 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     address((page >> 8) as u8);
     cortex_m::asm::delay(1_000);
 
+    let trace_enabled = ECC_WRITE_TRACE_ENABLED.load(Ordering::Acquire) != 0;
     let mut ecc = [0xFFu8; ECC_OOB_BYTES];
+    let mut hardware_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    let mut input_software_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    let mut input_fingerprint = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
         ecc_begin_chunk();
         for &byte in chunk { write_data(byte); }
@@ -526,6 +571,11 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             return false;
         }
         let chunk_ecc = ecc_end_chunk();
+        hardware_ecc[chunk_index] = chunk_ecc;
+        if trace_enabled {
+            input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
+            input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
+        }
         encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
 
@@ -553,6 +603,54 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if status & 0x01 != 0 {
         record_nand_device_failure(5, page, status as u32);
         return false;
+    }
+    if trace_enabled {
+        // Verify what was actually committed, without changing the result of
+        // the NAND program operation if this additional diagnostic read fails.
+        let readback = unsafe {
+            &mut *core::ptr::addr_of_mut!(ECC_DIAGNOSTIC_PAGE_BUFFER)
+        };
+        let data_ok = read_page(page, 0, readback);
+        let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
+        let spare_ok = read_page(
+            page,
+            PAGE_SIZE as u16 + ECC_OOB_OFFSET,
+            &mut spare,
+        );
+        let tag_ok = spare_ok && spare[ECC_OOB_BYTES..] == ECC_TAG;
+        let mut trace = EccWriteTrace {
+            page,
+            flags: 1, // NAND program/status succeeded.
+            hardware: hardware_ecc,
+            input_software: input_software_ecc,
+            stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+            readback_software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+            input_fingerprint,
+            readback_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        };
+        if data_ok {
+            trace.flags |= 1 << 1;
+            for (index, chunk) in readback.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
+                trace.readback_software[index] = ecc_software_512_fsmc(chunk);
+                trace.readback_fingerprint[index] = ecc_data_fingerprint(chunk);
+            }
+        }
+        if spare_ok { trace.flags |= 1 << 2; }
+        if tag_ok {
+            trace.flags |= 1 << 3;
+            for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+                let offset = index * ECC_BYTES_PER_CHUNK;
+                trace.stored[index] = u32::from_le_bytes([
+                    spare[offset], spare[offset + 1], spare[offset + 2], 0,
+                ]);
+            }
+        }
+        unsafe {
+            core::ptr::write_volatile(
+                core::ptr::addr_of_mut!(LAST_ECC_WRITE_TRACE),
+                trace,
+            );
+        }
     }
     true
 }
