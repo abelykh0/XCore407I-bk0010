@@ -25,6 +25,23 @@ const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nA
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
+/// Detect a host opening the CDC port and print the console banner immediately.
+pub fn service_connection() {
+    unsafe {
+        let connected = tusb::tud_cdc_n_connected(0);
+        if connected && !WAS_CONNECTED {
+            LINE_LEN = 0;
+            ZMODEM_PROBE_LEN = 0;
+            ZMODEM_PROBE_MATCHED = false;
+            ZMODEM_START_FAILED = false;
+            WAS_CONNECTED = true;
+            write_status(BANNER);
+        } else if !connected {
+            WAS_CONNECTED = false;
+        }
+    }
+}
+
 /// Print the exact non-destructive storage initialization or mount failure.
 pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
     use crate::nand_fs::{FsAccessError, InitError};
@@ -549,13 +566,7 @@ pub fn service(
     let mut format_requested = FormatRequest::None;
     unsafe {
         let connected = tusb::tud_cdc_n_connected(0);
-        if connected && !WAS_CONNECTED {
-            LINE_LEN = 0;
-            ZMODEM_PROBE_LEN = 0;
-            ZMODEM_PROBE_MATCHED = false;
-            ZMODEM_START_FAILED = false;
-            write_status(BANNER);
-        }
+        service_connection();
         if !connected {
             LINE_LEN = 0;
             ZMODEM_PROBE_LEN = 0;
