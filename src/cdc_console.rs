@@ -155,6 +155,14 @@ fn write_decimal(mut value: usize) {
     write_status(&digits[start..]);
 }
 
+pub(crate) fn write_send_complete(name: &[u8], size: u32) {
+    write_status(b"\\r\\nReceived file ");
+    write_status(name);
+    write_status(b" size ");
+    write_decimal(size as usize);
+    write_status(b" bytes.\\r\\n> ");
+}
+
 fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
     // DELETE accepts one root-level filename only. Keep the same conservative
     // character policy as ZMODEM uploads; never accept paths or separators.
