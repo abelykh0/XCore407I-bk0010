@@ -670,6 +670,8 @@ pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
 pub(crate) struct EccPageComparison {
     pub stored: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub software: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    /// FNV-1a fingerprints of each raw 512-byte chunk, before ECC correction.
+    pub data_fingerprint: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
 }
 
 pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> {
@@ -691,6 +693,7 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
     let mut result = EccPageComparison {
         stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        data_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     };
     for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
         let offset = index * ECC_BYTES_PER_CHUNK;
@@ -698,6 +701,11 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
             spare[offset], spare[offset + 1], spare[offset + 2], 0,
         ]);
         result.software[index] = ecc_software_512_fsmc(chunk);
+        let mut fingerprint = 0x811C_9DC5u32;
+        for &byte in chunk {
+            fingerprint = (fingerprint ^ byte as u32).wrapping_mul(0x0100_0193);
+        }
+        result.data_fingerprint[index] = fingerprint;
     }
     Some(result)
 }
