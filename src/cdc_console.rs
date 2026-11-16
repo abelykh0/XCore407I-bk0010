@@ -350,7 +350,7 @@ pub fn report_format_failure(error: crate::nand_fs::InitError) {
         InitError::DharaCapacity => b"insufficient Dhara capacity",
         InitError::ProvisionFailed => b"Dhara provisioning or block retirement failed",
     };
-    write_status(b"\r\nNAND format failed: ");
+    write_status(b"\r\nStorage format failed: ");
     write_status(reason);
     write_status(b".\r\n");
 
