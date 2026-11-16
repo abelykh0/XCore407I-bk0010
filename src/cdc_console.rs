@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
 #[cfg(feature = "nand-diagnostics")]
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
@@ -603,6 +603,23 @@ pub fn service(
                         write_status(HELP);
                         #[cfg(feature = "nand-diagnostics")]
                         write_status(HELP_NAND_DIAGNOSTICS);
+                    } else if line.len() > 5
+                        && line[..5].eq_ignore_ascii_case(b"SEND ")
+                    {
+                        if let Some(fs) = fs {
+                            match cdc_zmodem::start_send(fs, zmodem, &line[5..], now_ms) {
+                                Ok(()) => write_status(b"\r\nZMODEM send starting; waiting for terminal receiver...\r\n"),
+                                Err(1) => write_status(b"\r\nSEND: another ZMODEM transfer is active.\r\n> "),
+                                Err(2) => write_status(b"\r\nSEND: invalid filename. Use a root-level filename without a path.\r\n> "),
+                                Err(3) => write_status(b"\r\nSEND: file not found or metadata unavailable.\r\n> "),
+                                Err(4) => write_status(b"\r\nSEND: file is too large for ZMODEM.\r\n> "),
+                                _ => write_status(b"\r\nSEND: unable to initialize ZMODEM sender.\r\n> "),
+                            }
+                        } else {
+                            write_status(b"\r\nStorage unavailable.\r\n> ");
+                        }
+                    } else if command_is(line, b"SEND") {
+                        write_status(b"\r\nUsage: SEND filename\r\n> ");
                     } else if command_is(line, b"STATUS") {
                         write_status(if fs.is_some() {
                             STATUS_MOUNTED
