@@ -499,9 +499,28 @@ int dhara_map_trim(struct dhara_map *m, dhara_sector_t s, dhara_error_t *err)
 	return -1;
 }
 
+/* Last map_sync failure: stage, physical journal page, Dhara cause, steps. */
+static volatile uint32_t sync_diag_stage;
+static volatile uint32_t sync_diag_page;
+static volatile uint32_t sync_diag_error;
+static volatile uint32_t sync_diag_steps;
+
+void xcore_dhara_map_sync_diagnostic(uint32_t *stage, uint32_t *page,
+				      uint32_t *error, uint32_t *steps)
+{
+	if (stage) *stage = sync_diag_stage;
+	if (page) *page = sync_diag_page;
+	if (error) *error = sync_diag_error;
+	if (steps) *steps = sync_diag_steps;
+}
+
 int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 {
 	unsigned int steps = 0;
+	sync_diag_stage = 0;
+	sync_diag_page = DHARA_PAGE_NONE;
+	sync_diag_error = 0;
+	sync_diag_steps = 0;
 	/* raw_gc() copies each live page to the head before dequeuing its
 	 * old location. The queue length therefore doesn't shrink until the
 	 * next checkpoint is written. Allow one full checkpoint interval in
@@ -511,7 +530,10 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 
 	while (!dhara_journal_is_clean(&m->journal)) {
 		if (++steps > max_steps) {
+			sync_diag_stage = 1;
+			sync_diag_steps = steps;
 			dhara_set_error(err, DHARA_E_TOO_BAD);
+			sync_diag_error = DHARA_E_TOO_BAD;
 			return -1;
 		}
 		dhara_page_t p = dhara_journal_peek(&m->journal);
@@ -527,8 +549,15 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 		}
 
 		if (ret < 0) {
-			if (try_recover(m, my_err, err) < 0)
+			sync_diag_stage = p == DHARA_PAGE_NONE ? 2 : 3;
+			sync_diag_page = p;
+			sync_diag_error = my_err;
+			sync_diag_steps = steps;
+			if (try_recover(m, my_err, err) < 0) {
+				sync_diag_stage = 4;
+				if (err) sync_diag_error = *err;
 				return -1;
+			}
 		}
 	}
 
