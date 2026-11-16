@@ -1221,7 +1221,10 @@ pub(crate) fn configure_fsmc() {
         write_volatile((FSMC_BASE + 0x6C) as *mut u32, timing);
         // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
         // individual 512-byte data chunks; ECCEN remains clear while idle.
-        let control = (1 << 1) | (1 << 2) | (1 << 3) | (2 << 9) | (2 << 13) | (1 << 17);
+        // TCLR=6 gives (6 + MEMSET(4) + 2) / 168 MHz = 71.4 ns
+        // from CLE deassertion to RE assertion, exceeding the NAND tWHR
+        // minimum of 60 ns for command-to-read/status transitions.
+        let control = (1 << 1) | (1 << 2) | (1 << 3) | (6 << 9) | (2 << 13) | (1 << 17);
         write_volatile(pcr2, control);
         let _ = read_volatile(pcr2);
     }
