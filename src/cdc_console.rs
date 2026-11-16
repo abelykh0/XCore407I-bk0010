@@ -154,8 +154,28 @@ fn write_decimal(mut value: usize) {
 }
 
 fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
-    write_status(b"\r\nLittleFS root:\r\n");
-    let Ok(root) = Path::from_bytes_with_nul(b"/\0") else {
+    // Emit progress before each potentially blocking LittleFS operation. This
+    // distinguishes a CDC TX stall from a NAND/Dhara directory-read stall.
+    write_status(b"\r\nLIST: command accepted.\r\n");
+    write_status(b"LittleFS total size: ");
+    write_decimal(fs.total_space());
+    write_status(b" bytes\r\n");
+
+    write_status(b"LittleFS free space: ");
+    match fs.available_space() {
+        Ok(bytes) => {
+            write_decimal(bytes);
+            write_status(b" bytes\r\n");
+        }
+        Err(error) => {
+            write_status(b"query failed; LittleFS error 0x");
+            write_hex_u32(error.code() as u32);
+            write_status(b"\r\n");
+        }
+    }
+
+    write_status(b"LIST: reading root directory...\r\n");
+    let Ok(root) = Path::from_bytes_with_nul(b"/\\0") else {
         write_status(b"Cannot construct root path.\r\n> ");
         return;
     };
@@ -179,23 +199,26 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
         Ok(())
     });
 
-    if let Err(error) = result {
-        write_status(b"Directory read failed; LittleFS error: 0x");
-        write_hex_u32(error.code() as u32);
-        write_status(b"\r\n");
-        let (operation, location, storage_error) =
-            crate::dhara_fs::storage_io_diagnostic();
-        if operation != 0 {
-            write_status(b"Dhara operation: ");
-            write_hex_u32(operation);
-            write_status(b" logical sector: 0x");
-            write_hex_u32(location);
-            write_status(b" error: 0x");
-            write_hex_u32(storage_error);
+    match result {
+        Ok(()) => write_status(b"LIST: directory read complete.\r\n> "),
+        Err(error) => {
+            write_status(b"Directory read failed; LittleFS error: 0x");
+            write_hex_u32(error.code() as u32);
             write_status(b"\r\n");
+            let (operation, location, storage_error) =
+                crate::dhara_fs::storage_io_diagnostic();
+            if operation != 0 {
+                write_status(b"Dhara operation: ");
+                write_hex_u32(operation);
+                write_status(b" logical sector: 0x");
+                write_hex_u32(location);
+                write_status(b" error: 0x");
+                write_hex_u32(storage_error);
+                write_status(b"\r\n");
+            }
+            write_status(b"> ");
         }
     }
-    write_status(b"> ");
 }
 
 
