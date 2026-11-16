@@ -476,29 +476,85 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
     }
 }
 
+struct ListOutput {
+    buffer: [u8; 256],
+    len: usize,
+}
+
+impl ListOutput {
+    fn new() -> Self {
+        Self {
+            buffer: [0; 256],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let available = self.buffer.len() - self.len;
+            if available == 0 {
+                self.flush();
+                continue;
+            }
+            let count = available.min(bytes.len());
+            self.buffer[self.len..self.len + count].copy_from_slice(&bytes[..count]);
+            self.len += count;
+            bytes = &bytes[count..];
+        }
+    }
+
+    fn push_decimal_grouped(&mut self, mut value: usize) {
+        let mut digits = [0u8; 13];
+        let mut start = digits.len();
+        let mut group_digits = 0usize;
+        loop {
+            start -= 1;
+            digits[start] = b'0' + (value % 10) as u8;
+            value /= 10;
+            group_digits += 1;
+            if value == 0 {
+                break;
+            }
+            if group_digits == 3 {
+                start -= 1;
+                digits[start] = b',';
+                group_digits = 0;
+            }
+        }
+        self.push(&digits[start..]);
+    }
+
+    fn flush(&mut self) {
+        if self.len != 0 {
+            write_status(&self.buffer[..self.len]);
+            self.len = 0;
+        }
+    }
+}
+
 fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool) {
-    // Emit progress before each potentially blocking LittleFS operation. This
-    // distinguishes a CDC TX stall from a NAND/Dhara directory-read stall.
     write_status(b"\r\nLIST: command accepted.\r\n");
     write_status(b"LittleFS total size: ");
     write_decimal_grouped(fs.total_space());
     write_status(b" bytes\r\n");
-
     write_status(b"LIST: reading root directory...\r\n");
+
+    let mut output = ListOutput::new();
     let result = crate::nand_fs::read_root_directory(fs, show_sizes, |path_bytes, is_dir, size| {
         let path = &path_bytes[..path_bytes.len() - 1];
-        write_status(b"  ");
-        write_status(path);
+        output.push(b"  ");
+        output.push(path);
         if is_dir {
-            write_status(b" [DIR]");
+            output.push(b" [DIR]");
         } else if show_sizes {
-            write_status(b"  ");
-            write_decimal_grouped(size);
-            write_status(b" bytes");
+            output.push(b"  ");
+            output.push_decimal_grouped(size);
+            output.push(b" bytes");
         }
-        write_status(b"\r\n");
+        output.push(b"\r\n");
         Ok(())
     });
+    output.flush();
 
     match result {
         Ok(()) => write_status(b"LIST: directory read complete.\r\n"),
@@ -538,7 +594,6 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool) {
     }
     write_status(b"> ");
 }
-
 
 
 pub fn report_format_status(bytes: &[u8]) {
