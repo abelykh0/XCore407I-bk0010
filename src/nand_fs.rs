@@ -1367,7 +1367,15 @@ pub fn read_root_directory(
     mut visit: impl FnMut(&[u8], bool, usize) -> LfsResult<()>,
 ) -> LfsResult<()> {
     fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
-        for item in directory {
+        loop {
+            let item = if include_file_sizes {
+                directory.next()
+            } else {
+                directory.next_without_size()
+            };
+            let Some(item) = item else {
+                break;
+            };
             let entry = item?;
             let is_dir = entry.file_type().is_dir();
             let size = if include_file_sizes && !is_dir {
