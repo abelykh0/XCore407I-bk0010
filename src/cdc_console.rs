@@ -730,6 +730,8 @@ pub fn service(
                                 write_hex_u32(trace.pcr_before[chunk]);
                                 write_status(b" PCR-enabled=0x");
                                 write_hex_u32(trace.pcr_enabled[chunk]);
+                                write_status(b" ECC-before-data=0x");
+                                write_hex_u32(trace.ecc_before_data[chunk]);
                                 write_status(b" SR-before-wait=0x");
                                 write_hex_u32(trace.status_before_wait[chunk]);
                                 write_status(b" SR-after-wait=0x");
@@ -740,6 +742,8 @@ pub fn service(
                                 write_hex_u32(trace.software_ecc[chunk]);
                                 write_status(b" PCR-after-disable=0x");
                                 write_hex_u32(trace.pcr_after_disable[chunk]);
+                                write_status(b" ECC-after-disable=0x");
+                                write_hex_u32(trace.ecc_after_disable[chunk]);
                                 write_status(b"\r\n");
                             }
                             write_status(b"  OOB SR-before-wait=0x");
