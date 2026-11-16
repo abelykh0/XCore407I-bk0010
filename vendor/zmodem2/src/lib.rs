@@ -21,6 +21,7 @@
 //! 3. The sender offers files with [`Sender::start_file`] and ends the session
 //!    with [`Sender::finish`].
 
+#![allow(warnings)]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 #![allow(clippy::result_large_err)]
