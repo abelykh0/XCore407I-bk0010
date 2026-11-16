@@ -729,6 +729,8 @@ pub fn service(
                                 write_hex_u32(trace.status_after_wait[chunk]);
                                 write_status(b" ECC-after-wait=0x");
                                 write_hex_u32(trace.ecc_after_wait[chunk]);
+                                write_status(b" SW-ECC=0x");
+                                write_hex_u32(trace.software_ecc[chunk]);
                                 write_status(b" PCR-after-disable=0x");
                                 write_hex_u32(trace.pcr_after_disable[chunk]);
                                 write_status(b"\r\n");
