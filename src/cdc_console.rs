@@ -485,7 +485,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     write_status(b" bytes\r\n");
 
     write_status(b"LIST: reading root directory...\r\n");
-    let result = crate::nand_fs::read_root_directory(fs, |path_bytes, is_dir, size| {
+    let result = crate::nand_fs::read_root_directory(fs, true, |path_bytes, is_dir, size| {
         let path = &path_bytes[..path_bytes.len() - 1];
         write_status(b"  ");
         write_status(path);
