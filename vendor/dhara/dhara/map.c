@@ -15,6 +15,7 @@
  */
 
 #include <string.h>
+#include <stdint.h>
 #include "dhara/bytes.h"
 #include "dhara/map.h"
 
