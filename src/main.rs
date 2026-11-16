@@ -482,10 +482,14 @@ fn main() -> ! {
 
         if format_request == xcore407i_blinker::cdc_console::FormatRequest::LittleFs {
             xcore407i_blinker::cdc_console::report_format_status(b"Filesystem released. Formatting LittleFS only; Dhara journal is preserved...\r\n");
+            FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+            xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
             let format_result = xcore407i_blinker::nand_fs::format_existing_littlefs();
+            xcore407i_blinker::nand_fs::set_io_service_hook(None);
+            FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
             match format_result {
                 Ok(()) => {
-                    xcore407i_blinker::cdc_console::report_format_status(b"LittleFS-only format complete and verified.\\r\\n");
+                    xcore407i_blinker::cdc_console::report_format_status(b"LittleFS-only format complete and verified.\r\n");
                     just_formatted = true;
                     continue;
                 }
