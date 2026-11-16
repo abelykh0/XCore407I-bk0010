@@ -103,6 +103,10 @@ const _: () = assert!(FSMC_ECC_CHUNKS_PER_PAGE == 4);
 pub(crate) const RB_MASK: u32 = 1 << 6;
 pub(crate) const CMD: *mut u8 = (NAND_BASE | (1 << 17)) as *mut u8;
 pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
+// Bank 2 attribute-space alias of the address latch. RM0090 §36.6.5
+// uses this for the final address byte so ATTHOLD can keep NCE asserted
+// across NAND tWB without penalizing ordinary common-space accesses.
+const ATTR_ADDR: *mut u8 = (NAND_BASE | (1 << 27) | (1 << 16)) as *mut u8;
 pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
 // Keep the interactive ECCPAGE diagnostic responsive if NAND R/B never rises.
@@ -239,6 +243,8 @@ pub enum InitError {
 
 pub(crate) fn command(value: u8) { unsafe { write_volatile(CMD, value) } }
 pub(crate) fn address(value: u8) { unsafe { write_volatile(ADDR, value) } }
+#[inline]
+fn address_last(value: u8) { unsafe { write_volatile(ATTR_ADDR, value) } }
 pub(crate) fn write_data(value: u8) { unsafe { write_volatile(DATA, value) } }
 pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 
@@ -334,7 +340,7 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
     address(column as u8);
     address((column >> 8) as u8);
     address(page as u8);
-    address((page >> 8) as u8);
+    address_last((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb_timeout(timeout) {
         record_nand_device_failure(1, page, 0);
@@ -348,7 +354,7 @@ pub(crate) fn erase_physical_block(block: u16) -> bool {
     let first_page = block as u32 * PAGES_PER_BLOCK;
     command(0x60);
     address(first_page as u8);
-    address((first_page >> 8) as u8);
+    address_last((first_page >> 8) as u8);
     command(0xD0);
     if !wait_ready_rb() {
         record_nand_device_failure(2, block as u32, 0);
@@ -658,7 +664,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     address(0);
     address(0);
     address(page as u8);
-    address((page >> 8) as u8);
+    address_last((page >> 8) as u8);
     cortex_m::asm::delay(1_000);
 
     let trace_enabled = ECC_WRITE_TRACE_ENABLED.load(Ordering::Acquire) != 0;
@@ -1141,7 +1147,7 @@ pub(crate) fn ecc_hardware_compare_page(
     address(0);
     address(0);
     address(page as u8);
-    address((page >> 8) as u8);
+    address_last((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb_timeout(ECC_DIAGNOSTIC_TIMEOUT) { return Err((3, page)); }
 
@@ -1268,10 +1274,14 @@ pub(crate) fn configure_fsmc() {
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
         let pcr2 = FSMC_PCR2;
-        let timing = 4 | (8 << 8) | (4 << 16) | (2 << 24);
+        let common_timing = 4 | (8 << 8) | (4 << 16) | (2 << 24);
+        // RM0090 §36.6.5: the final NAND address byte is written through
+        // attribute space with ATTHOLD long enough to cover tWB. At HCLK =
+        // 168 MHz, 18 cycles provide about 107 ns (> K9F1G08U0E tWB max 100 ns).
+        let attribute_timing = 4 | (8 << 8) | (18 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
-        write_volatile((FSMC_BASE + 0x68) as *mut u32, timing);
-        write_volatile((FSMC_BASE + 0x6C) as *mut u32, timing);
+        write_volatile((FSMC_BASE + 0x68) as *mut u32, common_timing);
+        write_volatile((FSMC_BASE + 0x6C) as *mut u32, attribute_timing);
         // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
         // individual 512-byte data chunks; ECCEN remains clear while idle.
         // TCLR=6 gives (6 + MEMSET(4) + 2) / 168 MHz = 71.4 ns
