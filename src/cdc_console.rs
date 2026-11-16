@@ -175,7 +175,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     }
 
     write_status(b"LIST: reading root directory...\r\n");
-    let Ok(root) = Path::from_bytes_with_nul(b"/\\0") else {
+    let Ok(root) = Path::from_bytes_with_nul(b"/\0") else {
         write_status(b"Cannot construct root path.\r\n> ");
         return;
     };
