@@ -114,7 +114,7 @@ impl State {
     }
 
     pub fn active(&self) -> bool {
-        self.receiver.is_some() || self.sender.is_some()
+        self.receiver.is_some() || self.sender.is_some() || self.session_complete_pending
     }
 
     /// Discard trailing sender bytes after a failed session so they cannot
@@ -191,6 +191,7 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
         camera::release_cdc_receiver_storage();
     }
     state.sender = None;
+    state.session_complete_pending = false;
     state.send_path_len = 0;
     state.send_wire_len = 0;
     state.send_wire_pos = 0;
@@ -452,6 +453,7 @@ pub fn start_send(
     state.send_wire_pos = 0;
     state.send_last_activity_ms = now_ms;
     state.send_last_handshake_ms = now_ms;
+    state.session_complete_pending = false;
     state.sender = Some(sender);
     Ok(())
 }
@@ -463,10 +465,17 @@ fn service_sender(
     now_ms: u32,
 ) -> bool {
     let Some(mut sender) = state.sender.take() else {
+        if state.session_complete_pending {
+            state.session_complete_pending = false;
+            state.send_path_len = 0;
+            state.send_wire_len = 0;
+            state.send_wire_pos = 0;
+            super::cdc_console::write_status(b"\r\nZMODEM send complete.\r\n> ");
+            return true;
+        }
         return false;
     };
     let mut finished = false;
-    let mut session_complete_pending = false;
 
     for _ in 0..8 {
         match sender.poll() {
@@ -484,11 +493,11 @@ fn service_sender(
                 if count < len {
                     break;
                 }
-                // SessionCompleted is reported before the sender's final
-                // "OO" acknowledgement. Do not tear down the sender until
-                // those bytes have been written to CDC IN.
-                if session_complete_pending {
-                    super::cdc_console::write_status(b"\r\nZMODEM send complete.\r\n> ");
+                // SessionCompleted is reported before the final "OO" bytes.
+                // Keep the console suspended until a later service pass, so
+                // TinyUSB gets an opportunity to transmit the protocol tail
+                // before console text is queued on the same CDC endpoint.
+                if state.session_complete_pending {
                     finished = true;
                     break;
                 }
@@ -539,7 +548,7 @@ fn service_sender(
             Action::Event(Event::SessionCompleted) => {
                 // The protocol engine reports completion before exposing its
                 // final "OO" acknowledgement as WriteWire.
-                session_complete_pending = true;
+                state.session_complete_pending = true;
             }
             Action::Event(Event::Aborted) => {
                 super::cdc_console::write_status(b"\r\nZMODEM send aborted or failed.\r\n> ");
