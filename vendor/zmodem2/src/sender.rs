@@ -402,15 +402,17 @@ impl Sender {
         kind: SubpacketType,
         include_header: bool,
     ) -> Result<(), Error> {
+        // Copy before queue_writer() mutably borrows self.
+        let encoding = self.data_encoding;
         let mut writer = self.queue_writer()?;
         if include_header
-            && Header::new(self.data_encoding, Frame::ZDATA, offset.to_le_bytes())
+            && Header::new(encoding, Frame::ZDATA, offset.to_le_bytes())
                 .write(&mut writer)?
                 .is_none()
         {
             return Err(Error::OutOfMemory);
         }
-        if write_subpacket(&mut writer, self.data_encoding, kind, data)?.is_none() {
+        if write_subpacket(&mut writer, encoding, kind, data)?.is_none() {
             return Err(Error::OutOfMemory);
         }
         Ok(())
