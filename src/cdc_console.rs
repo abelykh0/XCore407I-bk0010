@@ -185,6 +185,9 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
         write_status(b"DELETE: file not found.\r\n> ");
         return;
     }
+    // Isolate this operation's lower-level failure from earlier filesystem
+    // diagnostics so an LFS_ERR_IO can be traced to a Dhara callback.
+    crate::dhara_fs::clear_storage_io_diagnostic();
     match fs.remove(path) {
         Ok(()) => {
             write_status(b"DELETE: removed /");
@@ -194,7 +197,28 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
         Err(error) => {
             write_status(b"DELETE: LittleFS remove failed; error 0x");
             write_hex_u32(error.code() as u32);
-            write_status(b"\r\n> ");
+            write_status(b"\r\n");
+            let (operation, location, storage_error) =
+                crate::dhara_fs::storage_io_diagnostic();
+            if operation == 0 {
+                write_status(b"DELETE: no Dhara Storage callback failure was recorded.\r\n");
+            } else {
+                let operation_name: &[u8] = match operation {
+                    1 => b"read",
+                    2 => b"write",
+                    3 => b"sync",
+                    4 => b"trim",
+                    _ => b"unknown",
+                };
+                write_status(b"DELETE: Dhara ");
+                write_status(operation_name);
+                write_status(b" failed at logical sector 0x");
+                write_hex_u32(location);
+                write_status(b", error 0x");
+                write_hex_u32(storage_error);
+                write_status(b"\r\n");
+            }
+            write_status(b"> ");
         }
     }
 }
