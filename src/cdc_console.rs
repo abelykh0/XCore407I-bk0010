@@ -1100,7 +1100,7 @@ pub fn service(
                                     }
 
                                     match crate::nand_fs::ecc_software_compare_page(page) {
-                                        Some(result) => {
+                                        Ok(result) => {
                                             for chunk in 0..4 {
                                                 let stored = result.stored[chunk];
                                                 let software = result.software[chunk];
@@ -1121,7 +1121,7 @@ pub fn service(
                                                 }
                                             }
                                         }
-                                        None => {
+                                        Err(_) => {
                                             page_read_errors += 1;
                                             block_suspect = true;
                                         }
