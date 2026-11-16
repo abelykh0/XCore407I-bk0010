@@ -511,7 +511,7 @@ pub(crate) fn write_status(bytes: &[u8]) {
         if written == 0 {
             stalled += 1;
             unsafe {
-                let _ = tusb::tud_task_ext(0, false);
+                let _ = tusb::tud_task_ext(1, false);
             }
             core::hint::spin_loop();
         } else {
