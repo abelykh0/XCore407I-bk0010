@@ -115,21 +115,22 @@ pub const CANVAS_BYTES: usize = WIDTH * CANVAS_HEIGHT;
 pub const CANVAS_TAIL_BYTES: usize = 46_848;
 pub const CANVAS_MAIN_BYTES: usize = CANVAS_BYTES - CANVAS_TAIL_BYTES;
 
+#[derive(Clone, Copy)]
 #[repr(C, align(4))]
 struct AlignedCanvas<const N: usize>([u8; N]);
 
 static mut DEMO_CANVAS: AlignedCanvas<CANVAS_MAIN_BYTES> = AlignedCanvas([0; CANVAS_MAIN_BYTES]);
 #[repr(C, align(8))]
 union CanvasTailStorage {
-    canvas: core::mem::ManuallyDrop<AlignedCanvas<CANVAS_TAIL_BYTES>>,
-    stack: core::mem::ManuallyDrop<[u8; CANVAS_TAIL_BYTES]>,
+    canvas: AlignedCanvas<CANVAS_TAIL_BYTES>,
+    stack: [u8; CANVAS_TAIL_BYTES],
 }
 
 // The CCM tail is the video canvas in normal mode and the CDC alternate stack
 // while the CDC filesystem session is active. Those modes are mutually exclusive.
 #[unsafe(link_section = ".ccmram.canvas")]
 static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
-    CanvasTailStorage { canvas: core::mem::ManuallyDrop::new(AlignedCanvas([0; CANVAS_TAIL_BYTES])) };
+    CanvasTailStorage { canvas: AlignedCanvas([0; CANVAS_TAIL_BYTES]) };
 
 pub(crate) fn cdc_alternate_stack_top() -> *mut u8 {
     unsafe {
