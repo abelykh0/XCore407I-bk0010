@@ -531,6 +531,7 @@ pub(crate) struct EccSequenceTrace {
     pub status_before_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub ecc_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub software_ecc: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub pcr_after_disable: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub oob_status_before_wait: u32,
     pub oob_status_after_wait: u32,
@@ -544,6 +545,7 @@ static mut LAST_ECC_SEQUENCE_TRACE: EccSequenceTrace = EccSequenceTrace {
     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     oob_status_before_wait: 0, oob_status_after_wait: 0,
 };
@@ -560,6 +562,7 @@ pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
                     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     oob_status_before_wait: 0, oob_status_after_wait: 0,
                 });
@@ -646,6 +649,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         oob_status_before_wait: 0, oob_status_after_wait: 0,
     };
@@ -682,6 +686,9 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if trace_enabled {
             input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
             input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
+        }
+        if sequence_trace_enabled {
+            sequence_trace.software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
         }
         encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
     }
