@@ -716,8 +716,12 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         // between 512-byte NAND data bursts changes the failing program path.
         if trace_enabled {
             input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
+            input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
         }
-        input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
+        // Explicit inter-chunk settling interval. The software ECC calculation
+        // previously provided CPU time here, but its result is not needed to
+        // program the NAND page.
+        cortex_m::asm::delay(20_000);
         if sequence_trace_enabled {
             sequence_trace.software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
         }
