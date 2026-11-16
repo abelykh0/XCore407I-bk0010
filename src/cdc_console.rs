@@ -165,7 +165,7 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
                 || matches!(*byte, b'.' | b'_' | b'-' | b'+' | b' ' | b'(' | b')')
         })
     {
-        write_status(b"DELETE: invalid filename. Use a root-level filename without a path.\\r\\n> ");
+        write_status(b"DELETE: invalid filename. Use a root-level filename without a path.\r\n> ");
         return;
     }
 
@@ -174,27 +174,27 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
     path_bytes[1..1 + name.len()].copy_from_slice(name);
     path_bytes[1 + name.len()] = 0;
     let Ok(path) = Path::from_bytes_with_nul(&path_bytes[..name.len() + 2]) else {
-        write_status(b"DELETE: invalid path.\\r\\n> ");
+        write_status(b"DELETE: invalid path.\r\n> ");
         return;
     };
 
     write_status(b"DELETE: checking /");
     write_status(name);
-    write_status(b"...\\r\\n");
+    write_status(b"...\r\n");
     if !fs.exists(path) {
-        write_status(b"DELETE: file not found.\\r\\n> ");
+        write_status(b"DELETE: file not found.\r\n> ");
         return;
     }
     match fs.remove(path) {
         Ok(()) => {
             write_status(b"DELETE: removed /");
             write_status(name);
-            write_status(b".\\r\\n> ");
+            write_status(b".\r\n> ");
         }
         Err(error) => {
             write_status(b"DELETE: LittleFS remove failed; error 0x");
             write_hex_u32(error.code() as u32);
-            write_status(b"\\r\\n> ");
+            write_status(b"\r\n> ");
         }
     }
 }
@@ -1000,14 +1000,14 @@ pub fn service(
                         } else {
                             b"ECCSCAN completed with diagnostic findings. NAND was not modified.\r\n> "
                         });
-                    } else if line.len() > 7
+                    } else if line.len() >= 7
                         && line[..7].iter().zip(b"DELETE").all(|(a, b)| a.to_ascii_uppercase() == *b)
                         && line[6] == b' '
                     {
                         if let Some(fs) = fs {
                             delete_file(fs, &line[7..]);
                         } else {
-                            write_status(b"Storage unavailable.\\r\\n> ");
+                            write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
