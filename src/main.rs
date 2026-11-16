@@ -63,6 +63,7 @@ fn service_cdc_scan_io() {
         let _ = tusb::tud_task_ext(0, false);
         xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
     }
+    xcore407i_blinker::cdc_console::service_connection();
 
     // ECCSCAN can run for a long time in the CDC foreground. Keep the
     // camera producer moving, but advance only one bounded batch per service
