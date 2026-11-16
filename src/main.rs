@@ -405,7 +405,13 @@ fn main() -> ! {
                 unsafe {
                     xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
                         let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
-                        let mount_result = xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
+
+                        // NAND initialization and the initial LittleFS mount happen
+                        // before the filesystem service closure is entered. Keep the
+                        // USB device and PC CONNECT video alive during those operations.
+                        FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+                        xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+                        let mount_result = xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
                             if just_formatted {
                                 xcore407i_blinker::cdc_console::report_format_status(
                                     b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
@@ -434,7 +440,9 @@ fn main() -> ! {
                                     break Ok(true);
                                 }
                             }
-                        });
+                        }, |_, _| service_cdc_scan_io());
+                        xcore407i_blinker::nand_fs::set_io_service_hook(None);
+                        FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
 
                         // Keep the state on the alternate stack in the storage-unavailable
                         // console too; do not construct another large state on the main stack.
