@@ -1398,6 +1398,26 @@ static int lfs_dir_getgstate(lfs_t *lfs, const lfs_mdir_t *dir,
     return 0;
 }
 
+static int lfs_dir_getname(lfs_t *lfs, lfs_mdir_t *dir,
+        uint16_t id, struct lfs_info *info) {
+    if (id == 0x3ff) {
+        strcpy(info->name, "/");
+        info->type = LFS_TYPE_DIR;
+        info->size = 0;
+        return 0;
+    }
+
+    lfs_stag_t tag = lfs_dir_get(lfs, dir, LFS_MKTAG(0x780, 0x3ff, 0),
+            LFS_MKTAG(LFS_TYPE_NAME, id, lfs->name_max+1), info->name);
+    if (tag < 0) {
+        return (int)tag;
+    }
+
+    info->type = lfs_tag_type3(tag);
+    info->size = 0;
+    return 0;
+}
+
 static int lfs_dir_getinfo(lfs_t *lfs, lfs_mdir_t *dir,
         uint16_t id, struct lfs_info *info) {
     if (id == 0x3ff) {
@@ -2741,7 +2761,7 @@ static int lfs_dir_close_(lfs_t *lfs, lfs_dir_t *dir) {
     return 0;
 }
 
-static int lfs_dir_read_(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
+static int lfs_dir_read_internal(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info, bool include_size) {
     memset(info, 0, sizeof(*info));
 
     // special offset for '.' and '..'
@@ -2771,7 +2791,9 @@ static int lfs_dir_read_(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
             dir->id = 0;
         }
 
-        int err = lfs_dir_getinfo(lfs, &dir->m, dir->id, info);
+        int err = include_size
+                ? lfs_dir_getinfo(lfs, &dir->m, dir->id, info)
+                : lfs_dir_getname(lfs, &dir->m, dir->id, info);
         if (err && err != LFS_ERR_NOENT) {
             return err;
         }
@@ -2784,6 +2806,14 @@ static int lfs_dir_read_(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
 
     dir->pos += 1;
     return true;
+}
+
+static int lfs_dir_read_(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
+    return lfs_dir_read_internal(lfs, dir, info, true);
+}
+
+static int lfs_dir_read_short_(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
+    return lfs_dir_read_internal(lfs, dir, info, false);
 }
 
 static int lfs_dir_seek_(lfs_t *lfs, lfs_dir_t *dir, lfs_off_t off) {
@@ -6293,6 +6323,18 @@ int lfs_dir_read(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
     err = lfs_dir_read_(lfs, dir, info);
 
     LFS_TRACE("lfs_dir_read -> %d", err);
+    LFS_UNLOCK(lfs->cfg);
+    return err;
+}
+
+int lfs_dir_read_short(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
+    int err = LFS_LOCK(lfs->cfg);
+    if (err) {
+        return err;
+    }
+
+    err = lfs_dir_read_short_(lfs, dir, info);
+
     LFS_UNLOCK(lfs->cfg);
     return err;
 }
