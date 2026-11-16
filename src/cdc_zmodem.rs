@@ -7,6 +7,7 @@ use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 
 use littlefs2::{
     fs::Filesystem,
+    fs::FileAllocation,
     io::{Error as LfsError, Write},
     path::Path,
 };
@@ -16,11 +17,14 @@ use crate::{camera, nand_fs::ActiveStorage, tusb};
 
 const NAME_CAPACITY: usize = 64;
 const WIRE_CAPACITY: usize = 64;
+const RECEIVER_STORAGE_CAPACITY: usize = 4096;
+const _: () = assert!(core::mem::size_of::<Receiver>() <= RECEIVER_STORAGE_CAPACITY);
 const TRANSFER_TIMEOUT_MS: u32 = 60_000;
 const TEMP_PATH: &[u8] = b"/.zmodem-upload\0";
 
 pub struct State {
     receiver: Option<NonNull<Receiver>>,
+    file_allocation: FileAllocation<ActiveStorage>,
     final_path: [u8; NAME_CAPACITY + 2],
     final_path_len: usize,
     wire: [u8; WIRE_CAPACITY],
@@ -52,9 +56,10 @@ pub struct State {
 }
 
 impl State {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             receiver: None,
+            file_allocation: FileAllocation::new(),
             final_path: [0; NAME_CAPACITY + 2],
             final_path_len: 0,
             wire: [0; WIRE_CAPACITY],
@@ -185,13 +190,18 @@ fn make_path(name: &[u8], path: &mut [u8; NAME_CAPACITY + 2]) -> Option<usize> {
     Some(name.len() + 2)
 }
 
-fn create_new_file(fs: &Filesystem<'_, ActiveStorage>, path_bytes: &[u8]) -> bool {
+fn create_new_file(
+    fs: &Filesystem<'_, ActiveStorage>,
+    allocation: &mut FileAllocation<ActiveStorage>,
+    path_bytes: &[u8],
+) -> bool {
     let Ok(path) = Path::from_bytes_with_nul(path_bytes) else {
         return false;
     };
-    fs.open_file_with_options_and_then(
+    fs.open_file_with_options_and_then_with_allocation(
         |options| options.write(true).create_new(true),
         path,
+        allocation,
         |_file| Ok(()),
     )
     .is_ok()
@@ -208,7 +218,10 @@ fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
     state.final_path_len = 0;
 }
 
-fn create_temp_file(fs: &Filesystem<'_, ActiveStorage>) -> bool {
+fn create_temp_file(
+    fs: &Filesystem<'_, ActiveStorage>,
+    allocation: &mut FileAllocation<ActiveStorage>,
+) -> bool {
     let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) else {
         return false;
     };
@@ -217,7 +230,7 @@ fn create_temp_file(fs: &Filesystem<'_, ActiveStorage>) -> bool {
     if fs.exists(path) && fs.remove(path).is_err() {
         return false;
     }
-    create_new_file(fs, TEMP_PATH)
+    create_new_file(fs, allocation, TEMP_PATH)
 }
 
 fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> bool {
@@ -241,12 +254,14 @@ fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> bo
 
 fn append_file(
     fs: &Filesystem<'_, ActiveStorage>,
+    allocation: &mut FileAllocation<ActiveStorage>,
     data: &[u8],
 ) -> Result<(), i32> {
     let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::IO.code())?;
-    fs.open_file_with_options_and_then(
+    fs.open_file_with_options_and_then_with_allocation(
         |options| options.write(true).append(true),
         path,
+        allocation,
         |file| {
             let mut written = 0usize;
             while written < data.len() {
@@ -399,7 +414,7 @@ pub fn service(
                 }
                 crate::dhara_fs::clear_storage_io_diagnostic();
                 crate::nand_fs::clear_nand_read_diagnostic();
-                if let Err(lfs_error) = append_file(fs, bytes) {
+                if let Err(lfs_error) = append_file(fs, &mut state.file_allocation, bytes) {
                     state.last_error = 2;
                     let (operation, location, storage_error) =
                         crate::dhara_fs::storage_io_diagnostic();
@@ -435,7 +450,7 @@ pub fn service(
                 let available = match path_len {
                     Some(len) => {
                         match Path::from_bytes_with_nul(&state.final_path[..len]) {
-                            Ok(path) => !fs.exists(path) && create_temp_file(fs),
+                            Ok(path) => !fs.exists(path) && create_temp_file(fs, &mut state.file_allocation),
                             Err(_) => false,
                         }
                     }
