@@ -510,6 +510,8 @@ fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
 pub(crate) struct EccWriteTrace {
     pub page: u32,
     pub flags: u32,
+    pub program_count: u32,
+    pub mismatch_chunks: u32,
     pub hardware: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub input_software: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub stored: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -519,9 +521,13 @@ pub(crate) struct EccWriteTrace {
 }
 
 static ECC_WRITE_TRACE_ENABLED: AtomicU32 = AtomicU32::new(0);
+static ECC_WRITE_TRACE_PROGRAM_COUNT: AtomicU32 = AtomicU32::new(0);
+static ECC_WRITE_TRACE_MISMATCH_SEEN: AtomicU32 = AtomicU32::new(0);
 static mut LAST_ECC_WRITE_TRACE: EccWriteTrace = EccWriteTrace {
     page: u32::MAX,
     flags: 0,
+    program_count: 0,
+    mismatch_chunks: 0,
     hardware: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     input_software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -531,6 +537,27 @@ static mut LAST_ECC_WRITE_TRACE: EccWriteTrace = EccWriteTrace {
 };
 
 pub(crate) fn set_ecc_write_trace_enabled(enabled: bool) {
+    if enabled {
+        ECC_WRITE_TRACE_PROGRAM_COUNT.store(0, Ordering::Release);
+        ECC_WRITE_TRACE_MISMATCH_SEEN.store(0, Ordering::Release);
+        unsafe {
+            core::ptr::write_volatile(
+                core::ptr::addr_of_mut!(LAST_ECC_WRITE_TRACE),
+                EccWriteTrace {
+                    page: u32::MAX,
+                    flags: 0,
+                    program_count: 0,
+                    mismatch_chunks: 0,
+                    hardware: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    input_software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    readback_software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    input_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    readback_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                },
+            );
+        }
+    }
     ECC_WRITE_TRACE_ENABLED.store(enabled as u32, Ordering::Release);
 }
 
@@ -621,6 +648,8 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         let mut trace = EccWriteTrace {
             page,
             flags: 1, // NAND program/status succeeded.
+            program_count: ECC_WRITE_TRACE_PROGRAM_COUNT.fetch_add(1, Ordering::AcqRel) + 1,
+            mismatch_chunks: 0,
             hardware: hardware_ecc,
             input_software: input_software_ecc,
             stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -645,11 +674,33 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
                 ]);
             }
         }
-        unsafe {
-            core::ptr::write_volatile(
-                core::ptr::addr_of_mut!(LAST_ECC_WRITE_TRACE),
-                trace,
-            );
+        for index in 0..FSMC_ECC_CHUNKS_PER_PAGE {
+            let readback_ok = data_ok && tag_ok;
+            if trace.hardware[index] != trace.input_software[index]
+                || (tag_ok && trace.stored[index] != trace.hardware[index])
+                || (readback_ok && trace.readback_software[index] != trace.stored[index])
+                || (data_ok && trace.input_fingerprint[index] != trace.readback_fingerprint[index])
+            {
+                trace.mismatch_chunks |= 1 << index;
+            }
+        }
+        // Preserve the first bad page for diagnosis. If no mismatch has
+        // occurred, keep updating the snapshot so status shows the latest
+        // successful write.
+        let should_store = if trace.mismatch_chunks != 0 {
+            ECC_WRITE_TRACE_MISMATCH_SEEN.compare_exchange(
+                0, 1, Ordering::AcqRel, Ordering::Relaxed,
+            ).is_ok()
+        } else {
+            ECC_WRITE_TRACE_MISMATCH_SEEN.load(Ordering::Acquire) == 0
+        };
+        if should_store {
+            unsafe {
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!(LAST_ECC_WRITE_TRACE),
+                    trace,
+                );
+            }
         }
     }
     true
