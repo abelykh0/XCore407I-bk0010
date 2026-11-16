@@ -275,7 +275,13 @@ fn wait_fsmc_fifo_empty_counted() -> (bool, u32) {
 
 /// Wait for the FSMC FIFO to empty before capturing the ECC result.
 fn wait_fsmc_fifo_empty() -> bool {
-    wait_fsmc_fifo_empty_counted().0
+    for _ in 0..TIMEOUT {
+        if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
 }
 
 /// Read the 24-bit ECC result and disable the engine before reuse.
