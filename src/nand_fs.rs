@@ -296,7 +296,7 @@ fn wait_ready_rb_timeout(timeout: u32) -> bool {
     // Waiting only for high can therefore accept the idle-high level before
     // the NAND has even entered its busy phase (notably after PROGRAM CONFIRM).
     let rb = unsafe {
-        &*(pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>())
+        pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()
     };
 
     // First observe that the command was accepted and the NAND became busy.
