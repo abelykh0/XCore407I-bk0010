@@ -484,19 +484,6 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     write_decimal_grouped(fs.total_space());
     write_status(b" bytes\r\n");
 
-    write_status(b"LittleFS free space: ");
-    match fs.available_space() {
-        Ok(bytes) => {
-            write_decimal_grouped(bytes);
-            write_status(b" bytes\r\n");
-        }
-        Err(error) => {
-            write_status(b"query failed; LittleFS error 0x");
-            write_hex_u32(error.code() as u32);
-            write_status(b"\r\n");
-        }
-    }
-
     write_status(b"LIST: reading root directory...\r\n");
     let Ok(root) = Path::from_bytes_with_nul(b"/\0") else {
         write_status(b"Cannot construct root path.\r\n> ");
@@ -523,7 +510,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     });
 
     match result {
-        Ok(()) => write_status(b"LIST: directory read complete.\r\n> "),
+        Ok(()) => write_status(b"LIST: directory read complete.\r\n"),
         Err(error) => {
             write_status(b"Directory read failed; LittleFS error: 0x");
             write_hex_u32(error.code() as u32);
@@ -540,8 +527,25 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
                 write_status(b"\r\n");
             }
             write_status(b"> ");
+            return;
         }
     }
+
+    // Free-space calculation can be much slower than directory enumeration
+    // on the NAND-backed volume. Run it only after the file entries are shown.
+    write_status(b"LittleFS free space: ");
+    match fs.available_space() {
+        Ok(bytes) => {
+            write_decimal_grouped(bytes);
+            write_status(b" bytes\\r\\n");
+        }
+        Err(error) => {
+            write_status(b"query failed; LittleFS error 0x");
+            write_hex_u32(error.code() as u32);
+            write_status(b"\\r\\n");
+        }
+    }
+    write_status(b"> ");
 }
 
 
