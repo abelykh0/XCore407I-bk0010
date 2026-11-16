@@ -262,10 +262,20 @@ fn ecc_begin_chunk() {
     }
 }
 
-/// Wait for the FSMC FIFO to empty and count status-register polls.
+/// Wait for the FSMC FIFO to empty, retaining status samples in a local
+/// scratch array to preserve the per-poll memory-write timing perturbation.
 fn wait_fsmc_fifo_empty_counted() -> (bool, u32) {
+    let mut samples = [0u32; 8];
     for iteration in 0..TIMEOUT {
-        if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
+        let status = unsafe { read_volatile(FSMC_SR2) };
+        if iteration < samples.len() as u32 {
+            // Volatile prevents the compiler from removing these diagnostic
+            // stores even though the samples are not reported.
+            unsafe {
+                core::ptr::write_volatile(samples.as_mut_ptr().add(iteration as usize), status);
+            }
+        }
+        if status & FSMC_SR_FEMPT != 0 {
             return (true, iteration + 1);
         }
         core::hint::spin_loop();
