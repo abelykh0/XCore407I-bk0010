@@ -479,7 +479,6 @@ fn main() -> ! {
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
         let format_request = match &mount_result { Ok(request) => *request, Err(_) => xcore407i_blinker::cdc_console::FormatRequest::None };
-        let format_requested = format_request != xcore407i_blinker::cdc_console::FormatRequest::None;
 
         if format_request == xcore407i_blinker::cdc_console::FormatRequest::LittleFs {
             xcore407i_blinker::cdc_console::report_format_status(b"Filesystem released. Formatting LittleFS only; Dhara journal is preserved...\r\n");
