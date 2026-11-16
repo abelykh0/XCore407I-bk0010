@@ -397,12 +397,14 @@ fn main() -> ! {
 
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
-        let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
+        // Keep the ZMODEM state on the CCM alternate stack: it contains the reusable
+        // LittleFS FileAllocation and must not consume the small main stack.
         let mut just_formatted = false;
         loop {
             let mount_result: Result<bool, xcore407i_blinker::nand_fs::FsAccessError> =
                 unsafe {
                     xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
+                        let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
                         xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
                             if just_formatted {
                                 xcore407i_blinker::cdc_console::report_format_status(
