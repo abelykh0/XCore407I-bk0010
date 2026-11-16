@@ -1195,7 +1195,8 @@ pub(crate) fn ecc_hardware_compare_page(
     for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
         ecc_begin_chunk();
         for byte in chunk.iter_mut() { *byte = read_data(); }
-        if !wait_fsmc_fifo_empty() {
+        let (fifo_empty, _) = wait_fsmc_fifo_empty();
+        if !fifo_empty {
             let _ = ecc_end_chunk();
             return Err((4, index as u32));
         }
