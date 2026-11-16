@@ -103,9 +103,16 @@ pub fn service_connection() {
             // discard TinyUSB's TX FIFO, so keep retrying flush below.
             if BANNER_PENDING.load(Ordering::Acquire) {
                 CDC_BANNER_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-                CDC_BANNER_TX_PENDING.store(true, Ordering::Release);
                 let accepted = write_status_counted(BANNER);
                 CDC_BANNER_ACCEPTED.fetch_add(accepted as u32, Ordering::Relaxed);
+                // Arm completion tracking only after the banner bytes have
+                // been accepted into the CDC TX FIFO. write_status_counted()
+                // can service TinyUSB while waiting for FIFO space; arming
+                // before it returns could misattribute an older transfer's
+                // completion to this banner.
+                if accepted != 0 {
+                    CDC_BANNER_TX_PENDING.store(true, Ordering::Release);
+                }
                 BANNER_PENDING.store(false, Ordering::Release);
 
                 // The banner is queued after the caller's normal TinyUSB task
