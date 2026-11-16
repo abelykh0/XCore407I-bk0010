@@ -10,7 +10,7 @@ use crate::buffer::Buffer;
 use crate::error::Error;
 use crate::file::write_zfile;
 use crate::header::{
-    Encoding, Frame, Header, ZDATA_HEADER, ZEOF_HEADER, ZFIN_HEADER, ZNAK_HEADER, ZRQINIT_HEADER,
+    Encoding, Frame, Header, ZFIN_HEADER, ZNAK_HEADER, ZRQINIT_HEADER,
     Zrinit,
 };
 use crate::io::Write;
