@@ -473,7 +473,10 @@ fn service_sender(
             state.send_path_len = 0;
             state.send_wire_len = 0;
             state.send_wire_pos = 0;
-            super::cdc_console::write_send_complete(\n                &state.send_path[1..state.send_path_len - 1],\n                state.send_size,\n            );
+            super::cdc_console::write_send_complete(
+                &state.send_path[1..state.send_path_len - 1],
+                state.send_size,
+            );
             return true;
         }
         return false;
