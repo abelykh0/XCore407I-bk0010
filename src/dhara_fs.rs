@@ -29,7 +29,7 @@ const DHARA_E_BAD_BLOCK: i32 = 1;
 const DHARA_E_ECC: i32 = 2;
 
 #[repr(C)]
-struct DharaNand {
+pub struct DharaNand {
     log2_page_size: u8,
     log2_ppb: u8,
     num_blocks: u32,
@@ -544,7 +544,7 @@ impl DharaStorage {
             return Err(crate::nand_fs::InitError::DharaCapacity);
         }
 
-        let mut storage = Self { factory_bad_blocks: bad_blocks };
+        let storage = Self { factory_bad_blocks: bad_blocks };
 
         Ok(storage)
     }
