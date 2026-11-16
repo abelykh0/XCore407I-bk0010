@@ -420,10 +420,8 @@ fn main() -> ! {
                                 just_formatted = false;
                             }
                             loop {
-                                unsafe {
-                                    let _ = tusb::tud_task_ext(1, false);
-                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                                }
+                                let _ = tusb::tud_task_ext(1, false);
+                                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                                 // Keep USB/UVC and the video producer alive inside synchronous
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
                                 FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
@@ -450,19 +448,15 @@ fn main() -> ! {
                         if let Err(error) = mount_result {
                             xcore407i_blinker::cdc_console::report_storage_error(error);
                             loop {
-                                unsafe {
-                                    let _ = tusb::tud_task_ext(1, false);
-                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                                }
+                                let _ = tusb::tud_task_ext(1, false);
+                                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                                 let requested = xcore407i_blinker::cdc_console::service(
                                     None,
                                     &mut zmodem_state,
                                     TICKS.load(Ordering::Relaxed),
                                     &mut || {
-                                        unsafe {
-                                            let _ = tusb::tud_task_ext(1, false);
-                                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                                        }
+                                        let _ = tusb::tud_task_ext(1, false);
+                                        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
                                         while prepare_next_video_batch(&mut video_renderer) {}
                                     },
                                 );
