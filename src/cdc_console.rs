@@ -628,6 +628,9 @@ pub fn service(
                             write_status(b"\r\n");
                             let mut previous: Option<crate::nand_fs::EccPageComparison> = None;
                             for pass in 0..3 {
+                                write_status(b"Starting raw read ");
+                                write_decimal(pass + 1);
+                                write_status(b"...\r\n");
                                 match crate::nand_fs::ecc_software_compare_page(page) {
                                     Some(result) => {
                                         write_status(b"Read ");
@@ -662,8 +665,9 @@ pub fn service(
                                     None => {
                                         write_status(b"Read ");
                                         write_decimal(pass + 1);
-                                        write_status(b": READ FAILED, page untagged, or ECC tag invalid.\r\n");
+                                        write_status(b": READ FAILED or timed out; stopping diagnostic.\r\n");
                                         previous = None;
+                                        break;
                                     }
                                 }
                             }
