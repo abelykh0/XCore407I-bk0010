@@ -732,6 +732,10 @@ pub fn service(
                                 write_hex_u32(trace.pcr_enabled[chunk]);
                                 write_status(b" ECC-before-data=0x");
                                 write_hex_u32(trace.ecc_before_data[chunk]);
+                                write_status(b" input-non-FF=");
+                                write_decimal(trace.input_non_ff[chunk] as usize);
+                                write_status(b" input-fp=0x");
+                                write_hex_u32(trace.input_fingerprint[chunk]);
                                 write_status(b" SR-before-wait=0x");
                                 write_hex_u32(trace.status_before_wait[chunk]);
                                 write_status(b" SR-after-wait=0x");
