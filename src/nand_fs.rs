@@ -106,7 +106,7 @@ pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
 pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
 // Keep the interactive ECCPAGE diagnostic responsive if NAND R/B never rises.
-const ECC_DIAGNOSTIC_TIMEOUT: u32 = 500_000;
+const ECC_DIAGNOSTIC_TIMEOUT: u32 = TIMEOUT;
 
 static mut ECC_DIAGNOSTIC_PAGE_BUFFER: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
