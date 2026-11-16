@@ -33,6 +33,8 @@ static CDC_BANNER_ACCEPTED: AtomicU32 = AtomicU32::new(0);
 static CDC_BANNER_TX_PENDING: AtomicBool = AtomicBool::new(false);
 static CDC_BANNER_TX_COMPLETE: AtomicU32 = AtomicU32::new(0);
 static CDC_TX_COMPLETE_COUNT: AtomicU32 = AtomicU32::new(0);
+static CDC_RX_CALLBACK_COUNT: AtomicU32 = AtomicU32::new(0);
+static CDC_BANNER_COMPLETE_RX_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
@@ -62,6 +64,15 @@ pub extern "C" fn tud_cdc_line_state_cb(itf: u8, dtr: bool, _rts: bool) {
     }
 }
 
+/// Record host-to-device CDC traffic so banner completion can be ordered
+/// against the first received character.
+#[unsafe(no_mangle)]
+pub extern "C" fn tud_cdc_rx_cb(itf: u8) {
+    if itf == 0 {
+        CDC_RX_CALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// TinyUSB calls this after a CDC IN transfer has completed successfully.
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_cdc_tx_complete_cb(itf: u8) {
@@ -69,6 +80,10 @@ pub extern "C" fn tud_cdc_tx_complete_cb(itf: u8) {
         CDC_TX_COMPLETE_COUNT.fetch_add(1, Ordering::Relaxed);
         if CDC_BANNER_TX_PENDING.swap(false, Ordering::AcqRel) {
             CDC_BANNER_TX_COMPLETE.fetch_add(1, Ordering::Relaxed);
+            CDC_BANNER_COMPLETE_RX_COUNT.store(
+                CDC_RX_CALLBACK_COUNT.load(Ordering::Acquire),
+                Ordering::Release,
+            );
         }
     }
 }
@@ -175,6 +190,15 @@ fn write_cdc_diagnostics() {
     write_decimal(CDC_BANNER_TX_PENDING.load(Ordering::Acquire) as usize);
     write_status(b" tx_complete=");
     write_decimal(CDC_TX_COMPLETE_COUNT.load(Ordering::Relaxed) as usize);
+    write_status(b" rx_callbacks=");
+    write_decimal(CDC_RX_CALLBACK_COUNT.load(Ordering::Relaxed) as usize);
+    write_status(b" banner_complete_rx_callbacks=");
+    let banner_rx = CDC_BANNER_COMPLETE_RX_COUNT.load(Ordering::Acquire);
+    if banner_rx == u32::MAX {
+        write_status(b"n/a");
+    } else {
+        write_decimal(banner_rx as usize);
+    }
     write_status(b"\r\n");
 }
 
