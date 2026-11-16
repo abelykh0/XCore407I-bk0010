@@ -550,7 +550,7 @@ pub fn service(
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"NANDPAGEPROBE") {
-                        write_status(b"\\r\\nNANDPAGEPROBE: read-only raw page reads; no NAND writes or erases.\\r\\n");
+                        write_status(b"\r\nNANDPAGEPROBE: read-only raw page reads; no NAND writes or erases.\r\n");
                         let (ok, data) = crate::nand_fs::ecc_scan_page_probe();
                         let labels = [
                             b"Page 0 col 0: " as &[u8], b"Page 0 col 1: ",
@@ -568,7 +568,7 @@ pub fn service(
                             } else {
                                 write_status(b"READ FAILED");
                             }
-                            write_status(b"\\r\\n");
+                            write_status(b"\r\n");
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"NANDRESETTEST") {
@@ -601,38 +601,38 @@ pub fn service(
                         }
                         write_status(b"> ");
                     } else if command_is(line, b"NANDPROBE") {
-                        write_status(b"\r\nNANDPROBE: read-only READ ID / STATUS; no NAND writes or erases.\\r\\n");
+                        write_status(b"\r\nNANDPROBE: read-only READ ID / STATUS; no NAND writes or erases.\r\n");
                         let (id, status, ready) = crate::nand_fs::ecc_scan_interface_probe();
                         write_status(b"READ ID:");
                         for byte in id {
                             write_status(b" 0x");
                             write_hex_u32(byte as u32);
                         }
-                        write_status(b"\\r\\nSTATUS: 0x");
+                        write_status(b"\r\nSTATUS: 0x");
                         write_hex_u32(status as u32);
-                        write_status(if ready { b"  R/B=READY\\r\\n" } else { b"  R/B=BUSY\\r\\n" });
+                        write_status(if ready { b"  R/B=READY\r\n" } else { b"  R/B=BUSY\r\n" });
                         write_status(b"> ");
                     } else if line.len() > 8
                         && line[..8].eq_ignore_ascii_case(b"ECCPAGE ")
                     {
                         let Some(page) = parse_hex_u32(&line[8..]) else {
-                            write_status(b"ECCPAGE: use ECCPAGE followed by a hexadecimal physical page number.\\r\\n> ");
+                            write_status(b"ECCPAGE: use ECCPAGE followed by a hexadecimal physical page number.\r\n> ");
                             LINE_LEN = 0;
                             continue;
                         };
                         if page >= crate::nand_fs::PHYSICAL_BLOCKS * crate::nand_fs::PAGES_PER_BLOCK {
-                            write_status(b"ECCPAGE: physical page is out of range.\\r\\n> ");
+                            write_status(b"ECCPAGE: physical page is out of range.\r\n> ");
                         } else {
-                            write_status(b"\\r\\nECCPAGE: read-only; no NAND writes or erases. FSMC ECC disabled. Three independent raw reads.\\r\\nPage: 0x");
+                            write_status(b"\r\nECCPAGE: read-only; no NAND writes or erases. FSMC ECC disabled. Three independent raw reads.\r\nPage: 0x");
                             write_hex_u32(page);
-                            write_status(b"\\r\\n");
+                            write_status(b"\r\n");
                             let mut previous: Option<crate::nand_fs::EccPageComparison> = None;
                             for pass in 0..3 {
                                 match crate::nand_fs::ecc_software_compare_page(page) {
                                     Some(result) => {
                                         write_status(b"Read ");
                                         write_decimal(pass + 1);
-                                        write_status(b":\\r\\n");
+                                        write_status(b":\r\n");
                                         for chunk in 0..4 {
                                             write_status(b"  chunk ");
                                             write_decimal(chunk);
@@ -655,19 +655,19 @@ pub fn service(
                                                     write_status(b" READ-CHANGED");
                                                 }
                                             }
-                                            write_status(b"\\r\\n");
+                                            write_status(b"\r\n");
                                         }
                                         previous = Some(result);
                                     }
                                     None => {
                                         write_status(b"Read ");
                                         write_decimal(pass + 1);
-                                        write_status(b": READ FAILED, page untagged, or ECC tag invalid.\\r\\n");
+                                        write_status(b": READ FAILED, page untagged, or ECC tag invalid.\r\n");
                                         previous = None;
                                     }
                                 }
                             }
-                            write_status(b"ECCPAGE complete. Compare all three reads; repeat command if needed.\\r\\n> ");
+                            write_status(b"ECCPAGE complete. Compare all three reads; repeat command if needed.\r\n> ");
                         }
                     } else if command_is(line, b"ECCSCAN") {
                         write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
