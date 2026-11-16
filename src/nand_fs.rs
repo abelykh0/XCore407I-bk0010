@@ -75,7 +75,7 @@ where
 }
 
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
 
 use littlefs2::{
@@ -1141,6 +1141,13 @@ pub(crate) fn ecc_hardware_compare_page(page: u32) -> Option<EccPageHardwareComp
     Some(result)
 }
 
+static NAND_ECC_CHECK_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Temporarily bypass ECC validation/correction for a controlled storage diagnostic.
+pub(crate) fn set_ecc_check_enabled(enabled: bool) {
+    NAND_ECC_CHECK_ENABLED.store(enabled, Ordering::Release);
+}
+
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE { return false; }
 
@@ -1181,6 +1188,9 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if tag != ECC_TAG {
         record_nand_read_failure(3, u32::from(tag[0]) | (u32::from(tag[1]) << 8));
         return false;
+    }
+    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
+        return true;
     }
 
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
