@@ -262,15 +262,20 @@ fn ecc_begin_chunk() {
     }
 }
 
-/// Wait for the FSMC FIFO to empty before capturing the ECC result.
-fn wait_fsmc_fifo_empty() -> bool {
-    for _ in 0..TIMEOUT {
+/// Wait for the FSMC FIFO to empty and return the number of SR reads.
+fn wait_fsmc_fifo_empty_counted() -> (bool, u32) {
+    for iteration in 0..TIMEOUT {
         if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
-            return true;
+            return (true, iteration + 1);
         }
         core::hint::spin_loop();
     }
-    false
+    (false, TIMEOUT)
+}
+
+/// Wait for the FSMC FIFO to empty before capturing the ECC result.
+fn wait_fsmc_fifo_empty() -> bool {
+    wait_fsmc_fifo_empty_counted().0
 }
 
 /// Read the 24-bit ECC result and disable the engine before reuse.
@@ -720,7 +725,15 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if sequence_trace_enabled {
             sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
         }
-        if !wait_fsmc_fifo_empty() {
+        let (fifo_empty, fifo_polls) = if sequence_trace_enabled {
+            wait_fsmc_fifo_empty_counted()
+        } else {
+            (wait_fsmc_fifo_empty(), 0)
+        };
+        if sequence_trace_enabled {
+            sequence_trace.fifo_poll_count[chunk_index] = fifo_polls;
+        }
+        if !fifo_empty {
             let status = unsafe { read_volatile(FSMC_SR2) };
             record_nand_device_failure(6, page, status);
             return false;
@@ -761,7 +774,15 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if sequence_trace_enabled {
         sequence_trace.oob_status_before_wait = unsafe { read_volatile(FSMC_SR2) };
     }
-    if !wait_fsmc_fifo_empty() {
+    let (oob_fifo_empty, oob_fifo_polls) = if sequence_trace_enabled {
+        wait_fsmc_fifo_empty_counted()
+    } else {
+        (wait_fsmc_fifo_empty(), 0)
+    };
+    if sequence_trace_enabled {
+        sequence_trace.oob_fifo_poll_count = oob_fifo_polls;
+    }
+    if !oob_fifo_empty {
         let status = unsafe { read_volatile(FSMC_SR2) };
         record_nand_device_failure(7, page, status);
         return false;
