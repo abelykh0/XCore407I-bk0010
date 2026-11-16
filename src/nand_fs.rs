@@ -724,7 +724,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if trace_enabled {
             input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
         }
-        cortex_m::asm::delay(20_000);
+        cortex_m::asm::delay(10_000);
         encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
 
     }
