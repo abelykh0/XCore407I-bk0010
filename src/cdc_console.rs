@@ -498,6 +498,13 @@ fn parse_hex_u32(bytes: &[u8]) -> Option<u32> {
 
 /// Service CDC input/output and the optional ZMODEM receiver.
 /// TinyUSB's device task must be serviced by the caller first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormatRequest {
+    None,
+    LittleFs,
+    WholeNand,
+}
+
 pub fn service(
     fs: Option<&Filesystem<'_, ActiveStorage>>,
     zmodem: &mut cdc_zmodem::State,
