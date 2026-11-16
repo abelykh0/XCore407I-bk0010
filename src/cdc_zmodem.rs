@@ -202,17 +202,15 @@ fn create_new_file(
     fs: &Filesystem<'_, ActiveStorage>,
     allocation: &mut FileAllocation<ActiveStorage>,
     path_bytes: &[u8],
-) -> bool {
-    let Ok(path) = Path::from_bytes_with_nul(path_bytes) else {
-        return false;
-    };
+) -> Result<(), u8> {
+    let path = Path::from_bytes_with_nul(path_bytes).map_err(|_| 1)?;
     fs.open_file_with_options_and_then_with_allocation(
         |options| options.write(true).create_new(true),
         path,
         allocation,
         |_file| Ok(()),
     )
-    .is_ok()
+    .map_err(|_| 2)
 }
 
 fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
@@ -229,16 +227,14 @@ fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
 fn create_temp_file(
     fs: &Filesystem<'_, ActiveStorage>,
     allocation: &mut FileAllocation<ActiveStorage>,
-) -> bool {
-    let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) else {
-        return false;
-    };
+) -> Result<(), u8> {
+    let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| 1)?;
     // This path is reserved exclusively for an interrupted ZMODEM upload.
     // Remove a stale partial file before starting the next transfer.
-    if fs.exists(path) && fs.remove(path).is_err() {
-        return false;
+    if fs.exists(path) {
+        fs.remove(path).map_err(|_| 2)?;
     }
-    create_new_file(fs, allocation, TEMP_PATH)
+    create_new_file(fs, allocation, TEMP_PATH).map_err(|stage| if stage == 1 { 3 } else { 4 })
 }
 
 fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Result<(), (u32, i32)> {
@@ -453,21 +449,20 @@ pub fn service(
             Action::Event(Event::FileStarted(info)) => {
                 state.transfer_started = true;
                 let path_len = make_path(info.name, &mut state.final_path);
-                let available = match path_len {
-                    Some(len) => {
-                        match Path::from_bytes_with_nul(&state.final_path[..len]) {
-                            Ok(path) => !fs.exists(path) && create_temp_file(fs, &mut state.file_allocation),
-                            Err(_) => false,
-                        }
-                    }
-                    None => false,
+                let rejection = match path_len {
+                    None => Some(1),
+                    Some(len) => match Path::from_bytes_with_nul(&state.final_path[..len]) {
+                        Err(_) => Some(2),
+                        Ok(path) if fs.exists(path) => Some(3),
+                        Ok(_) => create_temp_file(fs, &mut state.file_allocation).err().map(|stage| stage + 3),
+                    },
                 };
-                if available {
+                if rejection.is_none() {
                     state.final_path_len = path_len.unwrap_or(0);
                     if receiver.accept_file_at(0).is_err() {
                         state.last_error = 4;
                         super::cdc_console::write_status(
-                            b"\r\nZMODEM protocol error: accept_file_at failed\r\n",
+                            b"\\r\\nZMODEM protocol error: accept_file_at failed\\r\\n",
                         );
                         state.transfer_failed = true;
                         let _ = receiver.abort();
@@ -475,6 +470,16 @@ pub fn service(
                     }
                 } else {
                     state.final_path_len = 0;
+                    let message: &[u8] = match rejection.unwrap_or(0) {
+                        1 => b"\\r\\nZMODEM rejected file: invalid filename\\r\\n",
+                        2 => b"\\r\\nZMODEM rejected file: invalid destination path\\r\\n",
+                        3 => b"\\r\\nZMODEM rejected file: destination already exists\\r\\n",
+                        4 => b"\\r\\nZMODEM rejected file: temp path invalid\\r\\n",
+                        5 => b"\\r\\nZMODEM rejected file: stale temp-file removal failed\\r\\n",
+                        6 => b"\\r\\nZMODEM rejected file: temp-file path invalid\\r\\n",
+                        _ => b"\\r\\nZMODEM rejected file: temp-file creation failed\\r\\n",
+                    };
+                    super::cdc_console::write_status(message);
                     if receiver.skip_file().is_err() {
                         state.transfer_failed = true;
                         let _ = receiver.abort();
