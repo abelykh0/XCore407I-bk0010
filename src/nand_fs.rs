@@ -1202,34 +1202,17 @@ pub(crate) fn set_ecc_check_enabled(enabled: bool) {
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE { return false; }
-    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
-        return read_page(page, 0, out);
-    }
 
-    command(0x00);
-    address(0);
-    address(0);
-    address(page as u8);
-    address_last((page >> 8) as u8);
-    command(0x30);
-    if !wait_ready_rb() {
+    // Read the page with the FSMC ECC engine disabled. The hardware-ECC
+    // read path has produced inconsistent syndromes under filesystem load,
+    // while raw reads and independent software ECC agree on verified pages.
+    if !read_page(page, 0, out) {
         record_nand_read_failure(1, page);
-        record_nand_device_failure(1, page, 0);
         return false;
     }
 
-    let mut calculated = [0u8; ECC_OOB_BYTES];
-    for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        ecc_begin_chunk();
-        for byte in chunk.iter_mut() { *byte = read_data(); }
-        if !wait_fsmc_fifo_empty() {
-            let _ = ecc_end_chunk();
-            record_nand_read_failure(5, page);
-            return false;
-        }
-        let chunk_ecc = ecc_end_chunk();
-        encode_ecc(chunk_ecc, &mut calculated[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
-        service_io_hook();
+    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
+        return true;
     }
 
     let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
@@ -1244,14 +1227,13 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         record_nand_read_failure(3, u32::from(tag[0]) | (u32::from(tag[1]) << 8));
         return false;
     }
+
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
         let offset = chunk_index * ECC_BYTES_PER_CHUNK;
         let stored_ecc = u32::from_le_bytes([
             stored[offset], stored[offset + 1], stored[offset + 2], 0,
         ]);
-        let calculated_ecc = u32::from_le_bytes([
-            calculated[offset], calculated[offset + 1], calculated[offset + 2], 0,
-        ]);
+        let calculated_ecc = ecc_software_512_fsmc(chunk);
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
             record_ecc_read_failure(page, chunk_index as u32, stored_ecc, calculated_ecc);
             return false;
