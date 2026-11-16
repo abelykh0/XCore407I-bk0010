@@ -742,7 +742,12 @@ pub fn service(
                                 write_hex_u32(trace.status_after_wait[chunk]);
                                 write_status(b" FIFO-polls=");
                                 write_decimal(trace.fifo_poll_count[chunk] as usize);
-                                write_status(b" ECC-after-wait=0x");
+                                write_status(b" SR-samples=[");
+                                for sample in 0..(trace.fifo_poll_count[chunk] as usize).min(8) {
+                                    if sample != 0 { write_status(b","); }
+                                    write_hex_u32(trace.fifo_poll_samples[chunk][sample]);
+                                }
+                                write_status(b"] ECC-after-wait=0x");
                                 write_hex_u32(trace.ecc_after_wait[chunk]);
                                 write_status(b" SW-ECC=0x");
                                 write_hex_u32(trace.software_ecc[chunk]);
@@ -758,7 +763,12 @@ pub fn service(
                             write_hex_u32(trace.oob_status_after_wait);
                             write_status(b" FIFO-polls=");
                             write_decimal(trace.oob_fifo_poll_count as usize);
-                            write_status(b"\r\nECCSEQSTATUS complete.\r\n> ");
+                            write_status(b" SR-samples=[");
+                            for sample in 0..(trace.oob_fifo_poll_count as usize).min(8) {
+                                if sample != 0 { write_status(b","); }
+                                write_hex_u32(trace.oob_fifo_poll_samples[sample]);
+                            }
+                            write_status(b"]\r\nECCSEQSTATUS complete.\r\n> ");
                         }
                     } else if command_is(line, b"ECCWRITE ON") {
                         crate::nand_fs::set_ecc_write_trace_enabled(true);
