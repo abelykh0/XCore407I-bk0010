@@ -252,11 +252,13 @@ pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 fn ecc_begin_chunk() {
     unsafe {
         let pcr = read_volatile(FSMC_PCR2);
-        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
-        write_volatile(
-            FSMC_PCR2,
-            (pcr & !FSMC_PCR_ECCPS_MASK) | (1 << 17) | FSMC_PCR_ECCEN,
-        );
+        // ECCPS is configured once in configure_fsmc(). Match ST's HAL
+        // sequence here: disable ECC, then re-enable it by changing ECCEN
+        // only; do not rewrite the page-size field for every chunk.
+        let disabled = pcr & !FSMC_PCR_ECCEN;
+        write_volatile(FSMC_PCR2, disabled);
+        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(FSMC_PCR2, disabled | FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
     }
 }
@@ -711,16 +713,19 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             sequence_trace.pcr_after_disable[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
         }
         hardware_ecc[chunk_index] = chunk_ecc;
-        // Calculate software ECC for every chunk. Besides providing an
-        // independent ECC reference, this work occupies the inter-chunk
-        // interval that the NAND programming sequence requires.
-        input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
+        // Software ECC is diagnostic-only; it is not needed to program NAND.
+        // Keep it out of the normal path and preserve the known-good settling
+        // interval after each 512-byte FSMC ECC capture.
+        if trace_enabled || sequence_trace_enabled {
+            input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
+            if sequence_trace_enabled {
+                sequence_trace.software_ecc[chunk_index] = input_software_ecc[chunk_index];
+            }
+        }
         if trace_enabled {
             input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
         }
-        if sequence_trace_enabled {
-            sequence_trace.software_ecc[chunk_index] = input_software_ecc[chunk_index];
-        }
+        cortex_m::asm::delay(20_000);
         encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
 
     }
