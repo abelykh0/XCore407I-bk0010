@@ -119,7 +119,6 @@ pub const CANVAS_MAIN_BYTES: usize = CANVAS_BYTES - CANVAS_TAIL_BYTES;
 struct AlignedCanvas<const N: usize>([u8; N]);
 
 static mut DEMO_CANVAS: AlignedCanvas<CANVAS_MAIN_BYTES> = AlignedCanvas([0; CANVAS_MAIN_BYTES]);
-#[unsafe(link_section = ".ccmram.canvas")]
 #[repr(C, align(8))]
 union CanvasTailStorage {
     canvas: core::mem::ManuallyDrop<AlignedCanvas<CANVAS_TAIL_BYTES>>,
@@ -147,7 +146,7 @@ static mut ROW_BUFFERS: RowBuffers = RowBuffers([0; WIDTH * 2]);
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
 // CDC mode uses the PC CONNECT renderer and does not consume the demo canvas.
 // Reuse its large contiguous SRAM allocation for the heapless ZMODEM receiver;
-// keep the CCM tail reserved for the camera's existing framebuffer layout.
+// the CCM tail is used as the alternate filesystem stack during this session.
 static CDC_RECEIVER_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn claim_cdc_receiver_storage() -> Option<(*mut u8, usize)> {
