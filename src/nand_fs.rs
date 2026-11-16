@@ -714,10 +714,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         // Experimental: retain ECCWRITE's per-chunk CPU work even when
         // readback tracing is disabled. This tests whether the computation
         // between 512-byte NAND data bursts changes the failing program path.
-        input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
         if trace_enabled {
-            input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
+            input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
         }
+        input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
         if sequence_trace_enabled {
             sequence_trace.software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
         }
