@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  ECCPAGEHW  Compare stored, FSMC hardware, and software ECC after NAND RESET (read-only)\r\n  ECCWRITE ON/OFF Enable/disable verification of subsequent page programs\r\n  ECCWRITESTATUS Show the last verified page program and ECC values\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  ECCPAGEHW  Compare stored, FSMC hardware, and software ECC after NAND RESET (read-only)\r\n  ECCSEQ ON/OFF Arm/disarm low-overhead program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable verification of subsequent page programs\r\n  ECCWRITESTATUS Show the last verified page program and ECC values\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -702,20 +702,20 @@ pub fn service(
                         write_status(b"> ");
                     } else if command_is(line, b"ECCSEQ ON") {
                         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
-                        write_status(b"\\r\\nECCSEQ: armed for the next successful page program; no readback will be performed.\\r\\n> ");
+                        write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
                     } else if command_is(line, b"ECCSEQ OFF") {
                         crate::nand_fs::set_ecc_sequence_trace_enabled(false);
-                        write_status(b"\\r\\nECCSEQ: disabled.\\r\\n> ");
+                        write_status(b"\r\nECCSEQ: disabled.\r\n> ");
                     } else if command_is(line, b"ECCSEQSTATUS") {
                         let trace = crate::nand_fs::ecc_sequence_trace();
                         if trace.page == u32::MAX {
-                            write_status(b"\\r\\nECCSEQSTATUS: no page program captured. Enable ECCSEQ, then create/write a file.\\r\\n> ");
+                            write_status(b"\r\nECCSEQSTATUS: no page program captured. Enable ECCSEQ, then create/write a file.\r\n> ");
                         } else {
-                            write_status(b"\\r\\nECCSEQSTATUS: FSMC program sequence (no NAND readback)\\r\\nPage: 0x");
+                            write_status(b"\r\nECCSEQSTATUS: FSMC program sequence (no NAND readback)\r\nPage: 0x");
                             write_hex_u32(trace.page);
                             write_status(b" flags=0x");
                             write_hex_u32(trace.flags);
-                            write_status(b" (bit0=OOB FIFO drained bit1=program/status success)\\r\\n");
+                            write_status(b" (bit0=OOB FIFO drained bit1=program/status success)\r\n");
                             for chunk in 0..4 {
                                 write_status(b"  chunk ");
                                 write_decimal(chunk);
@@ -731,13 +731,13 @@ pub fn service(
                                 write_hex_u32(trace.ecc_after_wait[chunk]);
                                 write_status(b" PCR-after-disable=0x");
                                 write_hex_u32(trace.pcr_after_disable[chunk]);
-                                write_status(b"\\r\\n");
+                                write_status(b"\r\n");
                             }
                             write_status(b"  OOB SR-before-wait=0x");
                             write_hex_u32(trace.oob_status_before_wait);
                             write_status(b" SR-after-wait=0x");
                             write_hex_u32(trace.oob_status_after_wait);
-                            write_status(b"\\r\\nECCSEQSTATUS complete.\\r\\n> ");
+                            write_status(b"\r\nECCSEQSTATUS complete.\r\n> ");
                         }
                     } else if command_is(line, b"ECCWRITE ON") {
                         crate::nand_fs::set_ecc_write_trace_enabled(true);
