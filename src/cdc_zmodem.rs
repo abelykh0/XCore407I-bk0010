@@ -519,7 +519,14 @@ fn service_sender(
                     }
                 }
             }
-            Action::Event(Event::FileCompleted) => {}
+            Action::Event(Event::FileCompleted) => {
+                // This command sends exactly one file. Once the receiver
+                // acknowledges ZEOF with ZRINIT, finish the ZMODEM session.
+                if sender.finish().is_err() {
+                    sender.abort();
+                    break;
+                }
+            }
             Action::Event(Event::SessionCompleted) => {
                 super::cdc_console::write_status(b"\r\nZMODEM send complete.\r\n> ");
                 finished = true;
