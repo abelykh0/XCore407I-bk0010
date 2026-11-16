@@ -404,34 +404,34 @@ fn main() -> ! {
                 unsafe {
                     xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
                         xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
-                    if just_formatted {
-                        xcore407i_blinker::cdc_console::report_format_status(
-                            b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
-                        );
-                        just_formatted = false;
-                    }
-                    loop {
-                    unsafe {
-                        let _ = tusb::tud_task_ext(0, false);
-                        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                    }
-                    // Keep USB/UVC and the video producer alive inside ECCSCAN's
-                    // synchronous NAND waits, just as for the file browser.
-                    FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
-                    xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
-                    let format_requested = xcore407i_blinker::cdc_console::service(
-                        Some(fs),
-                        &mut zmodem_state,
-                        TICKS.load(Ordering::Relaxed),
-                        &mut || service_cdc_scan_io(),
-                    );
-                    xcore407i_blinker::nand_fs::set_io_service_hook(None);
-                    FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
-                    while prepare_next_video_batch(&mut video_renderer) {}
-                    if format_requested {
-                        break Ok(true);
-                    }
-                }
+                            if just_formatted {
+                                xcore407i_blinker::cdc_console::report_format_status(
+                                    b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
+                                );
+                                just_formatted = false;
+                            }
+                            loop {
+                                unsafe {
+                                    let _ = tusb::tud_task_ext(0, false);
+                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                }
+                                // Keep USB/UVC and the video producer alive inside synchronous
+                                // NAND waits. The PC CONNECT renderer does not read the canvas.
+                                FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+                                xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+                                let format_requested = xcore407i_blinker::cdc_console::service(
+                                    Some(fs),
+                                    &mut zmodem_state,
+                                    TICKS.load(Ordering::Relaxed),
+                                    &mut || service_cdc_scan_io(),
+                                );
+                                xcore407i_blinker::nand_fs::set_io_service_hook(None);
+                                FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
+                                while prepare_next_video_batch(&mut video_renderer) {}
+                                if format_requested {
+                                    break Ok(true);
+                                }
+                            }
                         })
                     })
                 };
