@@ -1021,39 +1021,49 @@ pub struct ReadDir<'a, 'b, S: driver::Storage> {
     path: &'b Path,
 }
 
-impl<S: driver::Storage> Iterator for ReadDir<'_, '_, S> {
-    type Item = Result<DirEntry>;
+impl<S: driver::Storage> ReadDir<'_, '_, S> {
+    /// Read the next directory entry without looking up its file size.
+    /// The returned metadata size is zero.
+    pub fn next_without_size(&mut self) -> Option<Result<DirEntry>> {
+        self.read_next(false)
+    }
 
-    // remove this allowance again, once path overflow is properly handled
-    #[allow(unreachable_code)]
-    fn next(&mut self) -> Option<Self::Item> {
+    fn read_next(&mut self, include_size: bool) -> Option<Result<DirEntry>> {
         let mut info: ll::lfs_info = unsafe { mem::MaybeUninit::zeroed().assume_init() };
-        // We need to use addr_of_mut! here instead of & mut since
-        // the FFI stores a copy of a pointer to the field state,
-        // so we cannot assert unique mutable access.
         let return_code = unsafe {
-            ll::lfs_dir_read(
-                &mut self.fs.alloc.borrow_mut().state,
-                addr_of_mut!((*(*self.alloc.borrow_mut())).state),
-                &mut info,
-            )
+            if include_size {
+                ll::lfs_dir_read(
+                    &mut self.fs.alloc.borrow_mut().state,
+                    addr_of_mut!((*(*self.alloc.borrow_mut())).state),
+                    &mut info,
+                )
+            } else {
+                ll::lfs_dir_read_short(
+                    &mut self.fs.alloc.borrow_mut().state,
+                    addr_of_mut!((*(*self.alloc.borrow_mut())).state),
+                    &mut info,
+                )
+            }
         };
 
         if return_code > 0 {
             let file_name = unsafe { PathBuf::from_buffer_unchecked(info.name) };
-            let metadata = metadata(info);
-
+            let entry_metadata = metadata(info);
             let path = self.path.join(&file_name);
-
-            let dir_entry = DirEntry::new(file_name, metadata, path);
-            return Some(Ok(dir_entry));
+            Some(Ok(DirEntry::new(file_name, entry_metadata, path)))
+        } else if return_code == 0 {
+            None
+        } else {
+            Some(Err(result_from((), return_code).unwrap_err()))
         }
+    }
+}
 
-        if return_code == 0 {
-            return None;
-        }
+impl<S: driver::Storage> Iterator for ReadDir<'_, '_, S> {
+    type Item = Result<DirEntry>;
 
-        Some(Err(result_from((), return_code).unwrap_err()))
+    fn next(&mut self) -> Option<Self::Item> {
+        self.read_next(true)
     }
 }
 
