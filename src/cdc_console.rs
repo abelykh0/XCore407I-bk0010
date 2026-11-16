@@ -930,7 +930,7 @@ pub fn service(
                                 write_decimal(pass + 1);
                                 write_status(b"...\r\n");
                                 match crate::nand_fs::ecc_hardware_compare_page(page) {
-                                    Some(result) => {
+                                    Ok(result) => {
                                         write_status(b"Read ");
                                         write_decimal(pass + 1);
                                         write_status(b" reset-status=0x");
@@ -962,8 +962,23 @@ pub fn service(
                                             write_status(b"\r\n");
                                         }
                                     }
-                                    None => {
-                                        write_status(b"Read failed (RESET, page read, FIFO, OOB tag, or timeout). Stopping.\r\n");
+                                    Err((stage, detail)) => {
+                                        let description: &[u8] = match stage {
+                                            1 => b"RESET ready/busy timeout",
+                                            2 => b"RESET status not ready",
+                                            3 => b"page-read ready/busy timeout",
+                                            4 => b"data FIFO wait failed (chunk index)",
+                                            5 => b"OOB read ready/busy timeout",
+                                            6 => b"OOB ECC tag mismatch (observed tag)",
+                                            _ => b"invalid page or unknown diagnostic failure",
+                                        };
+                                        write_status(b"Read ");
+                                        write_decimal(pass + 1);
+                                        write_status(b" FAILED: ");
+                                        write_status(description);
+                                        write_status(b" detail=0x");
+                                        write_hex_u32(detail);
+                                        write_status(b"\\r\\n");
                                         break;
                                     }
                                 }
