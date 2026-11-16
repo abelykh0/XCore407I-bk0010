@@ -28,6 +28,9 @@ static CDC_READY_COUNT: AtomicU32 = AtomicU32::new(0);
 static CDC_FLUSH_COUNT: AtomicU32 = AtomicU32::new(0);
 static CDC_FLUSH_STARTED: AtomicU32 = AtomicU32::new(0);
 static CDC_LAST_FLUSH: AtomicU32 = AtomicU32::new(0);
+static CDC_BANNER_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+static CDC_BANNER_ACCEPTED: AtomicU32 = AtomicU32::new(0);
+static CDC_TX_COMPLETE_COUNT: AtomicU32 = AtomicU32::new(0);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
@@ -54,6 +57,14 @@ pub extern "C" fn tud_cdc_line_state_cb(itf: u8, dtr: bool, _rts: bool) {
         BANNER_PENDING.store(true, Ordering::Release);
     } else if !dtr {
         BANNER_PENDING.store(false, Ordering::Release);
+    }
+}
+
+/// TinyUSB calls this after a CDC IN transfer has completed successfully.
+#[unsafe(no_mangle)]
+pub extern "C" fn tud_cdc_tx_complete_cb(itf: u8) {
+    if itf == 0 {
+        CDC_TX_COMPLETE_COUNT.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -86,7 +97,9 @@ pub fn service_connection() {
             // Queue the banner only once. A failed endpoint claim does not
             // discard TinyUSB's TX FIFO, so keep retrying flush below.
             if BANNER_PENDING.load(Ordering::Acquire) {
-                write_status(BANNER);
+                CDC_BANNER_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                let accepted = write_status_counted(BANNER);
+                CDC_BANNER_ACCEPTED.fetch_add(accepted as u32, Ordering::Relaxed);
                 BANNER_PENDING.store(false, Ordering::Release);
             }
 
@@ -133,6 +146,12 @@ fn write_cdc_diagnostics() {
     write_decimal(CDC_FLUSH_STARTED.load(Ordering::Relaxed) as usize);
     write_status(b" last_flush_return=");
     write_decimal(CDC_LAST_FLUSH.load(Ordering::Acquire) as usize);
+    write_status(b"\r\n  banner_attempts=");
+    write_decimal(CDC_BANNER_ATTEMPTS.load(Ordering::Relaxed) as usize);
+    write_status(b" banner_accepted_bytes=");
+    write_decimal(CDC_BANNER_ACCEPTED.load(Ordering::Relaxed) as usize);
+    write_status(b" tx_complete=");
+    write_decimal(CDC_TX_COMPLETE_COUNT.load(Ordering::Relaxed) as usize);
     write_status(b"\r\n");
 }
 
@@ -582,8 +601,13 @@ pub fn report_format_complete(report: crate::nand_fs::FormatReport) {
 }
 
 pub(crate) fn write_status(bytes: &[u8]) {
+    let _ = write_status_counted(bytes);
+}
+
+/// Queue bytes through TinyUSB and return the number accepted into its TX FIFO.
+fn write_status_counted(bytes: &[u8]) -> usize {
     if bytes.is_empty() {
-        return;
+        return 0;
     }
 
     // TinyUSB's CDC write may accept fewer bytes than requested when its TX
@@ -613,6 +637,7 @@ pub(crate) fn write_status(bytes: &[u8]) {
         }
     }
     let _ = unsafe { tusb::tud_cdc_n_write_flush(0) };
+    offset
 }
 
 fn command_is(line: &[u8], command: &[u8]) -> bool {
