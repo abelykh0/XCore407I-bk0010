@@ -10,6 +10,69 @@
 //! single-bit data errors and reject uncorrectable ECC syndromes.
 
 use core::mem::MaybeUninit;
+// Switch MSP to a caller-provided, 8-byte-aligned stack for one synchronous call.
+// r0 = entry function, r1 = context, r2 = stack top.
+core::arch::global_asm!(
+    ".syntax unified",
+    ".thumb",
+    ".global __xcore_call_on_stack",
+    ".type __xcore_call_on_stack, %function",
+    "__xcore_call_on_stack:",
+    "push {r4, r5, lr}",
+    "mov r4, sp",
+    "mov r5, r0",
+    "mov sp, r2",
+    "mov r0, r1",
+    "blx r5",
+    "mov sp, r4",
+    "pop {r4, r5, pc}",
+);
+
+extern "C" {
+    fn __xcore_call_on_stack(
+        entry: extern "C" fn(*mut ()),
+        context: *mut (),
+        stack_top: *mut u8,
+    );
+}
+
+struct AlternateStackCall<F, R> {
+    function: Option<F>,
+    result: MaybeUninit<R>,
+}
+
+unsafe extern "C" fn invoke_on_alternate_stack<F, R>(context: *mut ())
+where
+    F: FnOnce() -> R,
+{
+    let call = unsafe { &mut *context.cast::<AlternateStackCall<F, R>>() };
+    let function = call.function.take().unwrap();
+    call.result.write(function());
+}
+
+/// Run one synchronous operation on the CCM canvas-tail region. The region is
+/// reserved for the stack only in CDC mode; normal mode continues to use it as
+/// part of the video canvas.
+pub unsafe fn with_cdc_alternate_stack<F, R>(function: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let mut call = AlternateStackCall {
+        function: Some(function),
+        result: MaybeUninit::uninit(),
+    };
+    let stack_top = crate::camera::cdc_alternate_stack_top();
+    // The tail storage is 8-byte aligned and its size is a multiple of 8.
+    unsafe {
+        __xcore_call_on_stack(
+            invoke_on_alternate_stack::<F, R>,
+            (&mut call as *mut AlternateStackCall<F, R>).cast(),
+            stack_top,
+        );
+        call.result.assume_init()
+    }
+}
+
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
