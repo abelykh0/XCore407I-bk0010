@@ -292,7 +292,7 @@ fn ecc_end_chunk() -> u32 {
 }
 
 pub(crate) fn wait_ready_status() -> bool {
-    for iteration in 0..TIMEOUT {
+    for _ in 0..TIMEOUT {
         command(0x70);
         if read_data() & 0x40 != 0 { return true; }
         core::hint::spin_loop();
