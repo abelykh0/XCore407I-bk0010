@@ -647,7 +647,7 @@ pub fn service(
                                             } else {
                                                 write_status(b" ECC=MISMATCH");
                                             }
-                                            if let Some(old) = previous {
+                                            if let Some(old) = previous.as_ref() {
                                                 if result.stored[chunk] != old.stored[chunk]
                                                     || result.software[chunk] != old.software[chunk]
                                                     || result.data_fingerprint[chunk] != old.data_fingerprint[chunk]
