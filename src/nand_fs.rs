@@ -520,6 +520,58 @@ pub(crate) struct EccWriteTrace {
     pub readback_fingerprint: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
 }
 
+/// Low-overhead trace of the FSMC ECC/FIFO sequence during page programming.
+/// Unlike ECCWRITE, this does not perform a NAND readback.
+#[derive(Clone, Copy)]
+pub(crate) struct EccSequenceTrace {
+    pub page: u32,
+    pub flags: u32,
+    pub pcr_before: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub pcr_enabled: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub status_before_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub status_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub ecc_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub pcr_after_disable: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub oob_status_before_wait: u32,
+    pub oob_status_after_wait: u32,
+}
+static ECC_SEQUENCE_TRACE_ENABLED: AtomicU32 = AtomicU32::new(0);
+static ECC_SEQUENCE_TRACE_CAPTURED: AtomicU32 = AtomicU32::new(0);
+static mut LAST_ECC_SEQUENCE_TRACE: EccSequenceTrace = EccSequenceTrace {
+    page: u32::MAX, flags: 0,
+    pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    oob_status_before_wait: 0, oob_status_after_wait: 0,
+};
+
+pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
+    if enabled {
+        ECC_SEQUENCE_TRACE_CAPTURED.store(0, Ordering::Release);
+        unsafe {
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_ECC_SEQUENCE_TRACE),
+                EccSequenceTrace {
+                    page: u32::MAX, flags: 0,
+                    pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    oob_status_before_wait: 0, oob_status_after_wait: 0,
+                });
+        }
+    }
+    ECC_SEQUENCE_TRACE_ENABLED.store(enabled as u32, Ordering::Release);
+}
+
+pub(crate) fn ecc_sequence_trace() -> EccSequenceTrace {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LAST_ECC_SEQUENCE_TRACE)) }
+}
+
 static ECC_WRITE_TRACE_ENABLED: AtomicU32 = AtomicU32::new(0);
 static ECC_WRITE_TRACE_PROGRAM_COUNT: AtomicU32 = AtomicU32::new(0);
 static ECC_WRITE_TRACE_MISMATCH_SEEN: AtomicU32 = AtomicU32::new(0);
@@ -585,19 +637,47 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     cortex_m::asm::delay(1_000);
 
     let trace_enabled = ECC_WRITE_TRACE_ENABLED.load(Ordering::Acquire) != 0;
+    let sequence_trace_enabled = ECC_SEQUENCE_TRACE_ENABLED.load(Ordering::Acquire) != 0
+        && ECC_SEQUENCE_TRACE_CAPTURED.load(Ordering::Acquire) == 0;
+    let mut sequence_trace = EccSequenceTrace {
+        page, flags: 0,
+        pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        oob_status_before_wait: 0, oob_status_after_wait: 0,
+    };
     let mut ecc = [0xFFu8; ECC_OOB_BYTES];
     let mut hardware_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     let mut input_software_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     let mut input_fingerprint = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        if sequence_trace_enabled {
+            sequence_trace.pcr_before[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
+        }
         ecc_begin_chunk();
+        if sequence_trace_enabled {
+            sequence_trace.pcr_enabled[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
+        }
         for &byte in chunk { write_data(byte); }
+        if sequence_trace_enabled {
+            sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
+        }
         if !wait_fsmc_fifo_empty() {
             let status = unsafe { read_volatile(FSMC_SR2) };
             record_nand_device_failure(6, page, status);
             return false;
         }
+        if sequence_trace_enabled {
+            sequence_trace.status_after_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
+        }
         let chunk_ecc = ecc_end_chunk();
+        if sequence_trace_enabled {
+            sequence_trace.ecc_after_wait[chunk_index] = chunk_ecc;
+            sequence_trace.pcr_after_disable[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
+        }
         hardware_ecc[chunk_index] = chunk_ecc;
         if trace_enabled {
             input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
@@ -614,12 +694,19 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     // Drain the FSMC write FIFO after the spare-area ECC and tag bytes too.
     // The program-confirm command must not be issued while OOB data remains
     // buffered in the FSMC NAND write FIFO.
+    if sequence_trace_enabled {
+        sequence_trace.oob_status_before_wait = unsafe { read_volatile(FSMC_SR2) };
+    }
     if !wait_fsmc_fifo_empty() {
         let status = unsafe { read_volatile(FSMC_SR2) };
         record_nand_device_failure(7, page, status);
         return false;
     }
 
+    if sequence_trace_enabled {
+        sequence_trace.oob_status_after_wait = unsafe { read_volatile(FSMC_SR2) };
+        sequence_trace.flags |= 1;
+    }
     command(0x10);
     if !wait_ready_rb() {
         record_nand_device_failure(4, page, 0);
@@ -630,6 +717,17 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if status & 0x01 != 0 {
         record_nand_device_failure(5, page, status as u32);
         return false;
+    }
+    if sequence_trace_enabled {
+        sequence_trace.flags |= 1 << 1; // NAND program-confirm/status succeeded.
+        if ECC_SEQUENCE_TRACE_CAPTURED.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+            unsafe {
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!(LAST_ECC_SEQUENCE_TRACE),
+                    sequence_trace,
+                );
+            }
+        }
     }
     if trace_enabled {
         // Verify what was actually committed, without changing the result of
