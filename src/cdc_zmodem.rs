@@ -590,6 +590,12 @@ fn service_sender(
                     break;
                 }
             }
+            // Action is non-exhaustive; fail closed if the protocol crate adds
+            // an action this integration does not understand.
+            _ => {
+                sender.abort();
+                break;
+            }
         }
     }
 
