@@ -807,6 +807,86 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
     Some(result)
 }
 
+/// Result of a raw page read with the FSMC ECC engine enabled per 512-byte chunk.
+pub(crate) struct EccPageHardwareComparison {
+    pub stored: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub hardware: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub software: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub data_fingerprint: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub reset_status: u8,
+}
+
+/// Read-only diagnostic: NAND RESET, raw data read with FSMC ECC capture,
+/// then OOB read with ECC disabled. No ECC correction and no NAND writes.
+pub(crate) fn ecc_hardware_compare_page(page: u32) -> Option<EccPageHardwareComparison> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
+
+    let data = unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(ECC_DIAGNOSTIC_PAGE_BUFFER).cast::<u8>(),
+            PAGE_SIZE,
+        )
+    };
+
+    // Start each sample from a known NAND command state.
+    command(0xFF);
+    if !wait_ready_rb_timeout(ECC_DIAGNOSTIC_TIMEOUT) { return None; }
+    command(0x70);
+    let reset_status = read_data();
+    if reset_status & 0x40 == 0 { return None; }
+
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb_timeout(ECC_DIAGNOSTIC_TIMEOUT) { return None; }
+
+    let mut hardware = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    for (index, chunk) in data.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        ecc_begin_chunk();
+        for byte in chunk.iter_mut() { *byte = read_data(); }
+        if !wait_fsmc_fifo_empty() {
+            let _ = ecc_end_chunk();
+            return None;
+        }
+        hardware[index] = ecc_end_chunk();
+        service_io_hook();
+    }
+
+    let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
+    if !read_page_with_timeout(
+        page,
+        PAGE_SIZE as u16 + ECC_OOB_OFFSET,
+        &mut spare,
+        ECC_DIAGNOSTIC_TIMEOUT,
+    ) || spare[ECC_OOB_BYTES..] != ECC_TAG {
+        return None;
+    }
+
+    let mut result = EccPageHardwareComparison {
+        stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        hardware,
+        software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        data_fingerprint: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        reset_status,
+    };
+    for (index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        let offset = index * ECC_BYTES_PER_CHUNK;
+        result.stored[index] = u32::from_le_bytes([
+            spare[offset], spare[offset + 1], spare[offset + 2], 0,
+        ]);
+        result.software[index] = ecc_software_512_fsmc(chunk);
+        let mut fingerprint = 0x811C_9DC5u32;
+        for &byte in chunk {
+            fingerprint = (fingerprint ^ byte as u32).wrapping_mul(0x0100_0193);
+        }
+        result.data_fingerprint[index] = fingerprint;
+    }
+    Some(result)
+}
+
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE { return false; }
 
