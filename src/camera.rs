@@ -125,7 +125,7 @@ static mut DEMO_CANVAS_TAIL: AlignedCanvas<CANVAS_TAIL_BYTES> =
 
 #[repr(C, align(4))]
 struct RowBuffers([u8; WIDTH * 2]);
-#[unsafe(link_section = ".ccmram.rows")]
+// CPU-only line conversion scratch; keep it in SRAM to conserve CCM.
 static mut ROW_BUFFERS: RowBuffers = RowBuffers([0; WIDTH * 2]);
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
 // CDC mode uses the PC CONNECT renderer and does not consume the demo canvas.
