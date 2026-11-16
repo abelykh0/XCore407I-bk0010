@@ -470,13 +470,13 @@ fn service_sender(
     let Some(mut sender) = state.sender.take() else {
         if state.session_complete_pending {
             state.session_complete_pending = false;
-            state.send_path_len = 0;
-            state.send_wire_len = 0;
-            state.send_wire_pos = 0;
             super::cdc_console::write_send_complete(
                 &state.send_path[1..state.send_path_len - 1],
                 state.send_size,
             );
+            state.send_path_len = 0;
+            state.send_wire_len = 0;
+            state.send_wire_pos = 0;
             return true;
         }
         return false;
