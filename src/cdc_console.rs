@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  ECCPAGEHW  Compare stored, FSMC hardware, and software ECC after NAND RESET (read-only)\r\n  ECCSEQ ON/OFF Arm/disarm low-overhead program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable verification of subsequent page programs\r\n  ECCWRITESTATUS Show the last verified page program and ECC values\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCFILETEST Write/read a 4 KiB test file with ECC bypassed, then checked\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  ECCPAGEHW  Compare stored, FSMC hardware, and software ECC after NAND RESET (read-only)\r\n  ECCSEQ ON/OFF Arm/disarm low-overhead program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable verification of subsequent page programs\r\n  ECCWRITESTATUS Show the last verified page program and ECC values\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -969,6 +969,48 @@ pub fn service(
                                 }
                             }
                             write_status(b"ECCPAGEHW complete. Compare the three samples, especially chunk 3.\r\n> ");
+                        }
+                    } else if command_is(line, b"ECCFILETEST") {
+                        if let Some(fs) = fs {
+                            write_status(b"\r\nECCFILETEST: writing deterministic 4096-byte file /eccdiag.bin...\r\n");
+                            crate::dhara_fs::clear_storage_io_diagnostic();
+                            crate::nand_fs::clear_nand_read_diagnostic();
+                            let result = cdc_zmodem::run_ecc_storage_diagnostic(fs, zmodem);
+                            match result {
+                                0 => write_status(b"ECCFILETEST PASS: write, ECC-bypassed read, and ECC-checked read all matched. Temporary file removed.\r\n> "),
+                                1 => write_status(b"ECCFILETEST FAIL stage 1: invalid test path.\r\n> "),
+                                2 => write_status(b"ECCFILETEST FAIL stage 2: could not remove previous test file.\r\n> "),
+                                3 => write_status(b"ECCFILETEST FAIL stage 3: create test file failed.\r\n> "),
+                                4 => write_status(b"ECCFILETEST FAIL stage 4: write/flush failed.\r\n> "),
+                                5 => write_status(b"ECCFILETEST FAIL stage 5: ECC-bypassed read failed or data mismatch.\r\n> "),
+                                _ => write_status(b"ECCFILETEST FAIL stage 6: ECC-checked read failed or data mismatch.\r\n> "),
+                            }
+                            let (stage, detail, page, stored, calculated) = crate::nand_fs::nand_read_diagnostic();
+                            if stage != 0 {
+                                write_status(b"NAND read stage: 0x");
+                                write_hex_u32(stage);
+                                write_status(b" detail: 0x");
+                                write_hex_u32(detail);
+                                write_status(b" physical page: 0x");
+                                write_hex_u32(page);
+                                write_status(b" stored ECC: 0x");
+                                write_hex_u32(stored);
+                                write_status(b" calculated ECC: 0x");
+                                write_hex_u32(calculated);
+                                write_status(b"\r\n");
+                            }
+                            let (operation, location, error) = crate::dhara_fs::storage_io_diagnostic();
+                            if operation != 0 {
+                                write_status(b"Dhara operation: 0x");
+                                write_hex_u32(operation);
+                                write_status(b" logical sector: 0x");
+                                write_hex_u32(location);
+                                write_status(b" error: 0x");
+                                write_hex_u32(error);
+                                write_status(b"\r\n> ");
+                            }
+                        } else {
+                            write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"ECCSCAN") {
                         write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
