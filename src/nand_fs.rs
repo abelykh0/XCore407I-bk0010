@@ -1358,6 +1358,28 @@ pub fn with_mounted_detailed_with_progress<R>(
     mounted.map_err(|_| FsAccessError::Operation)
 }
 
+
+/// Visit each entry in the LittleFS root directory using one shared iterator.
+/// The path slice includes its trailing NUL; size is meaningful for files.
+pub fn read_root_directory(
+    fs: &Filesystem<'_, ActiveStorage>,
+    mut visit: impl FnMut(&[u8], bool, usize) -> LfsResult<()>,
+) -> LfsResult<()> {
+    fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
+        for item in directory {
+            let entry = item?;
+            let metadata = entry.metadata();
+            let path = entry.path();
+            visit(
+                path.as_str_ref_with_trailing_nul().as_bytes(),
+                metadata.is_dir(),
+                metadata.len(),
+            )?;
+        }
+        Ok(())
+    })
+}
+
 /// Compatibility wrapper for existing callers that only need success/failure.
 pub fn with_mounted<R>(
     service: impl FnOnce(&Filesystem<'_, ActiveStorage>) -> LfsResult<R>,
