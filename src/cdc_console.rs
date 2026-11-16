@@ -496,7 +496,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
             write_decimal_grouped(size);
             write_status(b" bytes");
         }
-        write_status(b"\\r\\n");
+        write_status(b"\r\n");
         Ok(())
     });
 
