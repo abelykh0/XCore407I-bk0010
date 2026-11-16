@@ -2,6 +2,8 @@
 #![allow(suspicious_runtime_symbol_definitions)]
 
 pub mod bk_screen;
+pub mod cdc_console;
+pub mod cdc_zmodem;
 pub mod camera;
 pub mod nand_fs;
 pub mod dhara_fs;

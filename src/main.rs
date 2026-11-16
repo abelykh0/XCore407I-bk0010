@@ -8,13 +8,13 @@ mod keyboard_map;
 mod usb_host;
 
 use core::ptr;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicPtr, Ordering};
 use cortex_m::peripheral::{syst::SystClkSource, NVIC};
 use cortex_m_rt::{entry, exception};
 use panic_halt as _;
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
-use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, Nv12DemoImage};
+use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, show_file_browser_line, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
 use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
@@ -44,16 +44,161 @@ use file_browser::{
 };
 use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
 use usb_host::{
-    configure_usb_host_task_timer, try_init_usb_fs_host, USB_FS_READY,
-    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING,
+    configure_usb_host_task_timer, restart_usb_fs_host, try_init_usb_fs_host, USB_FS_READY,
+    USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
+    USB_FS_LAST_ACTIVITY_TICK,
 };
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
+
+static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
+    AtomicPtr::new(ptr::null_mut());
+static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
+
+// ECCSCAN runs in the CDC console's foreground. Keep the USB device stack
+// serviced between NAND reads, but do not run the video renderer from this
+// callback: renderer work can monopolize the scan between completed blocks.
+fn service_cdc_scan_io() {
+    unsafe {
+        let _ = tusb::tud_task_ext(1, false);
+        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+    }
+    xcore407i_blinker::cdc_console::service_connection();
+
+    // ECCSCAN can run for a long time in the CDC foreground. Keep the
+    // camera producer moving, but advance only one bounded batch per service
+    // call so renderer work cannot monopolize the scan.
+    let renderer = FILE_BROWSER_VIDEO_RENDERER.load(Ordering::Acquire);
+    if !renderer.is_null() {
+        unsafe {
+            let _ = prepare_next_video_batch(&mut *renderer);
+        }
+    }
+}
+
+fn service_file_browser_io() {
+    unsafe {
+        let _ = tusb::tud_task_ext(1, false);
+        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+    }
+    if USB_FS_READY.load(Ordering::Acquire)
+        && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+    {
+        unsafe { tusb::tuh_task_ext(0, false); }
+    } else {
+        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+    }
+
+    // A NAND wait hook must remain bounded. Prepare at most one video
+    // batch per invocation; draining the renderer here can monopolize the
+    // foreground while the NAND is busy and starve CDC/UVC servicing.
+    let renderer = FILE_BROWSER_VIDEO_RENDERER.load(Ordering::Acquire);
+    if !renderer.is_null() {
+        unsafe {
+            let _ = prepare_next_video_batch(&mut *renderer);
+        }
+    }
+}
 
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
     fn bk_timing_cycles() -> u32;
+}
+
+
+fn draw_keyboard_unavailable_screen() {
+    fn decimal(mut value: u32, out: &mut [u8; 10]) -> &[u8] {
+        let mut pos = out.len();
+        if value == 0 {
+            out[9] = b'0';
+            return &out[9..];
+        }
+        while value != 0 && pos != 0 {
+            pos -= 1;
+            out[pos] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+        &out[pos..]
+    }
+
+    clear_demo_canvas(0x10); // blue background
+    show_file_browser_line(3, b"KEYBOARD NOT AVAILABLE", false);
+    show_file_browser_line(5, b"USB HOST DIAGNOSTICS", false);
+
+    let (hid, boot, reports, last_len, rearm, protocol, unmounts) =
+        keyboard::keyboard_diagnostics();
+    show_file_browser_line(7, if USB_FS_READY.load(Ordering::Acquire) {
+        b"OTG_FS HOST: READY" as &[u8]
+    } else {
+        b"OTG_FS HOST: NOT READY" as &[u8]
+    }, false);
+
+    let mut line = [b' '; 32];
+    let mut number = [0u8; 10];
+    line[..10].copy_from_slice(b"HOST EVENT");
+    let digits = decimal(USB_FS_STATUS.load(Ordering::Acquire), &mut number);
+    line[11..11 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(9, &line, false);
+
+    line.fill(b' ');
+    line[..10].copy_from_slice(b"HID MOUNTS");
+    let digits = decimal(hid, &mut number);
+    line[11..11 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(10, &line, false);
+
+    line.fill(b' ');
+    line[..14].copy_from_slice(b"BOOT KEYBOARDS");
+    let digits = decimal(boot, &mut number);
+    line[16..16 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(11, &line, false);
+
+    line.fill(b' ');
+    line[..7].copy_from_slice(b"REPORTS");
+    let digits = decimal(reports, &mut number);
+    line[8..8 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(12, &line, false);
+
+    line.fill(b' ');
+    line[..15].copy_from_slice(b"LAST REPORT LEN");
+    let digits = decimal(last_len, &mut number);
+    line[16..16 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(13, &line, false);
+
+    line.fill(b' ');
+    line[..11].copy_from_slice(b"REARM FAILS");
+    let digits = decimal(rearm, &mut number);
+    line[12..12 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(14, &line, false);
+
+    line.fill(b' ');
+    line[..12].copy_from_slice(b"HID IF PROTO");
+    if protocol == 0xff {
+        line[13..17].copy_from_slice(b"NONE");
+    } else if protocol == 0xfe {
+        line[13..27].copy_from_slice(b"SET PROTO FAIL");
+    } else {
+        let digits = decimal(protocol as u32, &mut number);
+        line[13..13 + digits.len()].copy_from_slice(digits);
+    }
+    show_file_browser_line(15, &line, false);
+
+    line.fill(b' ');
+    line[..8].copy_from_slice(b"UNMOUNTS");
+    let digits = decimal(unmounts, &mut number);
+    line[9..9 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(16, &line, false);
+
+    line.fill(b' ');
+    line[..13].copy_from_slice(b"HOST RESTARTS");
+    let digits = decimal(usb_host::USB_FS_RESTART_COUNT.load(Ordering::Acquire), &mut number);
+    line[14..14 + digits.len()].copy_from_slice(digits);
+    show_file_browser_line(17, &line, false);
+
+    show_file_browser_line(19, b"CHECK KEYBOARD USB CABLE/PORT", false);
+    show_file_browser_line(20, b"USE USB BOOT-HID KEYBOARD", false);
+    show_file_browser_line(22, b"AUTO USB HOST RETRY", false);
+    show_file_browser_line(24, b"NO EMULATOR STARTED", false);
 }
 
 #[entry]
@@ -69,17 +214,8 @@ fn main() -> ! {
     #[cfg(feature = "cpu-cycle-diag")]
     enable_cycle_counter(&mut core);
 
-    // BK emulator initialization
-    unsafe {
-         bk_platform_init(
-             xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
-             xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
-             xcore407i_blinker::rom::BASIC_ROM.len() as u32,
-         );
-    }
-
-    // initialize_demo_canvas();
-    clear_demo_canvas(0x10);
+    // Emulator initialization is deferred until the first boot-keyboard
+    // report selects normal mode. CDC mode never initializes BK or storage UI.
 
     configure_board_pins(
         &mut device.RCC,
@@ -105,8 +241,12 @@ fn main() -> ! {
     core.SYST.enable_interrupt();
     core.SYST.enable_counter();
 
-    // Prepare and initialize OTG_FS host. A failed attempt is retried from
-    // the main loop after a short delay; OTG_HS is initialized separately as a TinyUSB device.
+    // TIM3 schedules TinyUSB host-task processing outside interrupt context.
+    configure_usb_host_task_timer(&device.RCC, &device.TIM3, &mut core.NVIC);
+
+    // Prepare and initialize OTG_FS host. A failed attempt is retried during
+    // the boot-selection window and later from the main loop; OTG_HS is
+    // initialized separately as a TinyUSB device.
     unsafe {
         core.NVIC.set_priority(interrupt::OTG_FS, 0x3 << 4);
         NVIC::unpend(interrupt::OTG_FS);
@@ -119,10 +259,95 @@ fn main() -> ! {
         );
     }
 
+    // Show the keyboard diagnostic screen after 5 seconds without a
+    // successful USB-host discovery event. Each successful stage refreshes
+    // USB_FS_LAST_ACTIVITY_TICK; host servicing continues on the blue screen.
+    // F10 selects CDC only before this timeout. A keyboard discovered later
+    // starts the emulator directly, without another mode-selection step.
+    const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
+    let mut keyboard_host_restart_attempted = false;
+    USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
+    while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
+        if !USB_FS_READY.load(Ordering::Acquire) {
+            let now = TICKS.load(Ordering::Relaxed);
+            let retry_at = USB_FS_RETRY_AT.load(Ordering::Acquire);
+            if now.wrapping_sub(retry_at) as i32 >= 0 {
+                if !try_init_usb_fs_host(&device.RCC, &mut core.NVIC) {
+                    USB_FS_RETRY_AT.store(
+                        now.wrapping_add(USB_FS_RETRY_INTERVAL_MS),
+                        Ordering::Release,
+                    );
+                }
+            }
+        }
+
+        if USB_FS_READY.load(Ordering::Acquire)
+            && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
+        {
+            unsafe { tusb::tuh_task_ext(0, false); }
+        } else {
+            USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        }
+
+        // A valid keyboard report has already selected NORMAL or CDC.
+        // Do not keep consuming the keyboard reports for the remainder of
+        // the fallback window: initialize the selected mode immediately.
+        if keyboard::boot_selection() != keyboard::BOOT_SELECTION_WAITING {
+            break;
+        }
+
+        let now = TICKS.load(Ordering::Relaxed);
+        let last_activity = USB_FS_LAST_ACTIVITY_TICK.load(Ordering::Acquire);
+        if now.wrapping_sub(last_activity) >= USB_DISCOVERY_INACTIVITY_TIMEOUT_MS {
+            if !keyboard_host_restart_attempted && USB_FS_READY.load(Ordering::Acquire) {
+                // One recovery attempt before declaring the keyboard unavailable.
+                // Keep the boot-selection loop active so F10 is still recognized
+                // if the keyboard enumerates after the host restart.
+                keyboard_host_restart_attempted = true;
+                let _ = restart_usb_fs_host(&device.RCC, &device.TIM3, &mut core.NVIC);
+                USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
+                continue;
+            }
+
+            // The single host restart did not produce a keyboard report within
+            // the second discovery window. Select normal mode and show diagnostics.
+            keyboard::set_boot_default_normal();
+            break;
+        }
+    }
+
+    let boot_mode = keyboard::boot_selection();
+    let cdc_enabled = boot_mode == keyboard::BOOT_SELECTION_CDC;
+    // A normal-mode timeout is not proof that a keyboard exists. Do not
+    // start the emulator unless a boot-keyboard interface actually mounted.
+    let mut emulator_enabled = boot_mode == keyboard::BOOT_SELECTION_NORMAL
+        && keyboard::keyboard_is_mounted();
+    let keyboard_unavailable =
+        boot_mode == keyboard::BOOT_SELECTION_NORMAL && !emulator_enabled;
+
+    if keyboard_unavailable {
+        draw_keyboard_unavailable_screen();
+    }
+
+    if emulator_enabled {
+        unsafe {
+            bk_platform_init(
+                xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
+                xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
+                xcore407i_blinker::rom::BASIC_ROM.len() as u32,
+            );
+        }
+        keyboard::enable_emulator_input();
+        clear_demo_canvas(0x10);
+    }
+
     // The main loop owns the renderer; TinyUSB UVC completion callbacks
     // consume prepared batches from the OTG_HS device interrupt.
     let mut video_renderer = Nv12DemoImage::try_new()
         .expect("NV12 renderer initialization failed");
+    if cdc_enabled {
+        video_renderer.set_pc_connect_screen();
+    }
     while prepare_next_video_batch(&mut video_renderer) {}
 
     // Initialize TinyUSB as the OTG_HS high-speed device. The FS host remains
@@ -136,6 +361,8 @@ fn main() -> ! {
         core.NVIC.set_priority(interrupt::OTG_HS, 0);
         NVIC::unpend(interrupt::OTG_HS);
     }
+
+    xcore407i_blinker::uvc::set_cdc_mode(cdc_enabled);
 
     let hs_device_init = tusb::tusb_rhport_init_t {
         role: tusb::tusb_role_t::TUSB_ROLE_DEVICE,
@@ -153,13 +380,154 @@ fn main() -> ! {
         NVIC::unmask(interrupt::OTG_HS);
     }
 
-    // TIM3 schedules the TinyUSB FS host task at 1 kHz. The ISR only sets a
-    // flag; tuh_task_ext() itself must run in thread context, never in an ISR.
-    configure_usb_host_task_timer(
-        &device.RCC,
-        &device.TIM3,
-        &mut core.NVIC,
-    );
+    if cdc_enabled {
+        // F10 selects a device-only mode. Stop the FS host controller and
+        // its scheduler permanently; no keyboard or other host traffic is
+        // serviced after this point. OTG_HS remains the UVC+CDC device.
+        NVIC::mask(interrupt::OTG_FS);
+        NVIC::unpend(interrupt::OTG_FS);
+
+        // Reset and gate OTG_FS after masking its IRQ. This makes the
+        // keyboard host electrically inactive for the remainder of CDC mode.
+        device.RCC.ahb2rstr().modify(|_, w| w.otgfsrst().set_bit());
+        device.RCC.ahb2enr().modify(|_, w| w.otgfsen().clear_bit());
+        device.TIM3.cr1().write(|w| w.cen().clear_bit());
+        device.TIM3.dier().write(|w| w.uie().clear_bit());
+        USB_FS_READY.store(false, Ordering::Release);
+        USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+
+        // Mount LittleFS for each CDC session. After formatting, the old
+        // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
+        // Keep the ZMODEM state on the CCM alternate stack: it contains the reusable
+        // LittleFS FileAllocation and must not consume the small main stack.
+        let mut just_formatted = false;
+        loop {
+            let mount_result: Result<xcore407i_blinker::cdc_console::FormatRequest, xcore407i_blinker::nand_fs::FsAccessError> =
+                unsafe {
+                    xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
+                        let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
+
+                        // NAND initialization and the initial LittleFS mount happen
+                        // before the filesystem service closure is entered. Keep the
+                        // USB device and PC CONNECT video alive during those operations.
+                        FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+                        xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+                        let mount_result = xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
+                            if just_formatted {
+                                xcore407i_blinker::cdc_console::report_format_status(
+                                    b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
+                                );
+                                just_formatted = false;
+                            }
+                            loop {
+                                unsafe {
+                                    let _ = tusb::tud_task_ext(1, false);
+                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                }
+                                // Keep USB/UVC and the video producer alive inside synchronous
+                                // NAND waits. The PC CONNECT renderer does not read the canvas.
+                                FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+                                xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+                                let format_requested = xcore407i_blinker::cdc_console::service(
+                                    Some(fs),
+                                    &mut zmodem_state,
+                                    TICKS.load(Ordering::Relaxed),
+                                    &mut || service_cdc_scan_io(),
+                                );
+                                xcore407i_blinker::nand_fs::set_io_service_hook(None);
+                                FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
+                                while prepare_next_video_batch(&mut video_renderer) {}
+                                if format_requested != xcore407i_blinker::cdc_console::FormatRequest::None {
+                                    break Ok(format_requested);
+                                }
+                            }
+                        }, |_, _| service_cdc_scan_io());
+                        xcore407i_blinker::nand_fs::set_io_service_hook(None);
+                        FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
+
+                        // Keep the state on the alternate stack in the storage-unavailable
+                        // console too; do not construct another large state on the main stack.
+                        if let Err(error) = mount_result {
+                            xcore407i_blinker::cdc_console::report_storage_error(error);
+                            loop {
+                                unsafe {
+                                    let _ = tusb::tud_task_ext(1, false);
+                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                }
+                                let requested = xcore407i_blinker::cdc_console::service(
+                                    None,
+                                    &mut zmodem_state,
+                                    TICKS.load(Ordering::Relaxed),
+                                    &mut || {
+                                        unsafe {
+                                            let _ = tusb::tud_task_ext(1, false);
+                                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                        }
+                                        while prepare_next_video_batch(&mut video_renderer) {}
+                                    },
+                                );
+                                while prepare_next_video_batch(&mut video_renderer) {}
+                                if requested != xcore407i_blinker::cdc_console::FormatRequest::None {
+                                    break Ok(requested);
+                                }
+                            }
+                        } else {
+                            mount_result
+                        }
+                    })
+                };
+
+        // The mounted-filesystem closure has returned, so LittleFS and its
+        // Dhara storage borrow are dropped before the destructive format.
+        let format_request = match &mount_result { Ok(request) => *request, Err(_) => xcore407i_blinker::cdc_console::FormatRequest::None };
+
+        if format_request == xcore407i_blinker::cdc_console::FormatRequest::LittleFs {
+            xcore407i_blinker::cdc_console::report_format_status(b"Filesystem released. Formatting LittleFS only; Dhara journal is preserved...\r\n");
+            FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+            xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+            let format_result = xcore407i_blinker::nand_fs::format_existing_littlefs();
+            xcore407i_blinker::nand_fs::set_io_service_hook(None);
+            FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
+            match format_result {
+                Ok(()) => {
+                    xcore407i_blinker::cdc_console::report_format_status(b"LittleFS-only format complete and verified.\r\n");
+                    just_formatted = true;
+                    continue;
+                }
+                Err(error) => xcore407i_blinker::cdc_console::report_format_failure(error),
+            }
+        } else if format_request == xcore407i_blinker::cdc_console::FormatRequest::WholeNand {
+            xcore407i_blinker::cdc_console::report_format_status(
+                b"Filesystem released. Formatting NAND; all files will be lost...\r\n",
+            );
+            let mut last_reported = 0u32;
+            let format_result =
+                xcore407i_blinker::nand_fs::initialize_nand_volume_with_progress(
+                    |completed, total| {
+                        unsafe {
+                            let _ = tusb::tud_task_ext(1, false);
+                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                        }
+                        while prepare_next_video_batch(&mut video_renderer) {}
+                        if completed == total || completed >= last_reported + 32 {
+                            last_reported = completed;
+                            xcore407i_blinker::cdc_console::report_format_status(b".");
+                        }
+                    },
+                );
+            match format_result {
+                Ok(report) => {
+                    xcore407i_blinker::cdc_console::report_format_complete(report);
+                    just_formatted = true;
+                    continue;
+                }
+                Err(error) => {
+                    xcore407i_blinker::cdc_console::report_format_failure(error);
+                }
+            }
+        }
+        }
+    }
 
     let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
     let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
@@ -167,8 +535,11 @@ fn main() -> ! {
     let mut browser_selected = 0usize;
     let mut browser_open = false;
     // Real-time emulator pacing uses the PDP cycle counter.
+    let mut keyboard_diag_last = keyboard::keyboard_diagnostics();
+    let mut keyboard_host_status_last = USB_FS_STATUS.load(Ordering::Acquire);
+    let mut keyboard_host_ready_last = USB_FS_READY.load(Ordering::Acquire);
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
-    let mut pacing_start_cycles = unsafe { bk_timing_cycles() };
+    let mut pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
     let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
     let mut init_screen_state = INIT_IDLE;
@@ -178,6 +549,10 @@ fn main() -> ! {
     let mut diagnostic_last_pdp = pacing_start_cycles;
 
     loop {
+        // Keyboard recovery is limited to one restart during boot selection.
+        // Once the diagnostic screen is shown, do not repeatedly reset the host;
+        // leave it running so late enumeration can still be observed.
+
         // Retry OTG_FS initialization outside interrupt context. Keep the
         // IRQ masked until TinyUSB reports a successful root-hub init.
         if !USB_FS_READY.load(Ordering::Acquire) {
@@ -196,9 +571,8 @@ fn main() -> ! {
         // Drain TinyUSB device control/bus events in thread context. ISO data
         // endpoints are re-armed directly by their class xfer_isr callbacks.
         unsafe {
-            let _ = tusb::tud_task_ext(0, false);
+            let _ = tusb::tud_task_ext(1, false);
             xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_audio_render();
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
@@ -209,6 +583,40 @@ fn main() -> ! {
             unsafe { tusb::tuh_task_ext(0, false); }
         } else {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+        }
+
+        if !emulator_enabled && !cdc_enabled {
+            let diagnostics = keyboard::keyboard_diagnostics();
+            let host_status = USB_FS_STATUS.load(Ordering::Acquire);
+            let host_ready = USB_FS_READY.load(Ordering::Acquire);
+            if diagnostics != keyboard_diag_last
+                || host_status != keyboard_host_status_last
+                || host_ready != keyboard_host_ready_last
+            {
+                draw_keyboard_unavailable_screen();
+                keyboard_diag_last = diagnostics;
+                keyboard_host_status_last = host_status;
+                keyboard_host_ready_last = host_ready;
+            }
+        }
+
+        // If a boot keyboard mounts after the initial selection window,
+        // initialize the emulator immediately; no keypress or F10 decision
+        // is required on the diagnostic screen.
+        if !emulator_enabled && !cdc_enabled && keyboard::keyboard_is_mounted() {
+            // After the blue screen, a mounted boot keyboard is sufficient:
+            // do not wait for a keypress or interpret F10 as a mode command.
+            unsafe {
+                bk_platform_init(
+                    xcore407i_blinker::rom::MONITOR_ROM.as_ptr(),
+                    xcore407i_blinker::rom::BASIC_ROM.as_ptr(),
+                    xcore407i_blinker::rom::BASIC_ROM.len() as u32,
+                );
+            }
+            keyboard::enable_emulator_input();
+            emulator_enabled = true;
+            clear_demo_canvas(0x10);
+            show_file_browser_line(3, b"USB KEYBOARD CONNECTED", false);
         }
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
@@ -291,13 +699,17 @@ fn main() -> ! {
 
         let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
         if save_state == SAVE_DIALOG_CHECK {
+            show_file_browser_line(27, b"F3: BUILDING SAVE PATH", false);
             let mut path = [0u8; MAX_BROWSER_PATH];
             let path_len = unsafe { build_save_path(&mut path) };
             if path_len == 0 {
+                show_file_browser_line(27, b"F3: INVALID SAVE PATH", false);
                 SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
                 SAVE_DIALOG_RESULT.store(SAVE_RESULT_ERROR, Ordering::Release);
             } else {
+                show_file_browser_line(27, b"F3: CHECKING FILE ON NAND", false);
                 let exists = save_file_exists(&path[..path_len]);
+                show_file_browser_line(27, b"F3: FILE CHECK COMPLETE", false);
                 if exists {
                     SAVE_DIALOG_STATE.store(SAVE_DIALOG_CONFIRM, Ordering::Release);
                     SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
@@ -309,10 +721,17 @@ fn main() -> ! {
         }
 
         if SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_WRITE {
+            show_file_browser_line(27, b"F3: PREPARING NAND WRITE", false);
             let mut path = [0u8; MAX_BROWSER_PATH];
             let path_len = unsafe { build_save_path(&mut path) };
             let overwrite = SAVE_OVERWRITE.load(Ordering::Acquire);
+            show_file_browser_line(27, b"F3: WRITING RAM TO NAND", false);
             let saved = path_len != 0 && save_ram_to_path(&path[..path_len], overwrite).is_ok();
+            show_file_browser_line(
+                27,
+                if saved { b"F3: NAND WRITE COMPLETE" } else { b"F3: NAND WRITE FAILED" },
+                false,
+            );
             SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
             SAVE_DIALOG_RESULT.store(
                 if saved { SAVE_RESULT_OK } else { SAVE_RESULT_ERROR },
@@ -345,7 +764,55 @@ fn main() -> ! {
 
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
             keyboard_queue_discard();
-            match list_root_files(&mut *browser_paths, &mut *browser_path_lengths) {
+
+            // Enter the browser visibly before any NAND/Dhara/LittleFS work.
+            // If mounting stalls or faults, the user can distinguish that
+            // from a failure to receive F2.
+            clear_demo_canvas(0);
+            show_file_browser_line(0, b"NAND FILES - SELECT PROGRAM", false);
+            show_file_browser_line(3, b"OPENING NAND STORAGE...", true);
+            show_file_browser_line(5, b"MOUNTING LITTLEFS", false);
+            show_file_browser_line(27, b"PLEASE WAIT", false);
+
+
+            // NAND/LittleFS operations are synchronous. Install a narrowly
+            // scoped hook so USB and the UVC producer continue running even
+            // inside NAND ready/FSMC wait loops and ECC page processing.
+            FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+            xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+            let listing_result = list_root_files(
+                &mut *browser_paths,
+                &mut *browser_path_lengths,
+                |done, total| {
+                    if done == u32::MAX {
+                        show_file_browser_line(
+                            27,
+                            if total == 0 {
+                                b"F2: LITTLEFS MOUNT" as &[u8]
+                            } else {
+                                b"F2: ROOT DIRECTORY"
+                            },
+                            false,
+                        );
+                    } else if total == 0 {
+                        show_file_browser_line(27, b"F2: NAND INIT", false);
+                    } else if done == 1 || done % 32 == 0 || done == total {
+                        let percent = done.saturating_mul(100) / total;
+                        let mut line = [b' '; 32];
+                        line[..13].copy_from_slice(b"F2: NAND SCAN");
+                        line[13] = b'0' + ((percent / 100) % 10) as u8;
+                        line[14] = b'0' + ((percent / 10) % 10) as u8;
+                        line[15] = b'0' + (percent % 10) as u8;
+                        line[16] = b'%';
+                        show_file_browser_line(27, &line, false);
+                    }
+                    service_file_browser_io();
+                },
+            );
+            xcore407i_blinker::nand_fs::set_io_service_hook(None);
+            FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
+
+            match listing_result {
                 Ok(count) => {
                     browser_count = count;
                     browser_selected = 0;
@@ -453,14 +920,15 @@ fn main() -> ! {
         // Freeze PDP execution while any modal UI owns input. Rebase the
         // pacing clock on both entry and exit so the emulator never tries to
         // catch up for time spent in the file chooser or format recovery UI.
-        let emulator_paused = browser_open
+        let emulator_paused = !emulator_enabled
+            || browser_open
             || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
             || SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
             || FORMAT_STATE.load(Ordering::Acquire) != FORMAT_IDLE
             || INIT_STATE.load(Ordering::Acquire) != INIT_IDLE;
         if emulator_paused != emulator_was_paused {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
-            pacing_start_cycles = unsafe { bk_timing_cycles() };
+            pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
             emulator_was_paused = emulator_paused;
         }
 
@@ -477,6 +945,7 @@ fn main() -> ! {
             let now_dwt = read_dwt_cycle_count();
             let elapsed_dwt = now_dwt.wrapping_sub(diagnostic_last_dwt);
             if elapsed_dwt >= DWT_CYCLES_PER_SECOND {
+                if !emulator_enabled { continue; }
                 let now_pdp = unsafe { bk_timing_cycles() };
                 let elapsed_pdp = now_pdp.wrapping_sub(diagnostic_last_pdp);
                 let pdp_cycles_per_second =

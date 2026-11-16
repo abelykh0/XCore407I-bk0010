@@ -34,14 +34,35 @@ pub(crate) const INIT_FAILED: u8 = 6;
 pub(crate) static INIT_STATE: AtomicU8 = AtomicU8::new(INIT_IDLE);
 pub(crate) const SAVE_RAM_START: usize = 0x0200;
 pub(crate) const SAVE_RAM_LENGTH: usize = 15_872;
-pub(crate) const SAVE_NAME_CAPACITY: usize = 24;
-pub(crate) const MAX_BROWSER_FILES: usize = 25;
-pub(crate) const MAX_BROWSER_PATH: usize = 256;
+pub(crate) const MAX_BROWSER_FILENAME: usize = 30; // includes the .bin extension
+pub(crate) const SAVE_NAME_CAPACITY: usize = MAX_BROWSER_FILENAME - 4;
+pub(crate) const MAX_BROWSER_FILES: usize = 17;
+pub(crate) const MAX_BROWSER_PATH: usize = MAX_BROWSER_FILENAME + 2; // '/' + name + NUL
 
 // Keep the browser's path table in ordinary .bss, not on the limited stack.
 pub(crate) static mut BROWSER_PATHS: [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES] =
     [[0; MAX_BROWSER_PATH]; MAX_BROWSER_FILES];
 pub(crate) static mut BROWSER_PATH_LENGTHS: [u16; MAX_BROWSER_FILES] = [0; MAX_BROWSER_FILES];
+
+// Shared by normal and CDC modes; their filesystem operations are serialized.
+static mut FILE_BROWSER_FILE_ALLOCATION: core::mem::MaybeUninit<
+    littlefs2::fs::FileAllocation<xcore407i_blinker::nand_fs::ActiveStorage>,
+> = core::mem::MaybeUninit::uninit();
+
+fn with_file_browser_file_allocation<R>(
+    operation: impl FnOnce(
+        &mut littlefs2::fs::FileAllocation<xcore407i_blinker::nand_fs::ActiveStorage>,
+    ) -> R,
+) -> R {
+    // Normal and CDC modes are mutually exclusive and file operations run in
+    // the main context, so this shared workspace has only one active user.
+    unsafe {
+        let allocation_ptr = core::ptr::addr_of_mut!(FILE_BROWSER_FILE_ALLOCATION)
+            .cast::<littlefs2::fs::FileAllocation<xcore407i_blinker::nand_fs::ActiveStorage>>();
+        allocation_ptr.write(littlefs2::fs::FileAllocation::new());
+        operation(&mut *allocation_ptr)
+    }
+}
 pub(crate) static FILE_BROWSER_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub(crate) static FILE_BROWSER_ACTION: AtomicU8 = AtomicU8::new(0);
 pub(crate) static SAVE_DIALOG_STATE: AtomicU8 = AtomicU8::new(SAVE_DIALOG_IDLE);
@@ -56,51 +77,44 @@ unsafe extern "C" {
     static mut RamBuffer: [u8; 0x4000];
 }
 
-/// Read up to 25 regular files from the LittleFS root directory.
+/// Read up to MAX_BROWSER_FILES regular files from the LittleFS root directory.
 /// Paths are retained as NUL-terminated ASCII strings for the later load.
 pub(crate) fn list_root_files(
     paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
     path_lengths: &mut [u16; MAX_BROWSER_FILES],
+    progress: impl FnMut(u32, u32),
 ) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
-    xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
-        fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
-            let mut count = 0usize;
-            for item in directory {
-                let entry = item?;
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-
-                let full_path = entry.path();
-                let path_bytes = full_path.as_str_ref_with_trailing_nul().as_bytes();
-                if path_bytes.len() < 3
-                    || path_bytes.len() > MAX_BROWSER_PATH
-                    || !path_bytes[..path_bytes.len() - 1]
-                        .iter()
-                        .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
-                {
-                    continue;
-                }
-
-                // Only expose .bin files in the browser (case-insensitive).
-                // The stored path is NUL-terminated and begins with '/'.
-                let filename = &path_bytes[1..path_bytes.len() - 1];
-                if filename.len() < 4
-                    || !filename[filename.len() - 4..].eq_ignore_ascii_case(b".bin")
-                {
-                    continue;
-                }
-
-                paths[count][..path_bytes.len()].copy_from_slice(path_bytes);
-                path_lengths[count] = path_bytes.len() as u16;
-                count += 1;
-                if count == MAX_BROWSER_FILES {
-                    break;
-                }
+    xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
+        let mut count = 0usize;
+        xcore407i_blinker::nand_fs::read_root_directory(fs, false, |path_bytes, is_dir, _size| {
+            if is_dir || count == MAX_BROWSER_FILES {
+                return Ok(());
             }
-            Ok(count)
-        })
-    })
+            if path_bytes.len() < 3
+                || path_bytes.len() > MAX_BROWSER_PATH
+                || !path_bytes[..path_bytes.len() - 1]
+                    .iter()
+                    .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+            {
+                return Ok(());
+            }
+
+            // Only expose .bin files in the browser (case-insensitive).
+            let filename = &path_bytes[1..path_bytes.len() - 1];
+            if filename.len() < 4
+                || filename.len() > MAX_BROWSER_FILENAME
+                || !filename[filename.len() - 4..].eq_ignore_ascii_case(b".bin")
+            {
+                return Ok(());
+            }
+
+            paths[count][..path_bytes.len()].copy_from_slice(path_bytes);
+            path_lengths[count] = path_bytes.len() as u16;
+            count += 1;
+            Ok(())
+        })?;
+        Ok(count)
+    }, progress)
 }
 
 pub(crate) fn draw_file_browser(
@@ -171,9 +185,11 @@ pub(crate) fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(),
             return Err(littlefs2::io::Error::IO);
         }
 
-        fs.open_file_with_options_and_then(
+        with_file_browser_file_allocation(|allocation| {
+            fs.open_file_with_options_and_then_with_allocation(
             |options| options.write(true).create(true).truncate(true),
             path,
+            allocation,
             |file| {
                 let start = (SAVE_RAM_START as u16).to_le_bytes();
                 let size = (SAVE_RAM_LENGTH as u16).to_le_bytes();
@@ -204,6 +220,7 @@ pub(crate) fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(),
                 Ok(())
             },
         )
+        })
     })
     .map_err(|_| ())
 }
@@ -243,7 +260,12 @@ pub(crate) unsafe fn draw_save_dialog(state: u8) {
 pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
     let (start, _size) = xcore407i_blinker::nand_fs::with_mounted(|fs| {
-        fs.open_file_and_then(path, |file| {
+        with_file_browser_file_allocation(|allocation| {
+            fs.open_file_with_options_and_then_with_allocation(
+            |options| options.read(true),
+            path,
+            allocation,
+            |file| {
             let mut header = [0u8; 4];
             let mut header_read = 0usize;
             while header_read < header.len() {
@@ -275,6 +297,8 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
                 total += count;
             }
             Ok((start, size))
+            },
+        )
         })
     }).map_err(|_| ())?;
 

@@ -11,23 +11,34 @@ pub(crate) static USB_FS_STATUS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static USB_FS_READY: AtomicBool = AtomicBool::new(false);
 pub(crate) static USB_FS_RETRY_AT: AtomicU32 = AtomicU32::new(0);
 pub(crate) static USB_HOST_TASK_PENDING: AtomicBool = AtomicBool::new(false);
+pub(crate) static USB_FS_LAST_ACTIVITY_TICK: AtomicU32 = AtomicU32::new(0);
+pub(crate) static USB_FS_RESTART_COUNT: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn note_usb_host_activity() {
+    USB_FS_LAST_ACTIVITY_TICK.store(crate::board::TICKS.load(Ordering::Relaxed), Ordering::Release);
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_enum_descriptor_device_cb(_dev_addr: u8, _desc: *const tusb::tusb_desc_device_t) {
     USB_FS_STATUS.store(7, Ordering::Release);
+    note_usb_host_activity();
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_enum_descriptor_configuration_cb(_dev_addr: u8, _cfg_index: u8, _desc: *const tusb::tusb_desc_configuration_t) -> bool {
     USB_FS_STATUS.store(8, Ordering::Release);
+    note_usb_host_activity();
     true
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn tuh_mount_cb(_dev_addr: u8) { USB_FS_STATUS.store(3, Ordering::Release); }
+pub extern "C" fn tuh_mount_cb(_dev_addr: u8) { USB_FS_STATUS.store(3, Ordering::Release); note_usb_host_activity(); }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn tuh_umount_cb(_dev_addr: u8) { USB_FS_STATUS.store(5, Ordering::Release); }
+pub extern "C" fn tuh_umount_cb(_dev_addr: u8) {
+    USB_FS_STATUS.store(5, Ordering::Release);
+    note_usb_host_activity();
+}
  
 pub(crate) fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
     unsafe {
@@ -55,6 +66,7 @@ pub(crate) fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
 
     if unsafe { tusb::tuh_rhport_init(0, &rh_init) } {
         USB_FS_STATUS.store(1, Ordering::Release);
+        note_usb_host_activity();
         USB_FS_READY.store(true, Ordering::Release);
         USB_HOST_TASK_PENDING.store(false, Ordering::Release);
         unsafe {
@@ -70,6 +82,55 @@ pub(crate) fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
         NVIC::mask(interrupt::OTG_FS);
         false
     }
+}
+
+/// Fully restart the OTG_FS TinyUSB host stack and controller.
+/// This is used only in normal mode when no boot keyboard has been seen for
+/// the discovery timeout. Deinitializing TinyUSB is essential: a peripheral
+/// RCC reset alone leaves TinyUSB's host-controller ID and event queue active,
+/// causing a subsequent tuh_rhport_init() to return early without reinitializing.
+pub(crate) fn restart_usb_fs_host(
+    rcc: &pac::RCC,
+    tim3: &pac::TIM3,
+    nvic: &mut NVIC,
+) -> bool {
+    USB_FS_RESTART_COUNT.fetch_add(1, Ordering::Relaxed);
+    // Quiesce the host task scheduler and interrupt before tearing down the
+    // stack. OTG_HS device operation is independent and remains untouched.
+    tim3.cr1().modify(|_, w| w.cen().clear_bit());
+    tim3.dier().modify(|_, w| w.uie().clear_bit());
+    USB_FS_READY.store(false, Ordering::Release);
+    USB_HOST_TASK_PENDING.store(false, Ordering::Release);
+    unsafe {
+        NVIC::mask(interrupt::OTG_FS);
+        NVIC::unpend(interrupt::OTG_FS);
+    }
+
+    let deinit_ok = unsafe { tusb::tuh_deinit(0) };
+    let initialized = if deinit_ok {
+        try_init_usb_fs_host(rcc, nvic)
+    } else {
+        USB_FS_STATUS.store(2, Ordering::Release);
+        false
+    };
+
+    // Resume the 1 ms host-task scheduler whether initialization succeeded
+    // or failed; the normal retry path handles a failed reinitialization.
+    tim3.sr().write(|w| w.uif().clear_bit());
+    unsafe {
+        NVIC::unpend(interrupt::TIM3);
+    }
+    tim3.dier().write(|w| w.uie().set_bit());
+    tim3.cr1().write(|w| w.cen().set_bit());
+
+    if !initialized {
+        USB_FS_RETRY_AT.store(
+            crate::board::TICKS.load(Ordering::Relaxed)
+                .wrapping_add(USB_FS_RETRY_INTERVAL_MS),
+            Ordering::Release,
+        );
+    }
+    initialized
 }
 
 pub(crate) fn configure_usb_host_task_timer(

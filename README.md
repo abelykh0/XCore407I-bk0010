@@ -50,10 +50,25 @@ confirming erases usable NAND blocks, creates a Dhara volume, and formats an
 empty LittleFS filesystem. Factory bad blocks are preserved. All NAND data
 is lost. Without this feature, the shortcut is unavailable.
 
+### CDC console and ZMODEM
+
+The USB CDC interface provides a serial console for firmware commands and
+ZMODEM file transfers. In Tera Term, enable these settings in `teraterm.ini`:
+
+```ini
+; Clear serial port buffer when port opening
+ClearComBuffOnOpen=off
+; ZMODEM auto receive
+ZmodemAuto=on
+```
+
+`ClearComBuffOnOpen=off` preserves the startup console banner when the port
+opens. `ZmodemAuto=on` enables automatic ZMODEM receive handling.
+
 ## RTC registers
 
 The STM32 calendar is exposed as read-only Unix milliseconds (low 32 bits):
-
+  
 | Octal address | Register |
 | --- | --- |
 | `177720` | `RTC_MILLIS_L` — bits 0–15 |

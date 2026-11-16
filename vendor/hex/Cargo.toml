@@ -1,0 +1,15 @@
+[package]
+name = "hex"
+version = "0.4.3"
+edition = "2018"
+license = "MIT OR Apache-2.0"
+description = "Encoding and decoding data into/from hexadecimal representation."
+
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1.0", default-features = false, optional = true }

@@ -15,8 +15,15 @@
  */
 
 #include <string.h>
+#include <stdint.h>
 #include "dhara/bytes.h"
 #include "dhara/map.h"
+
+/* Hard limits prevent corrupted NAND/journal state from trapping the MCU
+ * in recovery or garbage-collection loops forever. */
+#define XCORE_DHARA_MAX_RECOVERY_STEPS 256U
+#define XCORE_DHARA_MAX_WRITE_RETRIES 32U
+#define XCORE_DHARA_MAX_MAINTENANCE_STEPS 256U
 
 #define DHARA_RADIX_DEPTH	(sizeof(dhara_sector_t) << 3)
 
@@ -272,7 +279,14 @@ static int try_recover(struct dhara_map *m, dhara_error_t cause,
 		return -1;
 	}
 
+	unsigned int steps = 0;
+
 	while (dhara_journal_in_recovery(&m->journal)) {
+		if (++steps > XCORE_DHARA_MAX_RECOVERY_STEPS) {
+			dhara_set_error(err, DHARA_E_TOO_BAD);
+			return -1;
+		}
+
 		dhara_page_t p = dhara_journal_next_recoverable(&m->journal);
 		dhara_error_t my_err;
 		int ret;
@@ -343,7 +357,9 @@ static int prepare_write(struct dhara_map *m, dhara_sector_t dst,
 int dhara_map_write(struct dhara_map *m, dhara_sector_t dst,
 		    const uint8_t *data, dhara_error_t *err)
 {
-	for (;;) {
+	unsigned int steps;
+
+	for (steps = 0; steps < XCORE_DHARA_MAX_WRITE_RETRIES; steps++) {
 		uint8_t meta[DHARA_META_SIZE];
 		dhara_error_t my_err;
 		const dhara_sector_t old_count = m->count;
@@ -352,7 +368,7 @@ int dhara_map_write(struct dhara_map *m, dhara_sector_t dst,
 			return -1;
 
 		if (!dhara_journal_enqueue(&m->journal, data, meta, &my_err))
-			break;
+			return 0;
 
 		m->count = old_count;
 
@@ -360,13 +376,16 @@ int dhara_map_write(struct dhara_map *m, dhara_sector_t dst,
 			return -1;
 	}
 
-	return 0;
+	dhara_set_error(err, DHARA_E_TOO_BAD);
+	return -1;
 }
 
 int dhara_map_copy_page(struct dhara_map *m, dhara_page_t src,
 			dhara_sector_t dst, dhara_error_t *err)
 {
-	for (;;) {
+	unsigned int steps;
+
+	for (steps = 0; steps < XCORE_DHARA_MAX_WRITE_RETRIES; steps++) {
 		uint8_t meta[DHARA_META_SIZE];
 		dhara_error_t my_err;
 		const dhara_sector_t old_count = m->count;
@@ -375,7 +394,7 @@ int dhara_map_copy_page(struct dhara_map *m, dhara_page_t src,
 			return -1;
 
 		if (!dhara_journal_copy(&m->journal, src, meta, &my_err))
-			break;
+			return 0;
 
 		m->count = old_count;
 
@@ -383,7 +402,8 @@ int dhara_map_copy_page(struct dhara_map *m, dhara_page_t src,
 			return -1;
 	}
 
-	return 0;
+	dhara_set_error(err, DHARA_E_TOO_BAD);
+	return -1;
 }
 
 int dhara_map_copy_sector(struct dhara_map *m, dhara_sector_t src,
@@ -461,25 +481,62 @@ static int try_delete(struct dhara_map *m, dhara_sector_t s,
 
 int dhara_map_trim(struct dhara_map *m, dhara_sector_t s, dhara_error_t *err)
 {
-	for (;;) {
+	unsigned int steps;
+
+	for (steps = 0; steps < XCORE_DHARA_MAX_WRITE_RETRIES; steps++) {
 		dhara_error_t my_err;
 
 		if (auto_gc(m, err) < 0)
 			return -1;
 
 		if (!try_delete(m, s, &my_err))
-			break;
+			return 0;
 
 		if (try_recover(m, my_err, err) < 0)
 			return -1;
 	}
 
-	return 0;
+	dhara_set_error(err, DHARA_E_TOO_BAD);
+	return -1;
+}
+
+/* Last map_sync failure: stage, physical journal page, Dhara cause, steps. */
+static volatile uint32_t sync_diag_stage;
+static volatile uint32_t sync_diag_page;
+static volatile uint32_t sync_diag_error;
+static volatile uint32_t sync_diag_steps;
+
+void xcore_dhara_map_sync_diagnostic(uint32_t *stage, uint32_t *page,
+				      uint32_t *error, uint32_t *steps)
+{
+	if (stage) *stage = sync_diag_stage;
+	if (page) *page = sync_diag_page;
+	if (error) *error = sync_diag_error;
+	if (steps) *steps = sync_diag_steps;
 }
 
 int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 {
+	unsigned int steps = 0;
+	sync_diag_stage = 0;
+	sync_diag_page = DHARA_PAGE_NONE;
+	sync_diag_error = 0;
+	sync_diag_steps = 0;
+	/* raw_gc() copies each live page to the head before dequeuing its
+	 * old location. The queue length therefore doesn't shrink until the
+	 * next checkpoint is written. Allow one full checkpoint interval in
+	 * addition to the initial queue size. */
+	const dhara_page_t max_steps = dhara_journal_size(&m->journal) +
+		(1U << m->journal.log2_ppc) + 1;
+
 	while (!dhara_journal_is_clean(&m->journal)) {
+		if (++steps > max_steps) {
+			sync_diag_stage = 1;
+			sync_diag_steps = steps;
+			dhara_set_error(err, DHARA_E_TOO_BAD);
+			sync_diag_error = DHARA_E_TOO_BAD;
+			return -1;
+		}
 		dhara_page_t p = dhara_journal_peek(&m->journal);
 		dhara_error_t my_err;
 		int ret;
@@ -492,8 +549,17 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 				dhara_journal_dequeue(&m->journal);
 		}
 
-		if ((ret < 0) && (try_recover(m, my_err, err) < 0))
-			return -1;
+		if (ret < 0) {
+			sync_diag_stage = p == DHARA_PAGE_NONE ? 2 : 3;
+			sync_diag_page = p;
+			sync_diag_error = my_err;
+			sync_diag_steps = steps;
+			if (try_recover(m, my_err, err) < 0) {
+				sync_diag_stage = 4;
+				if (err) sync_diag_error = *err;
+				return -1;
+			}
+		}
 	}
 
 	return 0;
@@ -501,10 +567,16 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err)
 
 int dhara_map_gc(struct dhara_map *m, dhara_error_t *err)
 {
+	unsigned int steps = 0;
+
 	if (!m->count)
 		return 0;
 
 	for (;;) {
+		if (++steps > XCORE_DHARA_MAX_MAINTENANCE_STEPS) {
+			dhara_set_error(err, DHARA_E_TOO_BAD);
+			return -1;
+		}
 		dhara_page_t tail = dhara_journal_peek(&m->journal);
 		dhara_error_t my_err;
 

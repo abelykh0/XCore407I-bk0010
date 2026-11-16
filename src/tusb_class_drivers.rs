@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
 use crate::bk_audio::BkEmulatorAudio;
-use crate::uvc::{ControlResponse, UvcClass, FRAME_BIT_RATE, FRAME_INTERVAL_100NS};
+use crate::uvc::{ControlResponse, UvcClass, active_frame_interval_100ns, active_frame_rate_fps};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
@@ -24,7 +24,8 @@ const UVC_STREAMING_INTERFACE: u8 = 1;
 const UVC_STREAM_ENDPOINT: u8 = 0x81;
 const UVC_MAX_PACKET_SIZE: u16 = 768;
 const UVC_TRANSACTIONS_PER_MICROFRAME: u8 = 3;
-const UVC_VS_TOTAL_LENGTH: u16 = 77;
+const UVC_VS_TOTAL_LENGTH_NORMAL: u16 = 77;
+const UVC_VS_TOTAL_LENGTH_CDC: u16 = 77;
 const UVC_NV12_GUID: [u8; 16] = [
     0x4e, 0x56, 0x31, 0x32, 0x00, 0x00, 0x10, 0x00,
     0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
@@ -78,6 +79,9 @@ fn initialize_uvc_state() -> bool {
 
 /// Validate and measure the complete UVC function beginning at interface 0.
 fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
+    let expected_frame_interval = active_frame_interval_100ns();
+    let expected_frame_bit_rate =
+        crate::camera::FRAME_BYTES as u32 * 8 * active_frame_rate_fps();
     if descriptors.len() < 9
         || descriptors[0] != 9
         || descriptors[1] != USB_DESC_INTERFACE
@@ -224,7 +228,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                     if length != 14
                         || vs_header_seen
                         || descriptors[offset + 3] != 1
-                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != UVC_VS_TOTAL_LENGTH
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != (if crate::uvc::cdc_mode_enabled() { UVC_VS_TOTAL_LENGTH_CDC } else { UVC_VS_TOTAL_LENGTH_NORMAL })
                         || descriptors[offset + 6] != UVC_STREAM_ENDPOINT
                         || descriptors[offset + 8] != 2
                         || descriptors[offset + 12] != 1
@@ -232,6 +236,16 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                         return None;
                     }
                     vs_header_seen = true;
+                }
+                // Still-image frame descriptor with no alternate still sizes.
+                3 => {
+                    if length != 6
+                        || descriptors[offset + 3] != UVC_STREAM_ENDPOINT
+                        || descriptors[offset + 4] != 0
+                        || descriptors[offset + 5] != 0
+                    {
+                        return None;
+                    }
                 }
                 // Uncompressed format descriptor: exactly one NV12 format.
                 4 => {
@@ -274,15 +288,15 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                         descriptors[offset + 21], descriptors[offset + 22],
                         descriptors[offset + 23], descriptors[offset + 24],
                     ]);
-                    if min_bitrate != FRAME_BIT_RATE
-                        || max_bitrate != FRAME_BIT_RATE
+                    if min_bitrate != expected_frame_bit_rate
+                        || max_bitrate != expected_frame_bit_rate
                         || frame_bytes != crate::camera::FRAME_BYTES as u32
-                        || interval != FRAME_INTERVAL_100NS
+                        || interval != expected_frame_interval
                         || descriptors[offset + 25] != 1
                         || u32::from_le_bytes([
                             descriptors[offset + 26], descriptors[offset + 27],
                             descriptors[offset + 28], descriptors[offset + 29],
-                        ]) != FRAME_INTERVAL_100NS
+                        ]) != expected_frame_interval
                     {
                         return None;
                     }

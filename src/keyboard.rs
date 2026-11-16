@@ -11,7 +11,7 @@ use crate::file_browser::{
     FORMAT_CANCELLED,
     INIT_STATE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST, INIT_CANCELLED,
 };
-use crate::usb_host::USB_FS_STATUS;
+use crate::usb_host::{note_usb_host_activity, USB_FS_STATUS};
 use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
 use xcore407i_blinker::camera::request_camera_mode_toggle;
 use xcore407i_blinker::tusb;
@@ -25,6 +25,53 @@ static mut PREVIOUS_MODIFIERS: u8 = 0;
 static KEYBOARD_LOCKS: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
+// Startup mode is latched from the first valid boot-keyboard report.
+pub(crate) const BOOT_SELECTION_WAITING: u8 = 0;
+pub(crate) const BOOT_SELECTION_NORMAL: u8 = 1;
+pub(crate) const BOOT_SELECTION_CDC: u8 = 2;
+static BOOT_SELECTION: AtomicU8 = AtomicU8::new(BOOT_SELECTION_WAITING);
+static EMULATOR_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
+static HID_MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
+static BOOT_KEYBOARD_MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_REPORT_COUNT: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_LAST_REPORT_LEN: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_REARM_FAILURE_COUNT: AtomicU32 = AtomicU32::new(0);
+static KEYBOARD_LAST_PROTOCOL: AtomicU8 = AtomicU8::new(0xff);
+static KEYBOARD_UNMOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn keyboard_diagnostics() -> (u32, u32, u32, u32, u32, u8, u32) {
+    (
+        HID_MOUNT_COUNT.load(Ordering::Acquire),
+        BOOT_KEYBOARD_MOUNT_COUNT.load(Ordering::Acquire),
+        KEYBOARD_REPORT_COUNT.load(Ordering::Acquire),
+        KEYBOARD_LAST_REPORT_LEN.load(Ordering::Acquire),
+        KEYBOARD_REARM_FAILURE_COUNT.load(Ordering::Acquire),
+        KEYBOARD_LAST_PROTOCOL.load(Ordering::Acquire),
+        KEYBOARD_UNMOUNT_COUNT.load(Ordering::Acquire),
+    )
+}
+
+pub(crate) fn keyboard_is_mounted() -> bool {
+    KEYBOARD_DEVICE.load(Ordering::Acquire) != 0
+}
+
+
+pub(crate) fn boot_selection() -> u8 {
+    BOOT_SELECTION.load(Ordering::Acquire)
+}
+
+pub(crate) fn set_boot_default_normal() {
+    let _ = BOOT_SELECTION.compare_exchange(
+        BOOT_SELECTION_WAITING,
+        BOOT_SELECTION_NORMAL,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
+pub(crate) fn enable_emulator_input() {
+    EMULATOR_INPUT_ENABLED.store(true, Ordering::Release);
+}
 static mut KEYBOARD_LED_REPORT: u8 = 0;
 const KEYBOARD_QUEUE_CAPACITY: u16 = 128;
 const KEYBOARD_QUEUE_MASK: u16 = KEYBOARD_QUEUE_CAPACITY - 1;
@@ -67,11 +114,16 @@ pub(crate) fn keyboard_queue_discard() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8, _len: u16) {
+    HID_MOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
+    let protocol = unsafe { tusb::tuh_hid_interface_protocol(dev_addr, instance) };
+    KEYBOARD_LAST_PROTOCOL.store(protocol, Ordering::Release);
     // HID interface protocol 1 is a boot keyboard; ignore unrelated HID
     // interfaces rather than decoding a mouse/gamepad report as keystrokes.
-    if unsafe { tusb::tuh_hid_interface_protocol(dev_addr, instance) } != 1 {
+    if BOOT_SELECTION.load(Ordering::Acquire) == BOOT_SELECTION_CDC || protocol != 1 {
         return;
     }
+    BOOT_KEYBOARD_MOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
+    note_usb_host_activity();
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
@@ -90,14 +142,18 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
         // Request boot protocol; the completion callback starts reception.
         if !unsafe { tusb::tuh_hid_set_protocol(dev_addr, instance, 0) } {
             USB_FS_STATUS.store(9, Ordering::Release);
+            KEYBOARD_LAST_PROTOCOL.store(0xfe, Ordering::Release);
         }
     } else {
-        unsafe { tusb::tuh_hid_receive_report(dev_addr, instance); }
+        if !unsafe { tusb::tuh_hid_receive_report(dev_addr, instance) } {
+            KEYBOARD_REARM_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
+    KEYBOARD_UNMOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
     if KEYBOARD_DEVICE.load(Ordering::Acquire) == dev_addr
         && KEYBOARD_INSTANCE.load(Ordering::Acquire) == instance
     {
@@ -117,16 +173,20 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
 pub extern "C" fn tuh_hid_set_protocol_complete_cb(dev_addr: u8, instance: u8, protocol: u8) {
     // Ignore late control-transfer completions from a keyboard that has
     // already disconnected or been replaced by another HID interface.
-    if KEYBOARD_DEVICE.load(Ordering::Acquire) != dev_addr
+    if BOOT_SELECTION.load(Ordering::Acquire) == BOOT_SELECTION_CDC
+        || KEYBOARD_DEVICE.load(Ordering::Acquire) != dev_addr
         || KEYBOARD_INSTANCE.load(Ordering::Acquire) != instance
     {
         return;
     }
 
     if protocol == 0 {
-        unsafe { tusb::tuh_hid_receive_report(dev_addr, instance); }
+        if !unsafe { tusb::tuh_hid_receive_report(dev_addr, instance) } {
+            KEYBOARD_REARM_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     } else {
         USB_FS_STATUS.store(9, Ordering::Release);
+        KEYBOARD_LAST_PROTOCOL.store(0xfe, Ordering::Release);
     }
 }
 
@@ -143,16 +203,66 @@ pub extern "C" fn tuh_hid_report_received_cb(
         return;
     }
 
+    KEYBOARD_REPORT_COUNT.fetch_add(1, Ordering::Relaxed);
+    note_usb_host_activity();
+    KEYBOARD_LAST_REPORT_LEN.store(len as u32, Ordering::Release);
     if len >= 8 && !report.is_null() {
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
-        process_boot_keyboard_report(dev_addr, instance, bytes);
+
+        let selection = BOOT_SELECTION.load(Ordering::Acquire);
+        if selection == BOOT_SELECTION_WAITING {
+            // The first boot-keyboard report decides the startup mode.
+            // F10 must be held during startup to select CDC; an empty report
+            // (or any other key) selects normal mode immediately. Do not wait
+            // for a later keypress after the keyboard has enumerated.
+            let selected = if bytes[2..8].contains(&0x43) {
+                BOOT_SELECTION_CDC
+            } else {
+                BOOT_SELECTION_NORMAL
+            };
+            if BOOT_SELECTION.compare_exchange(
+                BOOT_SELECTION_WAITING,
+                selected,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                // Do not forward the mode-selection report as input.
+                unsafe {
+                    let mut keys = [0u8; 6];
+                    keys.copy_from_slice(&bytes[2..8]);
+                    PREVIOUS_KEYS = keys;
+                    PREVIOUS_MODIFIERS = bytes[0];
+                }
+            }
+        } else if selection == BOOT_SELECTION_NORMAL
+            && EMULATOR_INPUT_ENABLED.load(Ordering::Acquire)
+        {
+            process_boot_keyboard_report(dev_addr, instance, bytes);
+        } else {
+            // Ignore all keyboard input in CDC/error startup modes and while
+            // the emulator is still being initialized.
+            unsafe {
+                let mut keys = [0u8; 6];
+                keys.copy_from_slice(&bytes[2..8]);
+                PREVIOUS_KEYS = keys;
+                PREVIOUS_MODIFIERS = bytes[0];
+            }
+        }
+    }
+    // CDC mode ends host-side keyboard use at the first F10 report.
+    if BOOT_SELECTION.load(Ordering::Acquire) == BOOT_SELECTION_CDC {
+        KEYBOARD_DEVICE.store(0, Ordering::Release);
+        KEYBOARD_INSTANCE.store(0, Ordering::Release);
+        return;
     }
     // Re-arm only the still-active keyboard. A disconnect/reconnect can
     // reuse device addresses, so stale callbacks must not target a new HID.
     if KEYBOARD_DEVICE.load(Ordering::Acquire) == dev_addr
         && KEYBOARD_INSTANCE.load(Ordering::Acquire) == instance
     {
-        unsafe { tusb::tuh_hid_receive_report(dev_addr, instance); }
+        if !unsafe { tusb::tuh_hid_receive_report(dev_addr, instance) } {
+            KEYBOARD_REARM_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
