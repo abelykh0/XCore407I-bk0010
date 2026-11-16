@@ -557,11 +557,13 @@ pub(crate) struct EccSequenceTrace {
     pub flags: u32,
     pub pcr_before: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub pcr_enabled: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub ecc_before_data: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_before_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub ecc_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub software_ecc: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub pcr_after_disable: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub ecc_after_disable: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub oob_status_before_wait: u32,
     pub oob_status_after_wait: u32,
 }
@@ -571,11 +573,13 @@ static mut LAST_ECC_SEQUENCE_TRACE: EccSequenceTrace = EccSequenceTrace {
     page: u32::MAX, flags: 0,
     pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    ecc_before_data: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    ecc_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     oob_status_before_wait: 0, oob_status_after_wait: 0,
 };
 
@@ -693,6 +697,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         ecc_begin_chunk();
         if sequence_trace_enabled {
             sequence_trace.pcr_enabled[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
+            sequence_trace.ecc_before_data[chunk_index] = unsafe { read_volatile(FSMC_ECCR2) } & 0x00FF_FFFF;
         }
         for &byte in chunk { write_data(byte); }
         if sequence_trace_enabled {
@@ -710,6 +715,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if sequence_trace_enabled {
             sequence_trace.ecc_after_wait[chunk_index] = chunk_ecc;
             sequence_trace.pcr_after_disable[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
+            sequence_trace.ecc_after_disable[chunk_index] = unsafe { read_volatile(FSMC_ECCR2) } & 0x00FF_FFFF;
         }
         hardware_ecc[chunk_index] = chunk_ecc;
         // Software ECC is diagnostic-only; it is not needed to program NAND.
