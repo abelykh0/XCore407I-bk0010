@@ -44,7 +44,6 @@ const TIMEOUT: u32 = 20_000_000;
 // Keep the interactive ECCPAGE diagnostic responsive if NAND R/B never rises.
 const ECC_DIAGNOSTIC_TIMEOUT: u32 = 500_000;
 
-#[unsafe(link_section = ".ccmram.ecc")]
 static mut ECC_DIAGNOSTIC_PAGE_BUFFER: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
 // Optional main-context service hook used while synchronous NAND operations
