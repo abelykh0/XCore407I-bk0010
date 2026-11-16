@@ -15,6 +15,7 @@ static mut ZMODEM_PROBE_LEN: usize = 0;
 static mut ZMODEM_PROBE_MATCHED: bool = false;
 static mut ZMODEM_START_FAILED: bool = false;
 static mut WAS_CONNECTED: bool = false;
+static mut BANNER_PENDING: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
@@ -25,7 +26,8 @@ const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nA
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
-/// Detect a host opening the CDC port and print the console banner immediately.
+/// Detect a host opening the CDC port and print the banner once its
+/// configuration has opened both CDC data endpoints.
 pub fn service_connection() {
     unsafe {
         let connected = tusb::tud_cdc_n_connected(0);
@@ -35,9 +37,18 @@ pub fn service_connection() {
             ZMODEM_PROBE_MATCHED = false;
             ZMODEM_START_FAILED = false;
             WAS_CONNECTED = true;
-            write_status(BANNER);
+            BANNER_PENDING = true;
         } else if !connected {
             WAS_CONNECTED = false;
+            BANNER_PENDING = false;
+        }
+
+        // DTR can be asserted before SET_CONFIGURATION has opened the CDC
+        // bulk endpoints. Keep the banner pending instead of writing into an
+        // unopened TX stream; retry on each foreground USB service pass.
+        if BANNER_PENDING && connected && tusb::tud_cdc_n_ready(0) {
+            write_status(BANNER);
+            BANNER_PENDING = false;
         }
     }
 }
