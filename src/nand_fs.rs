@@ -592,11 +592,13 @@ pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
                     page: u32::MAX, flags: 0,
                     pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    ecc_before_data: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    ecc_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     oob_status_before_wait: 0, oob_status_after_wait: 0,
                 });
         }
@@ -679,11 +681,13 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         page, flags: 0,
         pcr_before: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         pcr_enabled: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        ecc_before_data: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        ecc_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         oob_status_before_wait: 0, oob_status_after_wait: 0,
     };
     let mut ecc = [0xFFu8; ECC_OOB_BYTES];
