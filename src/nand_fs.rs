@@ -1210,7 +1210,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     address(0);
     address(0);
     address(page as u8);
-    address((page >> 8) as u8);
+    address_last((page >> 8) as u8);
     command(0x30);
     if !wait_ready_rb() {
         record_nand_read_failure(1, page);
