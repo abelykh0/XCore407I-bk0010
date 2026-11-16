@@ -262,15 +262,20 @@ fn ecc_begin_chunk() {
     }
 }
 
-/// Wait for the FSMC FIFO to empty and return the number of SR reads.
-fn wait_fsmc_fifo_empty_counted() -> (bool, u32) {
+/// Wait for the FSMC FIFO to empty, retaining the first eight SR samples.
+fn wait_fsmc_fifo_empty_counted() -> (bool, u32, [u32; 8]) {
+    let mut samples = [0u32; 8];
     for iteration in 0..TIMEOUT {
-        if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
-            return (true, iteration + 1);
+        let status = unsafe { read_volatile(FSMC_SR2) };
+        if iteration < samples.len() as u32 {
+            samples[iteration as usize] = status;
+        }
+        if status & FSMC_SR_FEMPT != 0 {
+            return (true, iteration + 1, samples);
         }
         core::hint::spin_loop();
     }
-    (false, TIMEOUT)
+    (false, TIMEOUT, samples)
 }
 
 /// Wait for the FSMC FIFO to empty before capturing the ECC result.
@@ -574,6 +579,7 @@ pub(crate) struct EccSequenceTrace {
     pub status_before_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub fifo_poll_count: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub fifo_poll_samples: [[u32; 8]; FSMC_ECC_CHUNKS_PER_PAGE],
     pub ecc_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub software_ecc: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub pcr_after_disable: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -581,6 +587,7 @@ pub(crate) struct EccSequenceTrace {
     pub oob_status_before_wait: u32,
     pub oob_status_after_wait: u32,
     pub oob_fifo_poll_count: u32,
+    pub oob_fifo_poll_samples: [u32; 8],
 }
 static ECC_SEQUENCE_TRACE_ENABLED: AtomicU32 = AtomicU32::new(0);
 static ECC_SEQUENCE_TRACE_CAPTURED: AtomicU32 = AtomicU32::new(0);
@@ -594,11 +601,13 @@ static mut LAST_ECC_SEQUENCE_TRACE: EccSequenceTrace = EccSequenceTrace {
     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     fifo_poll_count: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    fifo_poll_samples: [[0; 8]; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     oob_status_before_wait: 0, oob_status_after_wait: 0, oob_fifo_poll_count: 0,
+    oob_fifo_poll_samples: [0; 8],
 };
 
 pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
@@ -616,11 +625,13 @@ pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
                     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     fifo_poll_count: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    fifo_poll_samples: [[0; 8]; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     oob_status_before_wait: 0, oob_status_after_wait: 0, oob_fifo_poll_count: 0,
+                    oob_fifo_poll_samples: [0; 8],
                 });
         }
     }
@@ -736,13 +747,14 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if sequence_trace_enabled {
             sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
         }
-        let (fifo_empty, fifo_polls) = if sequence_trace_enabled {
+        let (fifo_empty, fifo_polls, fifo_samples) = if sequence_trace_enabled {
             wait_fsmc_fifo_empty_counted()
         } else {
-            (wait_fsmc_fifo_empty(), 0)
+            (wait_fsmc_fifo_empty(), 0, [0; 8])
         };
         if sequence_trace_enabled {
             sequence_trace.fifo_poll_count[chunk_index] = fifo_polls;
+            sequence_trace.fifo_poll_samples[chunk_index] = fifo_samples;
         }
         if !fifo_empty {
             let status = unsafe { read_volatile(FSMC_SR2) };
@@ -785,13 +797,14 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if sequence_trace_enabled {
         sequence_trace.oob_status_before_wait = unsafe { read_volatile(FSMC_SR2) };
     }
-    let (oob_fifo_empty, oob_fifo_polls) = if sequence_trace_enabled {
+    let (oob_fifo_empty, oob_fifo_polls, oob_fifo_samples) = if sequence_trace_enabled {
         wait_fsmc_fifo_empty_counted()
     } else {
-        (wait_fsmc_fifo_empty(), 0)
+        (wait_fsmc_fifo_empty(), 0, [0; 8])
     };
     if sequence_trace_enabled {
         sequence_trace.oob_fifo_poll_count = oob_fifo_polls;
+        sequence_trace.oob_fifo_poll_samples = oob_fifo_samples;
     }
     if !oob_fifo_empty {
         let status = unsafe { read_volatile(FSMC_SR2) };
