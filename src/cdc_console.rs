@@ -38,7 +38,7 @@ static CDC_BANNER_COMPLETE_RX_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
 #[cfg(feature = "nand-diagnostics")]
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
@@ -476,7 +476,7 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
     }
 }
 
-fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
+fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool) {
     // Emit progress before each potentially blocking LittleFS operation. This
     // distinguishes a CDC TX stall from a NAND/Dhara directory-read stall.
     write_status(b"\r\nLIST: command accepted.\r\n");
@@ -485,13 +485,13 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     write_status(b" bytes\r\n");
 
     write_status(b"LIST: reading root directory...\r\n");
-    let result = crate::nand_fs::read_root_directory(fs, true, |path_bytes, is_dir, size| {
+    let result = crate::nand_fs::read_root_directory(fs, show_sizes, |path_bytes, is_dir, size| {
         let path = &path_bytes[..path_bytes.len() - 1];
         write_status(b"  ");
         write_status(path);
         if is_dir {
             write_status(b" [DIR]");
-        } else {
+        } else if show_sizes {
             write_status(b"  ");
             write_decimal_grouped(size);
             write_status(b" bytes");
@@ -1430,9 +1430,9 @@ pub fn service(
                         } else {
                             write_status(b"Storage unavailable.\r\n> ");
                         }
-                    } else if command_is(line, b"LIST") {
+                    } else if command_is(line, b"LIST") || command_is(line, b"LIST SHORT") {
                         if let Some(fs) = fs {
-                            list_files(fs);
+                            list_files(fs, !command_is(line, b"LIST SHORT"));
                         } else {
                             write_status(b"Storage unavailable.\r\n> ");
                         }
