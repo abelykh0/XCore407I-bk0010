@@ -1150,6 +1150,9 @@ pub(crate) fn set_ecc_check_enabled(enabled: bool) {
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
     if out.len() != PAGE_SIZE { return false; }
+    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
+        return read_page(page, 0, out);
+    }
 
     command(0x00);
     address(0);
@@ -1189,10 +1192,6 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         record_nand_read_failure(3, u32::from(tag[0]) | (u32::from(tag[1]) << 8));
         return false;
     }
-    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
-        return true;
-    }
-
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
         let offset = chunk_index * ECC_BYTES_PER_CHUNK;
         let stored_ecc = u32::from_le_bytes([
