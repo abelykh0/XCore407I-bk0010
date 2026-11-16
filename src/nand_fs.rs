@@ -1013,8 +1013,8 @@ pub(crate) struct EccPageComparison {
     pub data_fingerprint: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
 }
 
-pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> {
-    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
+pub(crate) fn ecc_software_compare_page(page: u32) -> Result<EccPageComparison, (u8, u32)> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return Err((0, page)); }
     // SAFETY: ECCPAGE is a synchronous foreground diagnostic and does not
     // run concurrently with a ZMODEM receiver session or from an ISR.
     let data = unsafe {
@@ -1028,19 +1028,35 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
     }
-    let data_ok = read_page_with_timeout(page, 0, data, ECC_DIAGNOSTIC_TIMEOUT);
+    if !read_page_with_timeout(page, 0, data, ECC_DIAGNOSTIC_TIMEOUT) {
+        unsafe {
+            write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
+            let _ = read_volatile(FSMC_PCR2);
+        }
+        return Err((1, page));
+    }
     let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
-    let spare_ok = data_ok && read_page_with_timeout(
+    if !read_page_with_timeout(
         page,
         PAGE_SIZE as u16 + ECC_OOB_OFFSET,
         &mut spare,
         ECC_DIAGNOSTIC_TIMEOUT,
-    );
+    ) {
+        unsafe {
+            write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
+            let _ = read_volatile(FSMC_PCR2);
+        }
+        return Err((2, page));
+    }
     unsafe {
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
     }
-    if !spare_ok || spare[ECC_OOB_BYTES..] != ECC_TAG { return None; }
+    if spare[ECC_OOB_BYTES..] != ECC_TAG {
+        let tag = u32::from(spare[ECC_OOB_BYTES])
+            | (u32::from(spare[ECC_OOB_BYTES + 1]) << 8);
+        return Err((3, tag));
+    }
     let mut result = EccPageComparison {
         stored: [0; FSMC_ECC_CHUNKS_PER_PAGE],
         software: [0; FSMC_ECC_CHUNKS_PER_PAGE],
@@ -1058,7 +1074,7 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> 
         }
         result.data_fingerprint[index] = fingerprint;
     }
-    Some(result)
+    Ok(result)
 }
 
 /// Result of a raw page read with the FSMC ECC engine enabled per 512-byte chunk.
