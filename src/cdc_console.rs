@@ -870,7 +870,7 @@ pub fn service(
                                 write_decimal(pass + 1);
                                 write_status(b"...\r\n");
                                 match crate::nand_fs::ecc_software_compare_page(page) {
-                                    Some(result) => {
+                                    Ok(result) => {
                                         write_status(b"Read ");
                                         write_decimal(pass + 1);
                                         write_status(b":\r\n");
@@ -900,10 +900,21 @@ pub fn service(
                                         }
                                         previous = Some(result);
                                     }
-                                    None => {
+                                    Err((stage, detail)) => {
+                                        let description: &[u8] = match stage {
+                                            0 => b"invalid physical page",
+                                            1 => b"data-area page read failed or timed out",
+                                            2 => b"OOB-area page read failed or timed out",
+                                            3 => b"ECC tag mismatch (observed tag)",
+                                            _ => b"unknown raw-read failure",
+                                        };
                                         write_status(b"Read ");
                                         write_decimal(pass + 1);
-                                        write_status(b": READ FAILED or timed out; stopping diagnostic.\r\n");
+                                        write_status(b" FAILED: ");
+                                        write_status(description);
+                                        write_status(b" detail=0x");
+                                        write_hex_u32(detail);
+                                        write_status(b"\r\n");
                                         previous = None;
                                         break;
                                     }
