@@ -711,19 +711,15 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             sequence_trace.pcr_after_disable[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
         }
         hardware_ecc[chunk_index] = chunk_ecc;
-        // Experimental: retain ECCWRITE's per-chunk CPU work even when
-        // readback tracing is disabled. This tests whether the computation
-        // between 512-byte NAND data bursts changes the failing program path.
+        // Calculate software ECC for every chunk. Besides providing an
+        // independent ECC reference, this work occupies the inter-chunk
+        // interval that the NAND programming sequence requires.
+        input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
         if trace_enabled {
-            input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
             input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
         }
-        // Explicit inter-chunk settling interval. The software ECC calculation
-        // previously provided CPU time here, but its result is not needed to
-        // program the NAND page.
-        cortex_m::asm::delay(20_000);
         if sequence_trace_enabled {
-            sequence_trace.software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
+            sequence_trace.software_ecc[chunk_index] = input_software_ecc[chunk_index];
         }
         encode_ecc(chunk_ecc, &mut ecc[chunk_index * ECC_BYTES_PER_CHUNK..][..ECC_BYTES_PER_CHUNK]);
 
