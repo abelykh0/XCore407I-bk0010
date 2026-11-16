@@ -248,8 +248,14 @@ pub(crate) unsafe fn draw_save_dialog(state: u8) {
         show_file_browser_line(2, b"ENTER FILE NAME (NO EXTENSION)", false);
         let mut line = [b' '; 64];
         line[..6].copy_from_slice(b"FILE: ");
-        let len = SAVE_FILENAME_LEN.min(SAVE_NAME_CAPACITY);
-        line[6..6 + len].copy_from_slice(&SAVE_FILENAME[..len]);
+        let len = unsafe { SAVE_FILENAME_LEN }.min(SAVE_NAME_CAPACITY);
+        let filename = unsafe {
+            core::slice::from_raw_parts(
+                core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
+                len,
+            )
+        };
+        line[6..6 + len].copy_from_slice(filename);
         line[6 + len..10 + len].copy_from_slice(b".bin");
         show_file_browser_line(4, &line, true);
         show_file_browser_line(27, b"ENTER SAVE  BACKSPACE EDIT  ESC CANCEL", false);
