@@ -31,7 +31,7 @@ core::arch::global_asm!(
 
 unsafe extern "C" {
     fn __xcore_call_on_stack(
-        entry: extern "C" fn(*mut ()),
+        entry: unsafe extern "C" fn(*mut ()),
         context: *mut (),
         stack_top: *mut u8,
     );
