@@ -711,10 +711,11 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             sequence_trace.pcr_after_disable[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
         }
         hardware_ecc[chunk_index] = chunk_ecc;
-        if trace_enabled {
-            input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
-            input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
-        }
+        // Experimental: retain ECCWRITE's per-chunk CPU work even when
+        // readback tracing is disabled. This tests whether the computation
+        // between 512-byte NAND data bursts changes the failing program path.
+        input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
+        input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
         if sequence_trace_enabled {
             sequence_trace.software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
         }
@@ -765,23 +766,18 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             }
         }
     }
-    // Experimental: always perform the same raw data and OOB readback
-    // transactions used by ECCWRITE, but do not calculate or compare ECC.
-    // This isolates the effect of the NAND read sequence from the extra CPU
-    // work performed by the full ECCWRITE verification path. Readback errors
-    // remain diagnostic-only and do not alter the completed program result.
-    let readback = unsafe {
-        &mut *core::ptr::addr_of_mut!(ECC_DIAGNOSTIC_PAGE_BUFFER)
-    };
-    let data_ok = read_page(page, 0, readback);
-    let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
-    let spare_ok = read_page(
-        page,
-        PAGE_SIZE as u16 + ECC_OOB_OFFSET,
-        &mut spare,
-    );
-
     if trace_enabled {
+        // ECCWRITE-only verification reads the programmed data and OOB.
+        let readback = unsafe {
+            &mut *core::ptr::addr_of_mut!(ECC_DIAGNOSTIC_PAGE_BUFFER)
+        };
+        let data_ok = read_page(page, 0, readback);
+        let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
+        let spare_ok = read_page(
+            page,
+            PAGE_SIZE as u16 + ECC_OOB_OFFSET,
+            &mut spare,
+        );
         let tag_ok = spare_ok && spare[ECC_OOB_BYTES..] == ECC_TAG;
         let mut trace = EccWriteTrace {
             page,
