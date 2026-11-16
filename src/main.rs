@@ -401,7 +401,7 @@ fn main() -> ! {
         // LittleFS FileAllocation and must not consume the small main stack.
         let mut just_formatted = false;
         loop {
-            let mount_result: Result<bool, xcore407i_blinker::nand_fs::FsAccessError> =
+            let mount_result: Result<xcore407i_blinker::cdc_console::FormatRequest, xcore407i_blinker::nand_fs::FsAccessError> =
                 unsafe {
                     xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
                         let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
@@ -436,8 +436,8 @@ fn main() -> ! {
                                 xcore407i_blinker::nand_fs::set_io_service_hook(None);
                                 FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
                                 while prepare_next_video_batch(&mut video_renderer) {}
-                                if format_requested {
-                                    break Ok(true);
+                                if format_requested != xcore407i_blinker::cdc_console::FormatRequest::None {
+                                    break Ok(format_requested);
                                 }
                             }
                         }, |_, _| service_cdc_scan_io());
@@ -466,8 +466,8 @@ fn main() -> ! {
                                     },
                                 );
                                 while prepare_next_video_batch(&mut video_renderer) {}
-                                if requested {
-                                    break Ok(true);
+                                if requested != xcore407i_blinker::cdc_console::FormatRequest::None {
+                                    break Ok(requested);
                                 }
                             }
                         } else {
@@ -478,11 +478,23 @@ fn main() -> ! {
 
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
-        let mut format_requested = matches!(&mount_result, Ok(true));
+        let format_request = match &mount_result { Ok(request) => *request, Err(_) => xcore407i_blinker::cdc_console::FormatRequest::None };
+        let mut format_requested = format_request != xcore407i_blinker::cdc_console::FormatRequest::None;
 
-        if format_requested {
+        if format_request == xcore407i_blinker::cdc_console::FormatRequest::LittleFs {
+            xcore407i_blinker::cdc_console::report_format_status(b"Filesystem released. Formatting LittleFS only; Dhara journal is preserved...\\r\\n");
+            let format_result = xcore407i_blinker::nand_fs::format_existing_littlefs();
+            match format_result {
+                Ok(()) => {
+                    xcore407i_blinker::cdc_console::report_format_status(b"LittleFS-only format complete and verified.\\r\\n");
+                    just_formatted = true;
+                    continue;
+                }
+                Err(error) => xcore407i_blinker::cdc_console::report_format_failure(error),
+            }
+        } else if format_request == xcore407i_blinker::cdc_console::FormatRequest::WholeNand {
             xcore407i_blinker::cdc_console::report_format_status(
-                b"Filesystem released. Formatting NAND; all files will be lost...\r\n",
+                b"Filesystem released. Formatting NAND; all files will be lost...\\r\\n",
             );
             let mut last_reported = 0u32;
             let format_result =
