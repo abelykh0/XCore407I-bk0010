@@ -567,12 +567,14 @@ pub(crate) struct EccSequenceTrace {
     pub input_non_ff: [u16; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_before_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub status_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
+    pub fifo_poll_count: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub ecc_after_wait: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub software_ecc: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub pcr_after_disable: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub ecc_after_disable: [u32; FSMC_ECC_CHUNKS_PER_PAGE],
     pub oob_status_before_wait: u32,
     pub oob_status_after_wait: u32,
+    pub oob_fifo_poll_count: u32,
 }
 static ECC_SEQUENCE_TRACE_ENABLED: AtomicU32 = AtomicU32::new(0);
 static ECC_SEQUENCE_TRACE_CAPTURED: AtomicU32 = AtomicU32::new(0);
@@ -585,11 +587,12 @@ static mut LAST_ECC_SEQUENCE_TRACE: EccSequenceTrace = EccSequenceTrace {
     input_non_ff: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+    fifo_poll_count: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
     ecc_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
-    oob_status_before_wait: 0, oob_status_after_wait: 0,
+    oob_status_before_wait: 0, oob_status_after_wait: 0, oob_fifo_poll_count: 0,
 };
 
 pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
@@ -606,11 +609,13 @@ pub(crate) fn set_ecc_sequence_trace_enabled(enabled: bool) {
                     input_non_ff: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_before_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     status_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+        fifo_poll_count: [0; FSMC_ECC_CHUNKS_PER_PAGE],
+                    fifo_poll_count: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_after_wait: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     software_ecc: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     pcr_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
                     ecc_after_disable: [0; FSMC_ECC_CHUNKS_PER_PAGE],
-                    oob_status_before_wait: 0, oob_status_after_wait: 0,
+                    oob_status_before_wait: 0, oob_status_after_wait: 0, oob_fifo_poll_count: 0, oob_fifo_poll_count: 0,
                 });
         }
     }
