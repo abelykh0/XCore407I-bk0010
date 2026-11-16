@@ -8,7 +8,7 @@ use core::{ffi::c_void, mem::MaybeUninit, ptr::NonNull};
 use littlefs2::{
     fs::Filesystem,
     fs::FileAllocation,
-    io::{Error as LfsError, Write},
+    io::{Error as LfsError, Read, Write},
     path::Path,
 };
 use zmodem2::{Action, Error as ZmodemError, Event, Receiver};
@@ -274,6 +274,82 @@ fn append_file(
             file.flush()
         },
     ).map_err(|error| error.code())
+}
+
+/// Create a deterministic 4 KiB file and read it twice through LittleFS/Dhara:
+/// once with ECC validation bypassed, then through the normal ECC path.
+/// Returns 0 on success; 1..N identify the failing stage.
+pub fn run_ecc_storage_diagnostic(
+    fs: &Filesystem<'_, ActiveStorage>,
+    state: &mut State,
+) -> u8 {
+    const TEST_PATH: &[u8] = b"/eccdiag.bin\\0";
+    const TEST_SIZE: usize = 4096;
+    const CHUNK: usize = 512;
+    let Ok(path) = Path::from_bytes_with_nul(TEST_PATH) else { return 1; };
+    if fs.exists(path) && fs.remove(path).is_err() { return 2; }
+
+    let create = fs.open_file_with_options_and_then_with_allocation(
+        |options| options.write(true).create_new(true),
+        path,
+        &mut state.file_allocation,
+        |_file| Ok(()),
+    );
+    if create.is_err() { return 3; }
+
+    let write_result = fs.open_file_with_options_and_then_with_allocation(
+        |options| options.write(true).append(true),
+        path,
+        &mut state.file_allocation,
+        |file| {
+            let mut data = [0u8; CHUNK];
+            for block in 0..(TEST_SIZE / CHUNK) {
+                for (i, byte) in data.iter_mut().enumerate() {
+                    let offset = block * CHUNK + i;
+                    *byte = ((offset as u32).wrapping_mul(37).wrapping_add(0x5A) ^ (offset as u32 >> 3)) as u8;
+                }
+                let mut written = 0;
+                while written < data.len() {
+                    let count = file.write(&data[written..])?;
+                    if count == 0 { return Err(LfsError::IO); }
+                    written += count;
+                }
+            }
+            file.flush()
+        },
+    );
+    if write_result.is_err() { return 4; }
+
+    for ecc_enabled in [false, true] {
+        crate::nand_fs::set_ecc_check_enabled(ecc_enabled);
+        let read_result = fs.open_file_with_options_and_then_with_allocation(
+            |options| options.read(true),
+            path,
+            &mut state.file_allocation,
+            |file| {
+                let mut data = [0u8; CHUNK];
+                let mut offset = 0usize;
+                while offset < TEST_SIZE {
+                    let count = file.read(&mut data)?;
+                    if count == 0 { return Err(LfsError::IO); }
+                    for i in 0..count {
+                        let absolute = offset + i;
+                        let expected = ((absolute as u32).wrapping_mul(37).wrapping_add(0x5A) ^ (absolute as u32 >> 3)) as u8;
+                        if data[i] != expected { return Err(LfsError::CORRUPT); }
+                    }
+                    offset += count;
+                }
+                Ok(())
+            },
+        );
+        crate::nand_fs::set_ecc_check_enabled(true);
+        if read_result.is_err() {
+            return if ecc_enabled { 6 } else { 5 };
+        }
+    }
+
+    let _ = fs.remove(path);
+    0
 }
 
 pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<(), ()> {
