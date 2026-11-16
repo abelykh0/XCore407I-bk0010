@@ -29,7 +29,7 @@ core::arch::global_asm!(
     "pop {{r4, r5, pc}}",
 );
 
-extern "C" {
+unsafe extern "C" {
     fn __xcore_call_on_stack(
         entry: extern "C" fn(*mut ()),
         context: *mut (),
