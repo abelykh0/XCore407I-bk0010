@@ -101,10 +101,8 @@ pub(crate) fn restart_usb_fs_host(
     tim3.dier().modify(|_, w| w.uie().clear_bit());
     USB_FS_READY.store(false, Ordering::Release);
     USB_HOST_TASK_PENDING.store(false, Ordering::Release);
-    unsafe {
-        NVIC::mask(interrupt::OTG_FS);
-        NVIC::unpend(interrupt::OTG_FS);
-    }
+    NVIC::mask(interrupt::OTG_FS);
+    NVIC::unpend(interrupt::OTG_FS);
 
     let deinit_ok = unsafe { tusb::tuh_deinit(0) };
     let initialized = if deinit_ok {
@@ -117,9 +115,7 @@ pub(crate) fn restart_usb_fs_host(
     // Resume the 1 ms host-task scheduler whether initialization succeeded
     // or failed; the normal retry path handles a failed reinitialization.
     tim3.sr().write(|w| w.uif().clear_bit());
-    unsafe {
-        NVIC::unpend(interrupt::TIM3);
-    }
+    NVIC::unpend(interrupt::TIM3);
     tim3.dier().write(|w| w.uie().set_bit());
     tim3.cr1().write(|w| w.cen().set_bit());
 
