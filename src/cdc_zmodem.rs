@@ -462,7 +462,7 @@ pub fn service(
                     if receiver.accept_file_at(0).is_err() {
                         state.last_error = 4;
                         super::cdc_console::write_status(
-                            b"\\r\\nZMODEM protocol error: accept_file_at failed\\r\\n",
+                            b"\r\nZMODEM protocol error: accept_file_at failed\r\n",
                         );
                         state.transfer_failed = true;
                         let _ = receiver.abort();
@@ -471,13 +471,13 @@ pub fn service(
                 } else {
                     state.final_path_len = 0;
                     let message: &[u8] = match rejection.unwrap_or(0) {
-                        1 => b"\\r\\nZMODEM rejected file: invalid filename\\r\\n",
-                        2 => b"\\r\\nZMODEM rejected file: invalid destination path\\r\\n",
-                        3 => b"\\r\\nZMODEM rejected file: destination already exists\\r\\n",
-                        4 => b"\\r\\nZMODEM rejected file: temp path invalid\\r\\n",
-                        5 => b"\\r\\nZMODEM rejected file: stale temp-file removal failed\\r\\n",
-                        6 => b"\\r\\nZMODEM rejected file: temp-file path invalid\\r\\n",
-                        _ => b"\\r\\nZMODEM rejected file: temp-file creation failed\\r\\n",
+                        1 => b"\r\nZMODEM rejected file: invalid filename\r\n",
+                        2 => b"\r\nZMODEM rejected file: invalid destination path\r\n",
+                        3 => b"\r\nZMODEM rejected file: destination already exists\r\n",
+                        4 => b"\r\nZMODEM rejected file: temp path invalid\r\n",
+                        5 => b"\r\nZMODEM rejected file: stale temp-file removal failed\r\n",
+                        6 => b"\r\nZMODEM rejected file: temp-file path invalid\r\n",
+                        _ => b"\r\nZMODEM rejected file: temp-file creation failed\r\n",
                     };
                     super::cdc_console::write_status(message);
                     if receiver.skip_file().is_err() {
