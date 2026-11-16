@@ -86,7 +86,7 @@ pub(crate) fn list_root_files(
 ) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
     xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
         let mut count = 0usize;
-        xcore407i_blinker::nand_fs::read_root_directory(fs, |path_bytes, is_dir, _size| {
+        xcore407i_blinker::nand_fs::read_root_directory(fs, false, |path_bytes, is_dir, _size| {
             if is_dir || count == MAX_BROWSER_FILES {
                 return Ok(());
             }
