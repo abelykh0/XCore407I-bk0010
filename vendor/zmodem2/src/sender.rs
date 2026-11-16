@@ -35,6 +35,7 @@ pub struct Sender {
     frame_remaining: usize,
     frame_needs_header: bool,
     max_subpacket_size: usize,
+    data_encoding: Encoding,
     max_subpackets_per_ack: usize,
     buf: Buffer<SUBPACKET_MAX_SIZE>,
     outgoing: Buffer<WIRE_BUF_SIZE>,
@@ -67,6 +68,7 @@ impl Sender {
             frame_remaining: 0,
             frame_needs_header: false,
             max_subpacket_size: SUBPACKET_MAX_SIZE,
+            data_encoding: Encoding::ZBIN,
             max_subpackets_per_ack: SUBPACKET_PER_ACK,
             buf: Buffer::<SUBPACKET_MAX_SIZE>::new(),
             outgoing: Buffer::<WIRE_BUF_SIZE>::new(),
@@ -402,21 +404,20 @@ impl Sender {
     ) -> Result<(), Error> {
         let mut writer = self.queue_writer()?;
         if include_header
-            && ZDATA_HEADER
-                .with_count(offset)
+            && Header::new(self.data_encoding, Frame::ZDATA, offset.to_le_bytes())
                 .write(&mut writer)?
                 .is_none()
         {
             return Err(Error::OutOfMemory);
         }
-        if write_subpacket(&mut writer, Encoding::ZBIN32, kind, data)?.is_none() {
+        if write_subpacket(&mut writer, self.data_encoding, kind, data)?.is_none() {
             return Err(Error::OutOfMemory);
         }
         Ok(())
     }
 
     fn queue_zeof(&mut self, offset: u32) -> Result<(), Error> {
-        self.queue_header(ZEOF_HEADER.with_count(offset))
+        self.queue_header(Header::new(self.data_encoding, Frame::ZEOF, offset.to_le_bytes()))
     }
 
     fn queue_zfin(&mut self) -> Result<(), Error> {
@@ -500,6 +501,11 @@ impl Sender {
         let rx_buf_size = u16::from_le_bytes([flags[0], flags[1]]) as usize;
         let caps = flags[3];
         let can_ovio = (caps & Zrinit::CANOVIO.bits()) != 0;
+        self.data_encoding = if (caps & Zrinit::CANFC32.bits()) != 0 {
+            Encoding::ZBIN32
+        } else {
+            Encoding::ZBIN
+        };
 
         // Receiver can receive and write data simultaneously and sender does
         // not have to cap to its buffer size.
