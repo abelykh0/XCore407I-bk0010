@@ -740,6 +740,8 @@ pub fn service(
                                 write_hex_u32(trace.status_before_wait[chunk]);
                                 write_status(b" SR-after-wait=0x");
                                 write_hex_u32(trace.status_after_wait[chunk]);
+                                write_status(b" FIFO-polls=");
+                                write_decimal(trace.fifo_poll_count[chunk] as usize);
                                 write_status(b" ECC-after-wait=0x");
                                 write_hex_u32(trace.ecc_after_wait[chunk]);
                                 write_status(b" SW-ECC=0x");
@@ -754,6 +756,8 @@ pub fn service(
                             write_hex_u32(trace.oob_status_before_wait);
                             write_status(b" SR-after-wait=0x");
                             write_hex_u32(trace.oob_status_after_wait);
+                            write_status(b" FIFO-polls=");
+                            write_decimal(trace.oob_fifo_poll_count as usize);
                             write_status(b"\r\nECCSEQSTATUS complete.\r\n> ");
                         }
                     } else if command_is(line, b"ECCWRITE ON") {
