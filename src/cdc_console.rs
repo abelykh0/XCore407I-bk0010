@@ -530,7 +530,7 @@ pub fn service(
             if let Some(fs) = fs {
                 cdc_zmodem::service(fs, zmodem, now_ms);
             }
-            return false;
+            return FormatRequest::None;
         }
         if zmodem.discard_trailing_input(now_ms) {
             return false;
