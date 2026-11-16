@@ -348,7 +348,7 @@ pub fn run_ecc_storage_diagnostic(
         }
     }
 
-    let _ = fs.remove(path);
+    if fs.remove(path).is_err() { return 7; }
     0
 }
 
