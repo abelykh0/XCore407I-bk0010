@@ -120,8 +120,25 @@ struct AlignedCanvas<const N: usize>([u8; N]);
 
 static mut DEMO_CANVAS: AlignedCanvas<CANVAS_MAIN_BYTES> = AlignedCanvas([0; CANVAS_MAIN_BYTES]);
 #[unsafe(link_section = ".ccmram.canvas")]
-static mut DEMO_CANVAS_TAIL: AlignedCanvas<CANVAS_TAIL_BYTES> =
-    AlignedCanvas([0; CANVAS_TAIL_BYTES]);
+#[repr(C, align(8))]
+union CanvasTailStorage {
+    canvas: core::mem::ManuallyDrop<AlignedCanvas<CANVAS_TAIL_BYTES>>,
+    stack: core::mem::ManuallyDrop<[u8; CANVAS_TAIL_BYTES]>,
+}
+
+// The CCM tail is the video canvas in normal mode and the CDC alternate stack
+// while the CDC filesystem session is active. Those modes are mutually exclusive.
+#[unsafe(link_section = ".ccmram.canvas")]
+static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
+    CanvasTailStorage { canvas: core::mem::ManuallyDrop::new(AlignedCanvas([0; CANVAS_TAIL_BYTES])) };
+
+pub(crate) fn cdc_alternate_stack_top() -> *mut u8 {
+    unsafe {
+        core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.stack)
+            .cast::<u8>()
+            .add(CANVAS_TAIL_BYTES)
+    }
+}
 
 #[repr(C, align(4))]
 struct RowBuffers([u8; WIDTH * 2]);
@@ -152,7 +169,7 @@ fn write_canvas(index: usize, value: u8) {
         if index < CANVAS_MAIN_BYTES {
             core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(index).write(value);
         } else {
-            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>()
+            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>()
                 .add(index - CANVAS_MAIN_BYTES).write(value);
         }
     }
@@ -168,7 +185,7 @@ fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
         } else {
             let tail_offset = offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of!(DEMO_CANVAS_TAIL.0)
+                core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0)
                     .cast::<u8>()
                     .add(tail_offset),
                 CANVAS_TAIL_BYTES - tail_offset,
@@ -189,7 +206,7 @@ pub fn clear_demo_canvas(color: u8) {
         let luma = GRAYSCALE[value as usize];
         unsafe {
             core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().write_bytes(luma, CANVAS_MAIN_BYTES);
-            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>().write_bytes(luma, CANVAS_TAIL_BYTES);
+            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().write_bytes(luma, CANVAS_TAIL_BYTES);
         }
     } else {
         let [u, v] = UV_PALETTE[value as usize];
@@ -197,7 +214,7 @@ pub fn clear_demo_canvas(color: u8) {
         let tail_pixels = CANVAS_TAIL_BYTES / 2;
         unsafe {
             let main = core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>();
-            let tail = core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>();
+            let tail = core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>();
             for i in 0..main_pixels { main.add(i * 2).write(u); main.add(i * 2 + 1).write(v); }
             for i in 0..tail_pixels { tail.add(i * 2).write(u); tail.add(i * 2 + 1).write(v); }
         }
@@ -235,7 +252,7 @@ unsafe fn copy_row_to_canvas(source: *const u8, row: usize) {
         } else {
             let tail_offset = offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>().add(tail_offset),
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(tail_offset),
                 CANVAS_TAIL_BYTES - tail_offset,
             )
         };
@@ -265,7 +282,7 @@ unsafe fn copy_canvas_row(src_row: usize, dst_row: usize) {
         } else {
             let offset = src_offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of!(DEMO_CANVAS_TAIL.0).cast::<u8>().add(offset),
+                core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(offset),
                 CANVAS_TAIL_BYTES - offset,
             )
         };
@@ -277,7 +294,7 @@ unsafe fn copy_canvas_row(src_row: usize, dst_row: usize) {
         } else {
             let offset = dst_offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0).cast::<u8>().add(offset),
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(offset),
                 CANVAS_TAIL_BYTES - offset,
             )
         };
@@ -346,7 +363,7 @@ pub fn set_pixel(x: usize, y: usize, color: u8) {
             if offset < CANVAS_MAIN_BYTES {
                 core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset).write(value);
             } else {
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0)
                     .cast::<u8>().add(offset - CANVAS_MAIN_BYTES).write(value);
             }
         } else {
@@ -355,7 +372,7 @@ pub fn set_pixel(x: usize, y: usize, color: u8) {
             let destination = if offset < CANVAS_MAIN_BYTES {
                 core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
             } else {
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0)
                     .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
             };
             destination.write(u);
@@ -413,7 +430,7 @@ pub(crate) fn set_bk_video_byte(byte_x: usize, y: usize, byte: u8, monochrome: b
         let destination = if offset < CANVAS_MAIN_BYTES {
             core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
         } else {
-            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.0)
+            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0)
                 .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
         };
 
@@ -448,7 +465,7 @@ pub(crate) fn get_bk_color_pixel(x: usize, y: usize) -> u8 {
     let offset = (y * 256 + x) * 2;
     unsafe {
         let base = core::ptr::addr_of!(DEMO_CANVAS.0).cast::<u8>();
-        let tail = core::ptr::addr_of!(DEMO_CANVAS_TAIL.0).cast::<u8>();
+        let tail = core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>();
         let (cb, cr) = if offset < CANVAS_MAIN_BYTES {
             (base.add(offset).read(), base.add(offset + 1).read())
         } else {
@@ -474,7 +491,7 @@ pub(crate) fn get_bk_bw_pixel(x: usize, y: usize) -> u8 {
         let value = if offset < CANVAS_MAIN_BYTES {
             core::ptr::addr_of!(DEMO_CANVAS.0).cast::<u8>().add(offset).read()
         } else {
-            core::ptr::addr_of!(DEMO_CANVAS_TAIL.0).cast::<u8>()
+            core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>()
                 .add(offset - CANVAS_MAIN_BYTES).read()
         };
         if value == 0 { 0 } else { 1 }
@@ -1072,7 +1089,7 @@ unsafe fn copy_canvas_range(mut offset: usize, mut destination: *mut u8, mut byt
         } else {
             let tail_offset = offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of!(DEMO_CANVAS_TAIL.0).cast::<u8>().add(tail_offset),
+                core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(tail_offset),
                 CANVAS_TAIL_BYTES - tail_offset,
             )
         };
