@@ -18,7 +18,7 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  ECCPAGEHW  Compare stored, FSMC hardware, and software ECC after NAND RESET (read-only)\r\n  ECCWRITE ON/OFF Enable/disable verification of subsequent page programs\r\n  ECCWRITESTATUS Show the last verified page program and ECC values\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  ECCPAGEHW  Compare stored, FSMC hardware, and software ECC after NAND RESET (read-only)\r\n  ECCWRITE ON/OFF Enable/disable verification of subsequent page programs\r\n  ECCWRITESTATUS Show the last verified page program and ECC values\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT     Show NAND format warning\r\n  FORMAT YES Erase and reinitialize NAND\r\n> ";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -151,6 +151,52 @@ fn write_decimal(mut value: usize) {
         }
     }
     write_status(&digits[start..]);
+}
+
+fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
+    // DELETE accepts one root-level filename only. Keep the same conservative
+    // character policy as ZMODEM uploads; never accept paths or separators.
+    if name.is_empty()
+        || name.len() > 64
+        || name == b"."
+        || name == b".."
+        || !name.iter().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(*byte, b'.' | b'_' | b'-' | b'+' | b' ' | b'(' | b')')
+        })
+    {
+        write_status(b"DELETE: invalid filename. Use a root-level filename without a path.\\r\\n> ");
+        return;
+    }
+
+    let mut path_bytes = [0u8; 66];
+    path_bytes[0] = b'/';
+    path_bytes[1..1 + name.len()].copy_from_slice(name);
+    path_bytes[1 + name.len()] = 0;
+    let Ok(path) = Path::from_bytes_with_nul(&path_bytes[..name.len() + 2]) else {
+        write_status(b"DELETE: invalid path.\\r\\n> ");
+        return;
+    };
+
+    write_status(b"DELETE: checking /");
+    write_status(name);
+    write_status(b"...\\r\\n");
+    if !fs.exists(path) {
+        write_status(b"DELETE: file not found.\\r\\n> ");
+        return;
+    }
+    match fs.remove(path) {
+        Ok(()) => {
+            write_status(b"DELETE: removed /");
+            write_status(name);
+            write_status(b".\\r\\n> ");
+        }
+        Err(error) => {
+            write_status(b"DELETE: LittleFS remove failed; error 0x");
+            write_hex_u32(error.code() as u32);
+            write_status(b"\\r\\n> ");
+        }
+    }
 }
 
 fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
@@ -954,6 +1000,15 @@ pub fn service(
                         } else {
                             b"ECCSCAN completed with diagnostic findings. NAND was not modified.\r\n> "
                         });
+                    } else if line.len() > 7
+                        && line[..7].iter().zip(b"DELETE").all(|(a, b)| a.to_ascii_uppercase() == *b)
+                        && line[6] == b' '
+                    {
+                        if let Some(fs) = fs {
+                            delete_file(fs, &line[7..]);
+                        } else {
+                            write_status(b"Storage unavailable.\\r\\n> ");
+                        }
                     } else if command_is(line, b"LIST") {
                         if let Some(fs) = fs {
                             list_files(fs);
