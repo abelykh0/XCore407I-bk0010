@@ -18,7 +18,9 @@ static mut WAS_CONNECTED: bool = false;
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCFILETEST Write/read a 4 KiB test file with ECC bypassed, then checked\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  ECCPAGE    Compare one physical page repeatedly: ECC + raw-data stability (read-only)\r\n  ECCPAGEHW  Compare stored, FSMC hardware, and software ECC after NAND RESET (read-only)\r\n  ECCSEQ ON/OFF Arm/disarm low-overhead program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable verification of subsequent page programs\r\n  ECCWRITESTATUS Show the last verified page program and ECC values\r\n  NANDRESETTEST Repeat raw page reads with NAND RESET before each sample (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files in the LittleFS root (including hidden files)\r\n  DELETE name Delete a file from the LittleFS root\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+#[cfg(feature = "nand-diagnostics")]
+const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
@@ -599,6 +601,8 @@ pub fn service(
                     );
                     if command_is(line, b"HELP") {
                         write_status(HELP);
+                        #[cfg(feature = "nand-diagnostics")]
+                        write_status(HELP_NAND_DIAGNOSTICS);
                     } else if command_is(line, b"STATUS") {
                         write_status(if fs.is_some() {
                             STATUS_MOUNTED
@@ -707,13 +711,13 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
-                    } else if command_is(line, b"ECCSEQ ON") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
                         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
                         write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
-                    } else if command_is(line, b"ECCSEQ OFF") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ OFF") {
                         crate::nand_fs::set_ecc_sequence_trace_enabled(false);
                         write_status(b"\r\nECCSEQ: disabled.\r\n> ");
-                    } else if command_is(line, b"ECCSEQSTATUS") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQSTATUS") {
                         let trace = crate::nand_fs::ecc_sequence_trace();
                         if trace.page == u32::MAX {
                             write_status(b"\r\nECCSEQSTATUS: no page program captured. Enable ECCSEQ, then create/write a file.\r\n> ");
@@ -760,13 +764,13 @@ pub fn service(
                             write_decimal(trace.oob_fifo_poll_count as usize);
                             write_status(b"\r\nECCSEQSTATUS complete.\r\n> ");
                         }
-                    } else if command_is(line, b"ECCWRITE ON") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCWRITE ON") {
                         crate::nand_fs::set_ecc_write_trace_enabled(true);
                         write_status(b"\r\nECCWRITE: enabled. Subsequent NAND page programs will be read back and checked.\r\n> ");
-                    } else if command_is(line, b"ECCWRITE OFF") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCWRITE OFF") {
                         crate::nand_fs::set_ecc_write_trace_enabled(false);
                         write_status(b"\r\nECCWRITE: disabled.\r\n> ");
-                    } else if command_is(line, b"ECCWRITESTATUS") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCWRITESTATUS") {
                         let trace = crate::nand_fs::ecc_write_trace();
                         if trace.page == u32::MAX {
                             write_status(b"\r\nECCWRITESTATUS: no page program captured. Enable ECCWRITE before creating/writing a file.\r\n> ");
@@ -799,7 +803,7 @@ pub fn service(
                             }
                             write_status(b"ECCWRITESTATUS complete. Diagnostic reads do not change NAND contents.\r\n> ");
                         }
-                    } else if command_is(line, b"NANDPAGEPROBE") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"NANDPAGEPROBE") {
                         write_status(b"\r\nNANDPAGEPROBE: read-only raw page reads; no NAND writes or erases.\r\n");
                         let (ok, data) = crate::nand_fs::ecc_scan_page_probe();
                         let labels = [
@@ -821,7 +825,7 @@ pub fn service(
                             write_status(b"\r\n");
                         }
                         write_status(b"> ");
-                    } else if command_is(line, b"NANDRESETTEST") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"NANDRESETTEST") {
                         write_status(b"\r\nNANDRESETTEST: three raw reads per location; NAND RESET + STATUS before each read. No NAND writes or erases.\r\n");
                         let (reset_ok, read_ok, data) = crate::nand_fs::ecc_scan_reset_page_probe();
                         let labels = [
@@ -850,7 +854,7 @@ pub fn service(
                             }
                         }
                         write_status(b"> ");
-                    } else if command_is(line, b"NANDPROBE") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"NANDPROBE") {
                         write_status(b"\r\nNANDPROBE: read-only READ ID / STATUS; no NAND writes or erases.\r\n");
                         let (id, status, ready) = crate::nand_fs::ecc_scan_interface_probe();
                         write_status(b"READ ID:");
@@ -862,7 +866,7 @@ pub fn service(
                         write_hex_u32(status as u32);
                         write_status(if ready { b"  R/B=READY\r\n" } else { b"  R/B=BUSY\r\n" });
                         write_status(b"> ");
-                    } else if line.len() > 8
+                    } else if cfg!(feature = "nand-diagnostics") && line.len() > 8
                         && line[..8].eq_ignore_ascii_case(b"ECCPAGE ")
                     {
                         let Some(page) = parse_hex_u32(&line[8..]) else {
@@ -934,7 +938,7 @@ pub fn service(
                             }
                             write_status(b"ECCPAGE complete. Compare all three reads; repeat command if needed.\r\n> ");
                         }
-                    } else if line.len() > 10
+                    } else if cfg!(feature = "nand-diagnostics") && line.len() > 10
                         && line[..10].eq_ignore_ascii_case(b"ECCPAGEHW ")
                     {
                         let Some(page) = parse_hex_u32(&line[10..]) else {
@@ -1008,7 +1012,7 @@ pub fn service(
                             }
                             write_status(b"ECCPAGEHW complete. Compare the three samples, especially chunk 3.\r\n> ");
                         }
-                    } else if command_is(line, b"ECCFILETEST") {
+                    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCFILETEST") {
                         if let Some(fs) = fs {
                             write_status(b"\r\nECCFILETEST: writing deterministic 4096-byte file /eccdiag.bin...\r\n");
                             crate::dhara_fs::clear_storage_io_diagnostic();
