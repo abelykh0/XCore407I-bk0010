@@ -537,12 +537,12 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     match fs.available_space() {
         Ok(bytes) => {
             write_decimal_grouped(bytes);
-            write_status(b" bytes\\r\\n");
+            write_status(b" bytes\r\n");
         }
         Err(error) => {
             write_status(b"query failed; LittleFS error 0x");
             write_hex_u32(error.code() as u32);
-            write_status(b"\\r\\n");
+            write_status(b"\r\n");
         }
     }
     write_status(b"> ");
