@@ -44,6 +44,9 @@ const TIMEOUT: u32 = 20_000_000;
 // Keep the interactive ECCPAGE diagnostic responsive if NAND R/B never rises.
 const ECC_DIAGNOSTIC_TIMEOUT: u32 = 500_000;
 
+#[unsafe(link_section = ".ccmram.ecc")]
+static mut ECC_DIAGNOSTIC_PAGE_BUFFER: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
+
 // Optional main-context service hook used while synchronous NAND operations
 // wait for the device. The hook is installed only around the file-browser
 // operation; it must not access NAND or call back into LittleFS.
@@ -686,13 +689,20 @@ pub(crate) struct EccPageComparison {
 
 pub(crate) fn ecc_software_compare_page(page: u32) -> Option<EccPageComparison> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
-    let mut data = [0u8; PAGE_SIZE];
+    // SAFETY: ECCPAGE is a synchronous foreground diagnostic and does not
+    // run concurrently with a ZMODEM receiver session or from an ISR.
+    let data = unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(ECC_DIAGNOSTIC_PAGE_BUFFER).cast::<u8>(),
+            PAGE_SIZE,
+        )
+    };
     let pcr = unsafe { read_volatile(FSMC_PCR2) };
     unsafe {
         write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
         let _ = read_volatile(FSMC_PCR2);
     }
-    let data_ok = read_page_with_timeout(page, 0, &mut data, ECC_DIAGNOSTIC_TIMEOUT);
+    let data_ok = read_page_with_timeout(page, 0, data, ECC_DIAGNOSTIC_TIMEOUT);
     let mut spare = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
     let spare_ok = data_ok && read_page_with_timeout(
         page,
