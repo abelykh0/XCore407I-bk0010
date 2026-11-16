@@ -155,6 +155,30 @@ fn write_decimal(mut value: usize) {
     write_status(&digits[start..]);
 }
 
+fn write_decimal_grouped(mut value: usize) {
+    let mut digits = [0u8; 10];
+    let mut start = digits.len();
+    let mut count = 0usize;
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        count += 1;
+        if value == 0 {
+            break;
+        }
+    }
+
+    while count > 3 {
+        let group_start = start + count - 3;
+        write_status(&digits[start..group_start]);
+        write_status(b",");
+        start = group_start;
+        count -= 3;
+    }
+    write_status(&digits[start..start + count]);
+}
+
 pub(crate) fn write_send_complete(name: &[u8], size: u32) {
     write_status(b"\r\nReceived file ");
     write_status(name);
@@ -279,13 +303,13 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
     // distinguishes a CDC TX stall from a NAND/Dhara directory-read stall.
     write_status(b"\r\nLIST: command accepted.\r\n");
     write_status(b"LittleFS total size: ");
-    write_decimal(fs.total_space());
+    write_decimal_grouped(fs.total_space());
     write_status(b" bytes\r\n");
 
     write_status(b"LittleFS free space: ");
     match fs.available_space() {
         Ok(bytes) => {
-            write_decimal(bytes);
+            write_decimal_grouped(bytes);
             write_status(b" bytes\r\n");
         }
         Err(error) => {
@@ -312,7 +336,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>) {
                 write_status(b" [DIR]");
             } else {
                 write_status(b"  ");
-                write_decimal(metadata.len());
+                write_decimal_grouped(metadata.len());
                 write_status(b" bytes");
             }
             write_status(b"\r\n");
