@@ -497,7 +497,7 @@ fn main() -> ! {
             }
         } else if format_request == xcore407i_blinker::cdc_console::FormatRequest::WholeNand {
             xcore407i_blinker::cdc_console::report_format_status(
-                b"Filesystem released. Formatting NAND; all files will be lost...\\r\\n",
+                b"Filesystem released. Formatting NAND; all files will be lost...\r\n",
             );
             let mut last_reported = 0u32;
             let format_result =
