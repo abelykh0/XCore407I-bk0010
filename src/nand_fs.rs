@@ -106,7 +106,7 @@ pub(crate) const ADDR: *mut u8 = (NAND_BASE | (1 << 16)) as *mut u8;
 // Bank 2 attribute-space alias of the address latch. RM0090 §36.6.5
 // uses this for the final address byte so ATTHOLD can keep NCE asserted
 // across NAND tWB without penalizing ordinary common-space accesses.
-const ATTR_ADDR: *mut u8 = (NAND_BASE | (1 << 27) | (1 << 16)) as *mut u8;
+const ATTR_ADDR: *mut u8 = (NAND_BASE | (1 << 27) | (1 << 17)) as *mut u8;
 pub(crate) const DATA: *mut u8 = NAND_BASE as *mut u8;
 const TIMEOUT: u32 = 20_000_000;
 // Keep the interactive ECCPAGE diagnostic responsive if NAND R/B never rises.
