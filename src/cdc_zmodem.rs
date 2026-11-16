@@ -466,6 +466,7 @@ fn service_sender(
         return false;
     };
     let mut finished = false;
+    let mut session_complete_pending = false;
 
     for _ in 0..8 {
         match sender.poll() {
@@ -481,6 +482,14 @@ fn service_sender(
                 sender.wire_written(count);
                 state.send_last_activity_ms = now_ms;
                 if count < len {
+                    break;
+                }
+                // SessionCompleted is reported before the sender's final
+                // "OO" acknowledgement. Do not tear down the sender until
+                // those bytes have been written to CDC IN.
+                if session_complete_pending {
+                    super::cdc_console::write_status(b"\r\nZMODEM send complete.\r\n> ");
+                    finished = true;
                     break;
                 }
             }
@@ -528,9 +537,9 @@ fn service_sender(
                 }
             }
             Action::Event(Event::SessionCompleted) => {
-                super::cdc_console::write_status(b"\r\nZMODEM send complete.\r\n> ");
-                finished = true;
-                break;
+                // The protocol engine reports completion before exposing its
+                // final "OO" acknowledgement as WriteWire.
+                session_complete_pending = true;
             }
             Action::Event(Event::Aborted) => {
                 super::cdc_console::write_status(b"\r\nZMODEM send aborted or failed.\r\n> ");
