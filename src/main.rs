@@ -401,7 +401,9 @@ fn main() -> ! {
         let mut just_formatted = false;
         loop {
             let mount_result: Result<bool, xcore407i_blinker::nand_fs::FsAccessError> =
-                xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
+                unsafe {
+                    xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
+                        xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
                     if just_formatted {
                         xcore407i_blinker::cdc_console::report_format_status(
                             b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
@@ -430,7 +432,9 @@ fn main() -> ! {
                         break Ok(true);
                     }
                 }
-            });
+                        })
+                    })
+                };
 
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
