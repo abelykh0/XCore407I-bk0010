@@ -111,8 +111,8 @@ const ECC_DIAGNOSTIC_TIMEOUT: u32 = 500_000;
 static mut ECC_DIAGNOSTIC_PAGE_BUFFER: [u8; PAGE_SIZE] = [0; PAGE_SIZE];
 
 // Optional main-context service hook used while synchronous NAND operations
-// wait for the device. The hook is installed only around the file-browser
-// operation; it must not access NAND or call back into LittleFS.
+// wait for the device. The normal file browser and CDC foreground install it
+// around filesystem work; it must not access NAND or call back into LittleFS.
 static NAND_IO_SERVICE_HOOK: AtomicPtr<fn()> = AtomicPtr::new(core::ptr::null_mut());
 
 pub fn set_io_service_hook(hook: Option<&'static fn()>) {
