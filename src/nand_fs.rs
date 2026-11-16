@@ -706,7 +706,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     cortex_m::asm::delay(1_000);
 
     let trace_enabled = ECC_WRITE_TRACE_ENABLED.load(Ordering::Acquire) != 0;
-    let sequence_trace_enabled = ECC_SEQUENCE_TRACE_ENABLED.load(Ordering::Acquire) != 0
+    // Keep the sample-storage polling perturbation active for every page while
+    // retaining the detailed ECC sequence report as a one-shot capture.
+    let fifo_sample_mode = ECC_SEQUENCE_TRACE_ENABLED.load(Ordering::Acquire) != 0;
+    let sequence_trace_enabled = fifo_sample_mode
         && ECC_SEQUENCE_TRACE_CAPTURED.load(Ordering::Acquire) == 0;
     let mut sequence_trace = EccSequenceTrace {
         page, flags: 0,
@@ -748,7 +751,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if sequence_trace_enabled {
             sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
         }
-        let (fifo_empty, fifo_polls, fifo_samples) = if sequence_trace_enabled {
+        let (fifo_empty, fifo_polls, fifo_samples) = if fifo_sample_mode {
             wait_fsmc_fifo_empty_counted()
         } else {
             (wait_fsmc_fifo_empty(), 0, [0; 8])
@@ -798,7 +801,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if sequence_trace_enabled {
         sequence_trace.oob_status_before_wait = unsafe { read_volatile(FSMC_SR2) };
     }
-    let (oob_fifo_empty, oob_fifo_polls, oob_fifo_samples) = if sequence_trace_enabled {
+    let (oob_fifo_empty, oob_fifo_polls, oob_fifo_samples) = if fifo_sample_mode {
         wait_fsmc_fifo_empty_counted()
     } else {
         (wait_fsmc_fifo_empty(), 0, [0; 8])
