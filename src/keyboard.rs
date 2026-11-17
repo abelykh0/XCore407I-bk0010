@@ -431,24 +431,9 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             continue;
         }
 
-        // Ctrl+Alt+F12 is an opt-in destructive maintenance command.
-        #[cfg(feature = "destructive-nand-init")]
-        if key == 0x45 && modifiers & 0x11 != 0 && modifiers & 0x44 != 0 {
-            if INIT_STATE.load(Ordering::Acquire) == 0 {
-                keyboard_queue_discard();
-                INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
-            }
-            continue;
-        }
-
         // STOP is a hardware IRQ1, not a character sent through 177662.
-        // F12 is reserved for NAND initialization only in the feature build.
-        if key == 0x48 || (key == 0x45 && {
-            #[cfg(feature = "destructive-nand-init")]
-            { modifiers & 0x11 == 0 || modifiers & 0x44 == 0 }
-            #[cfg(not(feature = "destructive-nand-init"))]
-            { true }
-        }) {
+        // F12 is not assigned to destructive NAND maintenance.
+        if key == 0x48 || key == 0x45 {
             bk_request_stop_irq();
             continue;
         }

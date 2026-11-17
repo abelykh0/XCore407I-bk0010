@@ -40,15 +40,14 @@ Dhara is the only raw-NAND backend. It manages physical blocks, bad blocks,
 and wear levelling; STM32 FSMC Hamming ECC protects page data. LittleFS uses
 700 logical erase blocks (87.5 MiB).
 
-If Dhara is valid but LittleFS cannot mount, the file browser offers a
-two-step confirmation to format LittleFS. This deletes its files but preserves
-the Dhara journal.
+If no valid Dhara journal is found, the file browser offers a two-step
+confirmation to initialize NAND. This erases all usable NAND blocks, creates
+a new Dhara volume, and formats an empty LittleFS filesystem. Factory bad
+blocks are preserved; all existing NAND data is lost.
 
-The manual **Ctrl+Alt+F12** NAND reinitialization shortcut is compiled only
-with the `destructive-nand-init` feature. It opens a two-step confirmation;
-confirming erases usable NAND blocks, creates a Dhara volume, and formats an
-empty LittleFS filesystem. Factory bad blocks are preserved. All NAND data
-is lost. Without this feature, the shortcut is unavailable.
+If Dhara is valid but LittleFS cannot mount, the file browser offers a
+separate two-step confirmation to format LittleFS. This deletes its files but
+preserves the Dhara journal.
 
 ### CDC console and ZMODEM
 
