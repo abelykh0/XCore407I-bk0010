@@ -329,14 +329,13 @@ fn wait_ready_rb_timeout(timeout: u32) -> bool {
     // RESET starts, it first transitions low and returns high on completion.
     // Waiting only for high can therefore accept the idle-high level before
     // the NAND has even entered its busy phase (notably after PROGRAM CONFIRM).
-    let rb = unsafe {
-        pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()
-    };
+    // GPIOD IDR is accessed through the PAC instead of a raw register offset.
+    let gpiod = unsafe { &*pac::GPIOD::ptr() };
 
     // First observe that the command was accepted and the NAND became busy.
     let mut saw_busy = false;
     for _ in 0..timeout {
-        if unsafe { read_volatile(rb) } & RB_MASK == 0 {
+        if gpiod.idr().read().bits() & RB_MASK == 0 {
             saw_busy = true;
             break;
         }
@@ -348,7 +347,7 @@ fn wait_ready_rb_timeout(timeout: u32) -> bool {
 
     // Then wait for the actual completion edge.
     for _ in 0..timeout {
-        if unsafe { read_volatile(rb) } & RB_MASK != 0 {
+        if gpiod.idr().read().bits() & RB_MASK != 0 {
             return true;
         }
         core::hint::spin_loop();
