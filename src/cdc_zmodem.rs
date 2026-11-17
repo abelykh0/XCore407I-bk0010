@@ -830,8 +830,16 @@ pub fn service(
                 };
                 if rejection.is_none() {
                     state.final_path_len = path_len.unwrap_or(0);
+                    // Copy the borrowed filename before calling another
+                    // mutable Receiver method; Event::FileStarted borrows
+                    // its name from receiver.poll().
+                    state.receive_name_len = info.name.len();
+                    state.receive_name[..state.receive_name_len].copy_from_slice(info.name);
+                    state.receive_size = 0;
+                    state.receive_started_rtc_ms = rtc_now_millis();
                     if receiver.accept_file_at(0).is_err() {
                         state.last_error = 4;
+                        state.receive_name_len = 0;
                         super::cdc_console::write_status(
                             b"\r\nZMODEM protocol error: accept_file_at failed\r\n",
                         );
@@ -839,10 +847,6 @@ pub fn service(
                         let _ = receiver.abort();
                         break;
                     }
-                    state.receive_name_len = info.name.len();
-                    state.receive_name[..state.receive_name_len].copy_from_slice(info.name);
-                    state.receive_size = 0;
-                    state.receive_started_rtc_ms = rtc_now_millis();
                 } else {
                     state.final_path_len = 0;
                     let message: &[u8] = match rejection.unwrap_or(0) {
