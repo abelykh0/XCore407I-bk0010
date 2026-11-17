@@ -883,7 +883,14 @@ pub fn service(
                         Ok(_) => {
                             #[cfg(feature = "list-profile")]
                             crate::write_diag::begin();
-                            create_temp_file(fs, &mut state.file_allocation).err().map(|stage| stage + 3)
+                            #[cfg(feature = "list-profile")]
+                            let create_started = crate::write_diag::cycle_count();
+                            let create_result = create_temp_file(fs, &mut state.file_allocation);
+                            #[cfg(feature = "list-profile")]
+                            crate::write_diag::record_lfs_create(
+                                crate::write_diag::cycle_count().wrapping_sub(create_started),
+                            );
+                            create_result.err().map(|stage| stage + 3)
                         },
                     },
                 };
@@ -926,7 +933,14 @@ pub fn service(
                 }
             }
             Action::Event(Event::FileCompleted) => {
-                if let Err((stage, error)) = commit_temp_file(fs, state) {
+                #[cfg(feature = "list-profile")]
+                let commit_started = crate::write_diag::cycle_count();
+                let commit_result = commit_temp_file(fs, state);
+                #[cfg(feature = "list-profile")]
+                crate::write_diag::record_lfs_commit(
+                    crate::write_diag::cycle_count().wrapping_sub(commit_started),
+                );
+                if let Err((stage, error)) = commit_result {
                     state.last_error = 5;
                     state.commit_stage = stage;
                     state.commit_lfs_error = error;
