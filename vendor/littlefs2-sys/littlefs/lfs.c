@@ -1108,7 +1108,7 @@ struct lfs_dir_name_index_context {
 static int lfs_dir_name_index_cb(void *data, lfs_tag_t tag, const void *buffer) {
     struct lfs_dir_name_index_context *ctx = data;
     uint16_t id = lfs_tag_id(tag);
-    if (id >= ctx->count || lfs_tag_type3(tag) != LFS_TYPE_NAME) {
+    if (id >= ctx->count || lfs_tag_type1(tag) != LFS_TYPE_NAME) {
         return 0;
     }
 
