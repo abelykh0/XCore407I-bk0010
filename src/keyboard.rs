@@ -25,7 +25,7 @@ static mut PREVIOUS_MODIFIERS: u8 = 0;
 static KEYBOARD_LOCKS: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
-// Startup mode is latched from the first valid boot-keyboard report.
+// Startup mode is selected as soon as a boot-keyboard interface mounts.
 pub(crate) const BOOT_SELECTION_WAITING: u8 = 0;
 pub(crate) const BOOT_SELECTION_NORMAL: u8 = 1;
 pub(crate) const BOOT_SELECTION_CDC: u8 = 2;
@@ -124,6 +124,15 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
     }
     BOOT_KEYBOARD_MOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
     note_usb_host_activity();
+    // A mounted boot-keyboard interface is sufficient to enter normal
+    // mode. Do not wait for the first key report: some keyboards do not
+    // send an initial idle report after enumeration.
+    let _ = BOOT_SELECTION.compare_exchange(
+        BOOT_SELECTION_WAITING,
+        BOOT_SELECTION_NORMAL,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
@@ -210,31 +219,7 @@ pub extern "C" fn tuh_hid_report_received_cb(
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
 
         let selection = BOOT_SELECTION.load(Ordering::Acquire);
-        if selection == BOOT_SELECTION_WAITING {
-            // The first boot-keyboard report decides the startup mode.
-            // F10 must be held during startup to select CDC; an empty report
-            // (or any other key) selects normal mode immediately. Do not wait
-            // for a later keypress after the keyboard has enumerated.
-            let selected = if bytes[2..8].contains(&0x43) {
-                BOOT_SELECTION_CDC
-            } else {
-                BOOT_SELECTION_NORMAL
-            };
-            if BOOT_SELECTION.compare_exchange(
-                BOOT_SELECTION_WAITING,
-                selected,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ).is_ok() {
-                // Do not forward the mode-selection report as input.
-                unsafe {
-                    let mut keys = [0u8; 6];
-                    keys.copy_from_slice(&bytes[2..8]);
-                    PREVIOUS_KEYS = keys;
-                    PREVIOUS_MODIFIERS = bytes[0];
-                }
-            }
-        } else if selection == BOOT_SELECTION_NORMAL
+        if selection == BOOT_SELECTION_NORMAL
             && EMULATOR_INPUT_ENABLED.load(Ordering::Acquire)
         {
             process_boot_keyboard_report(dev_addr, instance, bytes);

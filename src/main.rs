@@ -214,8 +214,8 @@ fn main() -> ! {
     #[cfg(feature = "cpu-cycle-diag")]
     enable_cycle_counter(&mut core);
 
-    // Emulator initialization is deferred until the first boot-keyboard
-    // report selects normal mode. CDC mode never initializes BK or storage UI.
+    // Emulator initialization is deferred until a boot-keyboard interface mounts.
+    // CDC mode never initializes BK or storage UI.
 
     configure_board_pins(
         &mut device.RCC,
@@ -259,12 +259,10 @@ fn main() -> ! {
         );
     }
 
-    // Allow an initially detected keyboard time to report F10. If it does
-    // not, select normal mode; restart the host only when no boot keyboard
-    // was detected in the initial discovery window.
-    // A mounted keyboard gets a short chance to send its initial report (F10).
-    // Only an absent keyboard uses this timeout to trigger host recovery.
-    const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 500;
+    // Keep discovery active until a boot-keyboard interface mounts. The
+    // mount callback selects normal mode immediately; this timeout is only
+    // for recovering when no boot keyboard is detected.
+    const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
     let mut keyboard_host_restart_attempted = false;
     USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
     while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
@@ -289,9 +287,8 @@ fn main() -> ! {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
         }
 
-        // A valid keyboard report has already selected NORMAL or CDC.
-        // Do not keep consuming the keyboard reports for the remainder of
-        // the fallback window: initialize the selected mode immediately.
+        // A boot-keyboard mount selects NORMAL immediately. Do not wait for
+        // the keyboard to send its first input report.
         if keyboard::boot_selection() != keyboard::BOOT_SELECTION_WAITING {
             break;
         }
@@ -312,8 +309,8 @@ fn main() -> ! {
                 continue;
             }
 
-            // The single host restart did not produce a keyboard report within
-            // the second discovery window. Select normal mode and show diagnostics.
+            // The host restart did not discover a boot keyboard within the
+            // second discovery window. Select normal mode and show diagnostics.
             keyboard::set_boot_default_normal();
             break;
         }
