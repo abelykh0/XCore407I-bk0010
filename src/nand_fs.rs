@@ -83,16 +83,36 @@ use littlefs2::{
     io::Result as LfsResult,
 };
 
-const FSMC_BASE: usize = 0xA000_0000;
 const NAND_BASE: usize = 0x7000_0000;
 
-// STM32F407 FSMC NAND Bank 2 registers.
-const FSMC_PCR2: *mut u32 = (FSMC_BASE + 0x60) as *mut u32;
-const FSMC_SR2: *const u32 = (FSMC_BASE + 0x64) as *const u32;
+// Access FSMC NAND Bank 2 through the PAC register block rather than
+// duplicating its peripheral base address and register offsets.
+#[inline(always)]
+fn fsmc_pcr2() -> *mut u32 {
+    unsafe { (*pac::FSMC::ptr()).pcr2().as_ptr() }
+}
+
+#[inline(always)]
+fn fsmc_sr2() -> *const u32 {
+    unsafe { (*pac::FSMC::ptr()).sr2().as_ptr() }
+}
+
+#[inline(always)]
+fn fsmc_pmem2() -> *mut u32 {
+    unsafe { (*pac::FSMC::ptr()).pmem2().as_ptr() }
+}
+
+#[inline(always)]
+fn fsmc_patt2() -> *mut u32 {
+    unsafe { (*pac::FSMC::ptr()).patt2().as_ptr() }
+}
+
+#[inline(always)]
+fn fsmc_eccr2() -> *const u32 {
+    unsafe { (*pac::FSMC::ptr()).eccr2().as_ptr() }
+}
+
 const FSMC_SR_FEMPT: u32 = 1 << 6;
-// Bank 2 ECCR2 is at offset 0x74 (PCR2 +0x60, SR2 +0x64,
-// PMEM2 +0x68, PATT2 +0x6C, reserved +0x70, ECCR2 +0x74).
-const FSMC_ECCR2: *const u32 = (FSMC_BASE + 0x74) as *const u32;
 const FSMC_PCR_ECCEN: u32 = 1 << 6;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
@@ -250,15 +270,15 @@ pub(crate) fn read_data() -> u8 { unsafe { read_volatile(DATA) } }
 /// Prepare the FSMC ECC engine for one 512-byte data chunk.
 fn ecc_begin_chunk() {
     unsafe {
-        let pcr = read_volatile(FSMC_PCR2);
+        let pcr = read_volatile(fsmc_pcr2());
         // ECCPS is configured once in configure_fsmc(). Match ST's HAL
         // sequence here: disable ECC, then re-enable it by changing ECCEN
         // only; do not rewrite the page-size field for every chunk.
         let disabled = pcr & !FSMC_PCR_ECCEN;
-        write_volatile(FSMC_PCR2, disabled);
-        let _ = read_volatile(FSMC_PCR2);
-        write_volatile(FSMC_PCR2, disabled | FSMC_PCR_ECCEN);
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), disabled);
+        let _ = read_volatile(fsmc_pcr2());
+        write_volatile(fsmc_pcr2(), disabled | FSMC_PCR_ECCEN);
+        let _ = read_volatile(fsmc_pcr2());
     }
 }
 
@@ -272,7 +292,7 @@ fn ecc_begin_chunk() {
 fn wait_fsmc_fifo_empty() -> (bool, u32) {
     cortex_m::asm::dsb();
     for iteration in 0..TIMEOUT {
-        if unsafe { read_volatile(FSMC_SR2) } & FSMC_SR_FEMPT != 0 {
+        if unsafe { read_volatile(fsmc_sr2()) } & FSMC_SR_FEMPT != 0 {
             return (true, iteration + 1);
         }
         core::hint::spin_loop();
@@ -283,16 +303,16 @@ fn wait_fsmc_fifo_empty() -> (bool, u32) {
 /// Read the 24-bit ECC result and disable the engine before reuse.
 fn ecc_end_chunk() -> u32 {
     unsafe {
-        let pcr = read_volatile(FSMC_PCR2);
-        let ecc = read_volatile(FSMC_ECCR2) & 0x00FF_FFFF;
-        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
-        let _ = read_volatile(FSMC_PCR2);
+        let pcr = read_volatile(fsmc_pcr2());
+        let ecc = read_volatile(fsmc_eccr2()) & 0x00FF_FFFF;
+        write_volatile(fsmc_pcr2(), pcr & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(fsmc_pcr2());
         ecc
     }
 }
 
 pub(crate) fn wait_ready_status() -> bool {
-    for iteration in 0..TIMEOUT {
+    for _ in 0..TIMEOUT {
         command(0x70);
         if read_data() & 0x40 != 0 { return true; }
         core::hint::spin_loop();
@@ -309,14 +329,13 @@ fn wait_ready_rb_timeout(timeout: u32) -> bool {
     // RESET starts, it first transitions low and returns high on completion.
     // Waiting only for high can therefore accept the idle-high level before
     // the NAND has even entered its busy phase (notably after PROGRAM CONFIRM).
-    let rb = unsafe {
-        pac::GPIOD::ptr().cast::<u8>().add(0x10).cast::<u32>()
-    };
+    // GPIOD IDR is accessed through the PAC instead of a raw register offset.
+    let gpiod = unsafe { &*pac::GPIOD::ptr() };
 
     // First observe that the command was accepted and the NAND became busy.
     let mut saw_busy = false;
     for _ in 0..timeout {
-        if unsafe { read_volatile(rb) } & RB_MASK == 0 {
+        if gpiod.idr().read().bits() & RB_MASK == 0 {
             saw_busy = true;
             break;
         }
@@ -328,7 +347,7 @@ fn wait_ready_rb_timeout(timeout: u32) -> bool {
 
     // Then wait for the actual completion edge.
     for _ in 0..timeout {
-        if unsafe { read_volatile(rb) } & RB_MASK != 0 {
+        if gpiod.idr().read().bits() & RB_MASK != 0 {
             return true;
         }
         core::hint::spin_loop();
@@ -716,12 +735,12 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     let mut input_fingerprint = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
         if sequence_trace_enabled {
-            sequence_trace.pcr_before[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
+            sequence_trace.pcr_before[chunk_index] = unsafe { read_volatile(fsmc_pcr2()) };
         }
         ecc_begin_chunk();
         if sequence_trace_enabled {
-            sequence_trace.pcr_enabled[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
-            sequence_trace.ecc_before_data[chunk_index] = unsafe { read_volatile(FSMC_ECCR2) } & 0x00FF_FFFF;
+            sequence_trace.pcr_enabled[chunk_index] = unsafe { read_volatile(fsmc_pcr2()) };
+            sequence_trace.ecc_before_data[chunk_index] = unsafe { read_volatile(fsmc_eccr2()) } & 0x00FF_FFFF;
         }
         if sequence_trace_enabled {
             sequence_trace.input_fingerprint[chunk_index] = ecc_data_fingerprint(chunk);
@@ -730,25 +749,25 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         }
         for &byte in chunk { write_data(byte); }
         if sequence_trace_enabled {
-            sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
+            sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(fsmc_sr2()) };
         }
         let (fifo_empty, fifo_polls) = wait_fsmc_fifo_empty();
         if sequence_trace_enabled {
             sequence_trace.fifo_poll_count[chunk_index] = fifo_polls;
         }
         if !fifo_empty {
-            let status = unsafe { read_volatile(FSMC_SR2) };
+            let status = unsafe { read_volatile(fsmc_sr2()) };
             record_nand_device_failure(6, page, status);
             return false;
         }
         if sequence_trace_enabled {
-            sequence_trace.status_after_wait[chunk_index] = unsafe { read_volatile(FSMC_SR2) };
+            sequence_trace.status_after_wait[chunk_index] = unsafe { read_volatile(fsmc_sr2()) };
         }
         let chunk_ecc = ecc_end_chunk();
         if sequence_trace_enabled {
             sequence_trace.ecc_after_wait[chunk_index] = chunk_ecc;
-            sequence_trace.pcr_after_disable[chunk_index] = unsafe { read_volatile(FSMC_PCR2) };
-            sequence_trace.ecc_after_disable[chunk_index] = unsafe { read_volatile(FSMC_ECCR2) } & 0x00FF_FFFF;
+            sequence_trace.pcr_after_disable[chunk_index] = unsafe { read_volatile(fsmc_pcr2()) };
+            sequence_trace.ecc_after_disable[chunk_index] = unsafe { read_volatile(fsmc_eccr2()) } & 0x00FF_FFFF;
         }
         hardware_ecc[chunk_index] = chunk_ecc;
         // Software ECC is diagnostic-only; it is not needed to program NAND.
@@ -775,20 +794,20 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     // The program-confirm command must not be issued while OOB data remains
     // buffered in the FSMC NAND write FIFO.
     if sequence_trace_enabled {
-        sequence_trace.oob_status_before_wait = unsafe { read_volatile(FSMC_SR2) };
+        sequence_trace.oob_status_before_wait = unsafe { read_volatile(fsmc_sr2()) };
     }
     let (oob_fifo_empty, oob_fifo_polls) = wait_fsmc_fifo_empty();
     if sequence_trace_enabled {
         sequence_trace.oob_fifo_poll_count = oob_fifo_polls;
     }
     if !oob_fifo_empty {
-        let status = unsafe { read_volatile(FSMC_SR2) };
+        let status = unsafe { read_volatile(fsmc_sr2()) };
         record_nand_device_failure(7, page, status);
         return false;
     }
 
     if sequence_trace_enabled {
-        sequence_trace.oob_status_after_wait = unsafe { read_volatile(FSMC_SR2) };
+        sequence_trace.oob_status_after_wait = unsafe { read_volatile(fsmc_sr2()) };
         sequence_trace.flags |= 1;
     }
     command(0x10);
@@ -976,10 +995,10 @@ pub(crate) fn ecc_software_selftest() -> [u32; 4] {
 pub(crate) fn ecc_scan_interface_probe() -> ([u8; 5], u8, bool) {
     // Avoid FSMC NWAIT stalling the CPU while probing the bus. Restore PCR2
     // exactly as found before returning.
-    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    let pcr = unsafe { read_volatile(fsmc_pcr2()) };
     unsafe {
-        write_volatile(FSMC_PCR2, pcr & !(1 << 1));
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr & !(1 << 1));
+        let _ = read_volatile(fsmc_pcr2());
     }
 
     command(0x90);
@@ -993,8 +1012,8 @@ pub(crate) fn ecc_scan_interface_probe() -> ([u8; 5], u8, bool) {
     } & RB_MASK != 0;
 
     unsafe {
-        write_volatile(FSMC_PCR2, pcr);
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr);
+        let _ = read_volatile(fsmc_pcr2());
     }
     (id, status, ready)
 }
@@ -1005,10 +1024,10 @@ pub(crate) fn ecc_scan_page_probe() -> ([bool; 8], [[u8; 16]; 8]) {
     let mut ok = [false; 8];
     let mut data = [[0xEEu8; 16]; 8];
     let hook = NAND_IO_SERVICE_HOOK.swap(core::ptr::null_mut(), Ordering::AcqRel);
-    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    let pcr = unsafe { read_volatile(fsmc_pcr2()) };
     unsafe {
-        write_volatile(FSMC_PCR2, pcr & !(1 << 1));
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr & !(1 << 1));
+        let _ = read_volatile(fsmc_pcr2());
     }
     let pages = [0u32, 0, 0, 0x83, 0x83, 0x83, 0, 0x83];
     let columns = [0u16, 1, 512, 0, 1, 512, PAGE_SIZE as u16, PAGE_SIZE as u16];
@@ -1016,8 +1035,8 @@ pub(crate) fn ecc_scan_page_probe() -> ([bool; 8], [[u8; 16]; 8]) {
         ok[i] = read_page(pages[i], columns[i], &mut data[i]);
     }
     unsafe {
-        write_volatile(FSMC_PCR2, pcr);
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr);
+        let _ = read_volatile(fsmc_pcr2());
     }
     NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
     (ok, data)
@@ -1030,10 +1049,10 @@ pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[
     let mut read_ok = [[false; 3]; 8];
     let mut data = [[[0xEEu8; 16]; 3]; 8];
     let hook = NAND_IO_SERVICE_HOOK.swap(core::ptr::null_mut(), Ordering::AcqRel);
-    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    let pcr = unsafe { read_volatile(fsmc_pcr2()) };
     unsafe {
-        write_volatile(FSMC_PCR2, pcr & !(1 << 1) & !FSMC_PCR_ECCEN);
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr & !(1 << 1) & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(fsmc_pcr2());
     }
     let pages = [0u32, 0, 0, 0, 0x83, 0x83, 0x83, 0x83];
     let columns = [0u16, 1, 512, PAGE_SIZE as u16, 0, 1, 512, PAGE_SIZE as u16];
@@ -1049,8 +1068,8 @@ pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[
         }
     }
     unsafe {
-        write_volatile(FSMC_PCR2, pcr);
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr);
+        let _ = read_volatile(fsmc_pcr2());
     }
     NAND_IO_SERVICE_HOOK.store(hook, Ordering::Release);
     (reset_ok, read_ok, data)
@@ -1099,15 +1118,15 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Result<EccPageComparison, 
             PAGE_SIZE,
         )
     };
-    let pcr = unsafe { read_volatile(FSMC_PCR2) };
+    let pcr = unsafe { read_volatile(fsmc_pcr2()) };
     unsafe {
-        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(fsmc_pcr2());
     }
     if !read_page_with_timeout(page, 0, data, ECC_DIAGNOSTIC_TIMEOUT) {
         unsafe {
-            write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
-            let _ = read_volatile(FSMC_PCR2);
+            write_volatile(fsmc_pcr2(), pcr & !FSMC_PCR_ECCEN);
+            let _ = read_volatile(fsmc_pcr2());
         }
         return Err((1, page));
     }
@@ -1119,14 +1138,14 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Result<EccPageComparison, 
         ECC_DIAGNOSTIC_TIMEOUT,
     ) {
         unsafe {
-            write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
-            let _ = read_volatile(FSMC_PCR2);
+            write_volatile(fsmc_pcr2(), pcr & !FSMC_PCR_ECCEN);
+            let _ = read_volatile(fsmc_pcr2());
         }
         return Err((2, page));
     }
     unsafe {
-        write_volatile(FSMC_PCR2, pcr & !FSMC_PCR_ECCEN);
-        let _ = read_volatile(FSMC_PCR2);
+        write_volatile(fsmc_pcr2(), pcr & !FSMC_PCR_ECCEN);
+        let _ = read_volatile(fsmc_pcr2());
     }
     if spare[ECC_OOB_BYTES..] != ECC_TAG {
         let tag = u32::from(spare[ECC_OOB_BYTES])
@@ -1296,15 +1315,15 @@ pub(crate) fn configure_fsmc() {
         let rcc = &*pac::RCC::ptr();
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
-        let pcr2 = FSMC_PCR2;
+        let pcr2 = fsmc_pcr2();
         let common_timing = 4 | (8 << 8) | (4 << 16) | (2 << 24);
         // RM0090 §36.6.5: the final NAND address byte is written through
         // attribute space with ATTHOLD long enough to cover tWB. At HCLK =
         // 168 MHz, 18 cycles provide about 107 ns (> K9F1G08U0E tWB max 100 ns).
         let attribute_timing = 4 | (8 << 8) | (18 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
-        write_volatile((FSMC_BASE + 0x68) as *mut u32, common_timing);
-        write_volatile((FSMC_BASE + 0x6C) as *mut u32, attribute_timing);
+        write_volatile(fsmc_pmem2(), common_timing);
+        write_volatile(fsmc_patt2(), attribute_timing);
         // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
         // individual 512-byte data chunks; ECCEN remains clear while idle.
         // TCLR=6 gives (6 + MEMSET(4) + 2) / 168 MHz = 71.4 ns

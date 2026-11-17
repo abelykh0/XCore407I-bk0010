@@ -30,9 +30,9 @@ static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
-    fn bk_audio_start() -> u8;
-    fn bk_timing_cycles() -> u32;
-    fn bk_audio_stop();
+    safe fn bk_audio_start() -> u8;
+    safe fn bk_timing_cycles() -> u32;
+    safe fn bk_audio_stop();
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
 }
 
@@ -58,14 +58,14 @@ impl BkEmulatorAudio {
 
     #[inline(always)]
     fn cycle_phase() -> u32 {
-        unsafe { bk_timing_cycles() }.wrapping_mul(PHASE_UNITS_PER_CYCLE)
+        bk_timing_cycles().wrapping_mul(PHASE_UNITS_PER_CYCLE)
     }
 
     /// Start/stop edge capture. Called from TinyUSB control/task context.
     pub fn tinyusb_set_active(&mut self, active: bool) {
         if active {
             if !self.active {
-                self.sample_level = unsafe { bk_audio_start() != 0 };
+                self.sample_level = bk_audio_start() != 0;
                 self.pending_edge = None;
                 self.next_sample_phase = Self::cycle_phase()
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
@@ -76,7 +76,7 @@ impl BkEmulatorAudio {
         } else if self.active {
             self.active = false;
             self.pending_edge = None;
-            unsafe { bk_audio_stop(); }
+            bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
         }

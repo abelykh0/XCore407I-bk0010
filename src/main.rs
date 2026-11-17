@@ -32,7 +32,7 @@ use file_browser::{
     BROWSER_PATHS, BROWSER_PATH_LENGTHS,
     FILE_BROWSER_ACTION, FILE_BROWSER_ACTIVE, FILE_BROWSER_OPEN, FILE_BROWSER_UP,
     FILE_BROWSER_DOWN, FILE_BROWSER_ENTER, FILE_BROWSER_ESCAPE,
-    MAX_BROWSER_FILES, MAX_BROWSER_PATH,
+    MAX_BROWSER_PATH,
     SAVE_DIALOG_IDLE, SAVE_DIALOG_INPUT, SAVE_DIALOG_STATE, SAVE_DIALOG_CHECK, SAVE_DIALOG_CONFIRM, SAVE_DIALOG_WRITE,
     SAVE_DIALOG_DIRTY, SAVE_DIALOG_RESULT, SAVE_OVERWRITE,
     SAVE_RESULT_CANCELLED, SAVE_RESULT_OK, SAVE_RESULT_ERROR,
@@ -61,7 +61,7 @@ static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
 fn service_cdc_scan_io() {
     unsafe {
         let _ = tusb::tud_task_ext(1, false);
-        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
     }
     xcore407i_blinker::cdc_console::service_connection();
 
@@ -79,7 +79,7 @@ fn service_cdc_scan_io() {
 fn service_file_browser_io() {
     unsafe {
         let _ = tusb::tud_task_ext(1, false);
-        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
     }
     if USB_FS_READY.load(Ordering::Acquire)
         && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
@@ -103,7 +103,7 @@ fn service_file_browser_io() {
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
-    fn bk_timing_cycles() -> u32;
+    safe fn bk_timing_cycles() -> u32;
 }
 
 
@@ -214,8 +214,8 @@ fn main() -> ! {
     #[cfg(feature = "cpu-cycle-diag")]
     enable_cycle_counter(&mut core);
 
-    // Emulator initialization is deferred until the first boot-keyboard
-    // report selects normal mode. CDC mode never initializes BK or storage UI.
+    // Emulator initialization is deferred until the boot-keyboard startup
+    // selection completes. F10 selects CDC; otherwise normal mode is used.
 
     configure_board_pins(
         &mut device.RCC,
@@ -259,11 +259,8 @@ fn main() -> ! {
         );
     }
 
-    // Show the keyboard diagnostic screen after 5 seconds without a
-    // successful USB-host discovery event. Each successful stage refreshes
-    // USB_FS_LAST_ACTIVITY_TICK; host servicing continues on the blue screen.
-    // F10 selects CDC only before this timeout. A keyboard discovered later
-    // starts the emulator directly, without another mode-selection step.
+    // Allow time for USB discovery, then give a mounted keyboard 100 ms
+    // to report F10 before defaulting to normal mode.
     const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
     let mut keyboard_host_restart_attempted = false;
     USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
@@ -289,9 +286,10 @@ fn main() -> ! {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
         }
 
-        // A valid keyboard report has already selected NORMAL or CDC.
-        // Do not keep consuming the keyboard reports for the remainder of
-        // the fallback window: initialize the selected mode immediately.
+        // Once a boot keyboard mounts, allow 100 ms for an F10 report.
+        // If none arrives, select normal mode without waiting for another
+        // report from the keyboard.
+        keyboard::select_normal_after_mount_window();
         if keyboard::boot_selection() != keyboard::BOOT_SELECTION_WAITING {
             break;
         }
@@ -299,7 +297,10 @@ fn main() -> ! {
         let now = TICKS.load(Ordering::Relaxed);
         let last_activity = USB_FS_LAST_ACTIVITY_TICK.load(Ordering::Acquire);
         if now.wrapping_sub(last_activity) >= USB_DISCOVERY_INACTIVITY_TIMEOUT_MS {
-            if !keyboard_host_restart_attempted && USB_FS_READY.load(Ordering::Acquire) {
+            if !keyboard_host_restart_attempted
+                && USB_FS_READY.load(Ordering::Acquire)
+                && !keyboard::keyboard_is_mounted()
+            {
                 // One recovery attempt before declaring the keyboard unavailable.
                 // Keep the boot-selection loop active so F10 is still recognized
                 // if the keyboard enumerates after the host restart.
@@ -309,8 +310,8 @@ fn main() -> ! {
                 continue;
             }
 
-            // The single host restart did not produce a keyboard report within
-            // the second discovery window. Select normal mode and show diagnostics.
+            // The host restart did not discover a boot keyboard within the
+            // second discovery window. Select normal mode and show diagnostics.
             keyboard::set_boot_default_normal();
             break;
         }
@@ -420,10 +421,8 @@ fn main() -> ! {
                                 just_formatted = false;
                             }
                             loop {
-                                unsafe {
-                                    let _ = tusb::tud_task_ext(1, false);
-                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                                }
+                                let _ = tusb::tud_task_ext(1, false);
+                                xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                                 // Keep USB/UVC and the video producer alive inside synchronous
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
                                 FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
@@ -450,19 +449,15 @@ fn main() -> ! {
                         if let Err(error) = mount_result {
                             xcore407i_blinker::cdc_console::report_storage_error(error);
                             loop {
-                                unsafe {
-                                    let _ = tusb::tud_task_ext(1, false);
-                                    xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                                }
+                                let _ = tusb::tud_task_ext(1, false);
+                                xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                                 let requested = xcore407i_blinker::cdc_console::service(
                                     None,
                                     &mut zmodem_state,
                                     TICKS.load(Ordering::Relaxed),
                                     &mut || {
-                                        unsafe {
-                                            let _ = tusb::tud_task_ext(1, false);
-                                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
-                                        }
+                                        let _ = tusb::tud_task_ext(1, false);
+                                        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                                         while prepare_next_video_batch(&mut video_renderer) {}
                                     },
                                 );
@@ -506,7 +501,7 @@ fn main() -> ! {
                     |completed, total| {
                         unsafe {
                             let _ = tusb::tud_task_ext(1, false);
-                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                            xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                         }
                         while prepare_next_video_batch(&mut video_renderer) {}
                         if completed == total || completed >= last_reported + 32 {
@@ -539,7 +534,7 @@ fn main() -> ! {
     let mut keyboard_host_status_last = USB_FS_STATUS.load(Ordering::Acquire);
     let mut keyboard_host_ready_last = USB_FS_READY.load(Ordering::Acquire);
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
-    let mut pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
+    let mut pacing_start_cycles = if emulator_enabled { bk_timing_cycles() } else { 0 };
     let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
     let mut init_screen_state = INIT_IDLE;
@@ -572,7 +567,7 @@ fn main() -> ! {
         // endpoints are re-armed directly by their class xfer_isr callbacks.
         unsafe {
             let _ = tusb::tud_task_ext(1, false);
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+            xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
@@ -928,7 +923,7 @@ fn main() -> ! {
             || INIT_STATE.load(Ordering::Acquire) != INIT_IDLE;
         if emulator_paused != emulator_was_paused {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
-            pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
+            pacing_start_cycles = if emulator_enabled { bk_timing_cycles() } else { 0 };
             emulator_was_paused = emulator_paused;
         }
 
@@ -941,12 +936,12 @@ fn main() -> ! {
         #[cfg(feature = "cpu-cycle-diag")]
         {
             // DWT provides an independent wall-time reference for the PDP rate.
-            const DWT_CYCLES_PER_SECOND: u32 = 168_000_000;
+            const DWT_CYCLES_PER_SECOND: u32 = SYSTEM_CORE_CLOCK_HZ;
             let now_dwt = read_dwt_cycle_count();
             let elapsed_dwt = now_dwt.wrapping_sub(diagnostic_last_dwt);
             if elapsed_dwt >= DWT_CYCLES_PER_SECOND {
                 if !emulator_enabled { continue; }
-                let now_pdp = unsafe { bk_timing_cycles() };
+                let now_pdp = bk_timing_cycles();
                 let elapsed_pdp = now_pdp.wrapping_sub(diagnostic_last_pdp);
                 let pdp_cycles_per_second =
                     (elapsed_pdp as u64 * DWT_CYCLES_PER_SECOND as u64
@@ -964,7 +959,7 @@ fn main() -> ! {
         if !emulator_paused {
             let now_ms = TICKS.load(Ordering::Relaxed);
             let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
-            let now_cycles = unsafe { bk_timing_cycles() };
+            let now_cycles = bk_timing_cycles();
             let elapsed_cycles = now_cycles.wrapping_sub(pacing_start_cycles);
 
             // Rebase every second so both wrapping counters remain unambiguous.
@@ -985,6 +980,12 @@ fn main() -> ! {
                         // Refill buffers while the emulator runs, outside USB IRQs.
                         while prepare_next_video_batch(&mut video_renderer) {}
                     }
+
+                    // Convert queued BK speaker transitions into PCM in thread
+                    // context. The USB audio completion callback only drains
+                    // this ring and must never perform sample rendering itself.
+                    xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
+
                     service_keyboard_frame_pacing();
                 }
             }
@@ -993,21 +994,25 @@ fn main() -> ! {
 }
 
 #[interrupt]
+#[allow(non_snake_case)]
 fn OTG_FS() {
     unsafe { tusb::hcd_int_handler(0, true); }
 }
 
 #[interrupt]
+#[allow(non_snake_case)]
 fn OTG_HS() {
     unsafe { tusb::tusb_int_handler(1, true); }
 }
 
 #[interrupt]
+#[allow(non_snake_case)]
 fn TIM3() {
     usb_host::on_tim3_interrupt();
 }
 
 #[exception]
+#[allow(non_snake_case)]
 fn SysTick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
 }

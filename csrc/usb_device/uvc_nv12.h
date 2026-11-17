@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// Private bridge between TinyUSB's USBD class-driver ABI and Rust.
-#ifndef XCORE_TUSB_CLASS_DRIVERS_H
-#define XCORE_TUSB_CLASS_DRIVERS_H
+// Private bridge between TinyUSB's UVC class-driver ABI and Rust.
+#ifndef XCORE_UVC_NV12_H
+#define XCORE_UVC_NV12_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,9 +33,5 @@ bool xcore_usbd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint
 bool xcore_usbd_edpt_xfer_isr(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16_t length);
 bool xcore_usbd_edpt_ready(uint8_t rhport, uint8_t ep_addr);
 
-bool xcore_tud_audio_set_interface(uint8_t interface, uint8_t alternate);
-uint16_t xcore_tud_audio_fill_packet(uint8_t *buffer, uint16_t capacity);
-void xcore_tud_audio_record_packet_timing(uint32_t total_cycles, uint32_t fill_cycles, uint32_t write_cycles);
-void xcore_tud_audio_stop(void);
 
 #endif

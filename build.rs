@@ -1,4 +1,4 @@
-use std::{env, fs, path::Path};
+use std::{env, path::Path};
 
 use cc::Build;
 
@@ -45,20 +45,10 @@ fn compiler_include_paths() -> Vec<String> {
         .collect()
 }
 
-fn main() {
-    println!("cargo:rerun-if-changed=csrc/bk");
-    println!("cargo:rerun-if-changed=usb/tusb_config.h");
-    println!("cargo:rerun-if-changed=usb/tusb_class_drivers.c");
-    println!("cargo:rerun-if-changed=usb/tusb_class_drivers.h");
-    println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
-    println!("cargo:rerun-if-changed=vendor/dhara");
-    println!("cargo:rerun-if-changed=csrc/dhara_adapter.c");
-
-    let target = env::var("TARGET").expect("TARGET not set");
-
+fn build_bk(target: &str) {
     // Existing BK emulator C implementation.
     let mut bk = Build::new();
-    bk.target(&target)
+    bk.target(target)
         .include("csrc/bk")
         .flag("-std=gnu11")
         .flag("-ffunction-sections")
@@ -75,51 +65,66 @@ fn main() {
             "csrc/bk/platform.c",
         ])
         .compile("bk_cpu");
+}
 
+fn build_dhara(target: &str) {
     // Dhara is the only NAND storage backend. Compile it unconditionally.
-        let mut dhara = Build::new();
-        dhara
-            .target(&target)
-            .flag("-std=gnu11")
-            .flag("-w") // Suppress all compiler warnings from Dhara and its adapter only.
-            .flag("-ffunction-sections")
-            .flag("-fdata-sections")
-            .include("vendor/dhara/include")
-            .files([
-                "vendor/dhara/dhara/error.c",
-                "vendor/dhara/dhara/journal.c",
-                "vendor/dhara/dhara/map.c",
-            ]);
-        // Keep the adapter in the same archive as Dhara to avoid
-        // static-library link-order dependencies between the two.
-        dhara.file("csrc/dhara_adapter.c");
-        dhara.compile("dhara");
+    let mut dhara = Build::new();
+    dhara
+        .target(target)
+        .flag("-std=gnu11")
+        .flag("-w") // Suppress all compiler warnings from Dhara and its adapter only.
+        .flag("-ffunction-sections")
+        .flag("-fdata-sections")
+        .include("vendor/dhara/include")
+        .files([
+            "vendor/dhara/dhara/error.c",
+            "vendor/dhara/dhara/journal.c",
+            "vendor/dhara/dhara/map.c",
+        ]);
 
+    // Keep the adapter in the same archive as Dhara to avoid
+    // static-library link-order dependencies between the two.
+    dhara.file("csrc/dhara_adapter.c");
+    dhara.compile("dhara");
+}
+
+fn build_tinyusb(
+    target: &str,
+    tinyusb_root: &str,
+    cmsis_device: &str,
+    cmsis_core: &str,
+    cmsis_st_device: &str,
+) {
     // Build TinyUSB directly from its upstream C sources. This removes the
-    // tinyusb-sys Rust wrapper while retaining the existing checked-in
-    // TinyUSB 0.21.0 source tree during the stack migration.
-    let tinyusb_root = "vendor/tinyusb-sys/tinyusb";
-    let cmsis_device = format!("{tinyusb_root}/hw/mcu/st/cmsis_device_f4/Include");
-    let cmsis_core = "vendor/tinyusb-sys/../../../Drivers/CMSIS/Include";
-    let cmsis_st_device = "vendor/tinyusb-sys/../../../Drivers/CMSIS/Device/ST/STM32F4xx/Include";
-
+    // tinyusb-sys Rust wrapper while retaining the checked-in TinyUSB 0.21.0 source tree.
     let mut tinyusb = Build::new();
     tinyusb
-        .target(&target)
+        .target(target)
         .flag("-std=gnu11")
         .flag("-w") // Suppress all compiler warnings from TinyUSB only.
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
-        .include("usb")
-        .file("usb/tusb_class_drivers.c")
+        .include("csrc/usb_device")
+        .file("csrc/usb_device/uvc_nv12.c")
+        .file("csrc/usb_device/audio_uac2.c")
         .include(format!("{tinyusb_root}/src"))
-        .include(&cmsis_device)
+        .include(cmsis_device)
         .include(cmsis_core)
         .include(cmsis_st_device)
         .define("STM32F407xx", None);
+
     add_all_c_files_in_dir(&mut tinyusb, format!("{tinyusb_root}/src"));
     tinyusb.compile("tinyusb");
+}
 
+fn generate_tinyusb_bindings(
+    target: &str,
+    tinyusb_root: &str,
+    cmsis_device: &str,
+    cmsis_core: &str,
+    cmsis_st_device: &str,
+) {
     // Generate bindings for the application's small host/device API surface.
     // This is binding generation only; there is no tinyusb-sys crate wrapper.
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -132,28 +137,22 @@ fn main() {
         .use_core()
         .formatter(bindgen::Formatter::Rustfmt)
         .ctypes_prefix("core::ffi")
-        // TinyUSB's UVC probe/commit control contains nested packed anonymous
-        // bitfield structs. bindgen 0.68 emits an invalid Rust repr(C, packed,
-        // align) for one of those nested types. Keep the public named type as
-        // an opaque ABI-sized type (so API declarations remain valid), while
-        // preventing bindgen from generating the problematic nested layout.
-        // The application transfers UVC control payloads as raw bytes.
+        // The application transfers UVC probe/commit control payloads as raw
+        // bytes and does not inspect their individual fields.
         .opaque_type("video_probe_and_commit_control_t")
         // The nested helper is referenced by a generated union field, so it
         // must remain declared. Make it opaque rather than blocklisting it;
-        // this preserves the Rust type name while avoiding its invalid layout.
+        // this preserves the Rust type name while avoiding its nested layout.
         .opaque_type("video_probe_and_commit_control_t__bindgen_ty_1__bindgen_ty_1")
-        // CDC's telephone call-state descriptor has the same packed/align
-        // bindgen conflict through its anonymous 32-bit bitfield struct.
-        // The application does not inspect this descriptor type.
+        // The application does not inspect this CDC descriptor type.
         .opaque_type("cdc_desc_func_telephone_call_state_reporting_capabilities_t")
         .clang_args(&[
             "-target",
-            &target,
+            target,
             "-fvisibility=default",
             "-fshort-enums",
         ])
-        .clang_arg("-Iusb")
+        .clang_arg("-Icsrc/usb_device")
         .clang_arg(format!("-I{tinyusb_root}/src"))
         .clang_arg(format!("-I{cmsis_device}"))
         .clang_arg(format!("-I{cmsis_core}"))
@@ -166,20 +165,45 @@ fn main() {
     let bindings_path = format!("{out_dir}/tusb_bindings.rs");
     bindings
         .write_to_file(&bindings_path)
-        .expect("Failed to write TinyUSB bindings");
+        .expect("Failed to write generated TinyUSB bindings");
+}
 
-    // bindgen 0.68 emits plain extern blocks, which are rejected by this
-    // crate's Rust 2024 edition. Mark generated foreign blocks unsafe as
-    // required by Rust 2024. This is valid in Rust 2021 as well.
-    let generated = fs::read_to_string(&bindings_path)
-        .expect("Failed to read generated TinyUSB bindings");
-    let generated = generated
-        .replace("extern \"C\" {", "unsafe extern \"C\" {")
-        .replace("extern \"system\" {", "unsafe extern \"system\" {");
-    fs::write(&bindings_path, generated)
-        .expect("Failed to update generated TinyUSB bindings");
+fn main() {
+    println!("cargo:rerun-if-changed=csrc/bk");
+    println!("cargo:rerun-if-changed=csrc/usb_device/tusb_config.h");
+    println!("cargo:rerun-if-changed=csrc/usb_device/config.h");
+    println!("cargo:rerun-if-changed=csrc/usb_device/audio_uac2.c");
+    println!("cargo:rerun-if-changed=csrc/usb_device/audio_uac2.h");
+    println!("cargo:rerun-if-changed=csrc/usb_device/uvc_nv12.c");
+    println!("cargo:rerun-if-changed=csrc/usb_device/uvc_nv12.h");
+    println!("cargo:rerun-if-changed=vendor/tinyusb/src");
+    println!("cargo:rerun-if-changed=vendor/dhara");
+    println!("cargo:rerun-if-changed=csrc/dhara_adapter.c");
+
+    let target = env::var("TARGET").expect("TARGET not set");
+
+    let tinyusb_root = "vendor/tinyusb";
+    let cmsis_device = format!("{tinyusb_root}/hw/mcu/st/cmsis_device_f4/Include");
+    let cmsis_core = "vendor/tinyusb/../../../Drivers/CMSIS/Include";
+    let cmsis_st_device = "vendor/tinyusb/../../../Drivers/CMSIS/Device/ST/STM32F4xx/Include";
+
+    build_bk(&target);
+    build_dhara(&target);
+    build_tinyusb(
+        &target,
+        tinyusb_root,
+        &cmsis_device,
+        cmsis_core,
+        cmsis_st_device,
+    );
+    generate_tinyusb_bindings(
+        &target,
+        tinyusb_root,
+        &cmsis_device,
+        cmsis_core,
+        cmsis_st_device,
+    );
 
     // Track all config and source inputs so incremental builds re-run correctly.
     println!("cargo:rerun-if-changed={tinyusb_root}/src");
-    println!("cargo:rerun-if-changed=usb/tusb_config.h");
 }

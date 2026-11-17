@@ -6,8 +6,7 @@
 use crate::camera::{HEIGHT, WIDTH};
 use crate::uvc::{
     active_frame_interval_100ns, active_frame_rate_fps, FRAME_BIT_RATE, FRAME_BYTES,
-    FRAME_INTERVAL_100NS,
-    ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
+    ENDPOINT_IN, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE, NV12_GUID,
 };
 
 const CDC_CONFIGURATION_DESCRIPTOR_LEN: usize = 224;
@@ -53,6 +52,51 @@ const fn push_bytes<const N: usize>(
     }
 }
 
+const fn push_uvc_descriptors<const N: usize>(
+    descriptor: &mut [u8; N],
+    offset: &mut usize,
+    frame_bit_rate: u32,
+    frame_interval_100ns: u32,
+) {
+    // UVC IAD, VideoControl, and VideoStreaming alternate setting 0.
+    push_bytes(descriptor, offset, &[
+        8, 0x0b, 0, 2, 0x0e, 0x03, 0, 4,
+        9, 0x04, 0, 0, 0, 0x0e, 0x01, 0, 0,
+        13, 0x24, 0x01, 0x10, 0x01, 30, 0, 0, 0x6c, 0xdc, 0x02, 1, 1,
+        8, 0x24, 0x02, 1, 0, 2, 0, 0,
+        9, 0x24, 0x03, 2, 1, 1, 0, 1, 0,
+        9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
+        14, 0x24, 0x01, 1, 77, 0, ENDPOINT_IN, 0, 2, 0, 0, 0, 1, 0,
+        27, 0x24, 0x04, 1, 1,
+    ]);
+    push_bytes(descriptor, offset, &NV12_GUID);
+    push_bytes(descriptor, offset, &[
+        12, 1, 0, 0, 0, 0,
+        30, 0x24, 0x05, 1, 0,
+    ]);
+
+    // Frame descriptor: dimensions, bitrates, frame size, and interval.
+    push_u16(descriptor, offset, WIDTH as u16);
+    push_u16(descriptor, offset, HEIGHT as u16);
+    push_u32(descriptor, offset, frame_bit_rate);
+    push_u32(descriptor, offset, frame_bit_rate);
+    push_u32(descriptor, offset, FRAME_BYTES);
+    push_u32(descriptor, offset, frame_interval_100ns);
+    push_u8(descriptor, offset, 1);
+    push_u32(descriptor, offset, frame_interval_100ns);
+
+    // Color matching, alternate setting 1, and high-bandwidth ISO IN endpoint.
+    let encoded_max_packet =
+        MAX_PACKET_SIZE | (((ISO_PACKETS_PER_MICROFRAME - 1) as u16) << 11);
+    push_bytes(descriptor, offset, &[
+        6, 0x24, 0x0d, 1, 1, 4,
+        9, 0x04, 1, 1, 1, 0x0e, 0x02, 0, 4,
+        7, 0x05, ENDPOINT_IN, 0x05,
+    ]);
+    push_u16(descriptor, offset, encoded_max_packet);
+    push_u8(descriptor, offset, 1);
+}
+
 const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPTOR_LEN] {
     let mut descriptor = [0u8; CDC_CONFIGURATION_DESCRIPTOR_LEN];
     let mut offset = 0usize;
@@ -62,47 +106,12 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
         9, 0x02, 0xe0, 0x00, 4, 1, 0, 0x80, 50,
     ]);
 
-    // UVC IAD and VideoControl interface.
-    push_bytes(&mut descriptor, &mut offset, &[
-        8, 0x0b, 0, 2, 0x0e, 0x03, 0, 4,
-        9, 0x04, 0, 0, 0, 0x0e, 0x01, 0, 0,
-        13, 0x24, 0x01, 0x10, 0x01, 30, 0, 0, 0x6c, 0xdc, 0x02, 1, 1,
-        8, 0x24, 0x02, 1, 0, 2, 0, 0,
-        9, 0x24, 0x03, 2, 1, 1, 0, 1, 0,
-    ]);
-
-    // UVC VideoStreaming alternate setting 0 and class-specific descriptors.
-    push_bytes(&mut descriptor, &mut offset, &[
-        9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
-        14, 0x24, 0x01, 1, 77, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
-        27, 0x24, 0x04, 1, 1,
-        0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
-        12, 1, 0, 0, 0, 0,
-        30, 0x24, 0x05, 1, 0,
-    ]);
-
-    // UVC frame descriptor: dimensions, bitrates, frame size and interval.
-    push_u16(&mut descriptor, &mut offset, WIDTH as u16);
-    push_u16(&mut descriptor, &mut offset, HEIGHT as u16);
-    // Match the MTP branch's 1-FPS UVC descriptor. The callback below
-    // rewrites these fields from the selected mode before enumeration.
-    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8);
-    push_u32(&mut descriptor, &mut offset, FRAME_BYTES * 8);
-    push_u32(&mut descriptor, &mut offset, FRAME_BYTES);
-    push_u32(&mut descriptor, &mut offset, 10_000_000);
-    push_u8(&mut descriptor, &mut offset, 1);
-    push_u32(&mut descriptor, &mut offset, 10_000_000);
-
-    // UVC color matching, alternate setting 1, and 3 x 768-byte HS ISO EP1 IN.
-    let uvc_w_max_packet =
-        MAX_PACKET_SIZE | (((ISO_PACKETS_PER_MICROFRAME - 1) as u16) << 11);
-    push_bytes(&mut descriptor, &mut offset, &[
-        6, 0x24, 0x0d, 1, 1, 4,
-        9, 0x04, 1, 1, 1, 0x0e, 0x02, 0, 4,
-        7, 0x05, 0x81, 0x05,
-    ]);
-    push_u16(&mut descriptor, &mut offset, uvc_w_max_packet);
-    push_u8(&mut descriptor, &mut offset, 1);
+    push_uvc_descriptors(
+        &mut descriptor,
+        &mut offset,
+        FRAME_BYTES * 8,
+        10_000_000,
+    );
 
     // CDC ACM function: interfaces 2 (control) and 3 (data).
     // EP4 IN notification; EP3 OUT/IN bulk. HS bulk endpoints use 512-byte MPS.
@@ -136,45 +145,12 @@ const fn build_normal_configuration_descriptor() -> [u8; NORMAL_CONFIGURATION_DE
         9, 0x02, 0x22, 0x01, 4, 1, 0, 0x80, 50,
     ]);
 
-    // UVC IAD and VideoControl interface.
-    push_bytes(&mut descriptor, &mut offset, &[
-        8, 0x0b, 0, 2, 0x0e, 0x03, 0, 4,
-        9, 0x04, 0, 0, 0, 0x0e, 0x01, 0, 0,
-        13, 0x24, 0x01, 0x10, 0x01, 30, 0, 0, 0x6c, 0xdc, 0x02, 1, 1,
-        8, 0x24, 0x02, 1, 0, 2, 0, 0,
-        9, 0x24, 0x03, 2, 1, 1, 0, 1, 0,
-    ]);
-
-    // UVC VideoStreaming alternate setting 0 and class-specific descriptors.
-    push_bytes(&mut descriptor, &mut offset, &[
-        9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
-        14, 0x24, 0x01, 1, 77, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
-        27, 0x24, 0x04, 1, 1,
-        0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
-        12, 1, 0, 0, 0, 0,
-        30, 0x24, 0x05, 1, 0,
-    ]);
-
-    // UVC frame descriptor: dimensions, bitrates, frame size and interval.
-    push_u16(&mut descriptor, &mut offset, WIDTH as u16);
-    push_u16(&mut descriptor, &mut offset, HEIGHT as u16);
-    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
-    push_u32(&mut descriptor, &mut offset, FRAME_BIT_RATE);
-    push_u32(&mut descriptor, &mut offset, FRAME_BYTES);
-    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
-    push_u8(&mut descriptor, &mut offset, 1);
-    push_u32(&mut descriptor, &mut offset, FRAME_INTERVAL_100NS);
-
-    // UVC color matching, alternate setting 1, and 3 x 768-byte HS ISO EP1 IN.
-    let uvc_w_max_packet =
-        MAX_PACKET_SIZE | (((ISO_PACKETS_PER_MICROFRAME - 1) as u16) << 11);
-    push_bytes(&mut descriptor, &mut offset, &[
-        6, 0x24, 0x0d, 1, 1, 4,
-        9, 0x04, 1, 1, 1, 0x0e, 0x02, 0, 4,
-        7, 0x05, 0x81, 0x05,
-    ]);
-    push_u16(&mut descriptor, &mut offset, uvc_w_max_packet);
-    push_u8(&mut descriptor, &mut offset, 1);
+    push_uvc_descriptors(
+        &mut descriptor,
+        &mut offset,
+        FRAME_BIT_RATE,
+        FRAME_INTERVAL_100NS,
+    );
 
     // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
     // The fixed sample rate is reported by the Clock Source GET_CUR/GET_RANGE callback,

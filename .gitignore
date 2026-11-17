@@ -1,3 +1,6 @@
 Debug/
 Release/
 target/
+
+# Generated PVS-Studio analysis configuration and data.
+**/.PVS-Studio/

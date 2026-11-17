@@ -1,6 +1,6 @@
 use cortex_m::peripheral::{scb::SystemHandler, NVIC, SCB};
 use stm32f4::stm32f407::interrupt;
-use stm32f4xx_hal::gpio::{GpioExt, Speed};
+use stm32f4xx_hal::gpio::{GpioExt, PinState, Pull, Speed};
 use stm32f4xx_hal::pac;
 
 const SYSTICK_PRIORITY: u8 = 1;
@@ -14,9 +14,11 @@ pub extern "C" fn tusb_time_millis_api() -> u32 {
     TICKS.load(Ordering::Relaxed)
 }
 
-// DWC2 STM32 clock setup reads this CMSIS system-clock symbol.
+// Shared system-clock frequency used by the CMSIS symbol and diagnostics.
+pub(crate) const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;
+
 #[unsafe(no_mangle)]
-pub static SystemCoreClock: u32 = 168_000_000;
+pub static SystemCoreClock: u32 = SYSTEM_CORE_CLOCK_HZ;
 
 // C BK platform callback: return the low 32 bits of Unix milliseconds (UTC).
 #[unsafe(no_mangle)]
@@ -47,8 +49,8 @@ pub(crate) fn configure_exception_priorities(scb: &mut SCB) {
 #[cfg(feature = "cpu-cycle-diag")]
 #[inline]
 pub(crate) fn read_dwt_cycle_count() -> u32 {
-    // ARM DWT_CYCCNT at 0xE000_1004; 32-bit wrap is handled by wrapping_sub.
-    unsafe { core::ptr::read_volatile(0xE000_1004 as *const u32) }
+    // DWT::cycle_count() performs the volatile register read through cortex-m.
+    cortex_m::peripheral::DWT::cycle_count()
 }
 
 #[cfg(feature = "cpu-cycle-diag")]
@@ -65,14 +67,23 @@ pub(crate) fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::F
     pwr.cr().modify(|_, w| w.vos().set_bit()); // scale 1
 
     // Enable instruction/data caches, prefetch, and five wait states.
-    flash.acr().write(|w| unsafe { w.bits((1 << 10) | (1 << 9) | (1 << 8) | 5) });
+    flash.acr().write(|w| {
+        w.latency().ws5()
+            .prften().enabled()
+            .icen().enabled()
+            .dcen().enabled()
+    });
 
     rcc.cr().modify(|_, w| w.hseon().set_bit());
     while !rcc.cr().read().hserdy().bit_is_set() {}
 
     // PLLM=4, PLLN=168, PLLP=/2, PLL source=HSE, PLLQ=7.
     rcc.pllcfgr().write(|w| unsafe {
-        w.bits(4 | (168 << 6) | (1 << 22) | (7 << 24))
+        w.pllm().bits(4)
+            .plln().bits(168)
+            .pllp().div2()
+            .pllsrc().hse()
+            .pllq().bits(7)
     });
 
     rcc.cr().modify(|_, w| w.pllon().set_bit());
@@ -142,23 +153,13 @@ pub(crate) fn configure_board_pins(
     // MIC2025/75 power switch is enabled by driving EN low. PC1 is also
     // routed as Ethernet MDC on this board, so Ethernet MDIO management is
     // intentionally disabled while USB FS host VBUS is enabled.
-    unsafe {
-        // Use the PAC's GPIOC peripheral pointer instead of duplicating its
-        // STM32F407 peripheral base address.
-        let gpioc = pac::GPIOC::ptr().cast::<u8>() as *mut u8;
-        let bsrr = gpioc.add(0x18).cast::<u32>();
-        let moder = gpioc.cast::<u32>();
-        let otyper = gpioc.add(0x04).cast::<u32>();
-        let ospeedr = gpioc.add(0x08).cast::<u32>();
-        let pupdr = gpioc.add(0x0c).cast::<u32>();
-
-        // Drive low before switching the pin from its reset input state.
-        core::ptr::write_volatile(bsrr, 1 << (1 + 16));
-        core::ptr::write_volatile(moder, (core::ptr::read_volatile(moder) & !(0b11 << 2)) | (0b01 << 2));
-        core::ptr::write_volatile(otyper, core::ptr::read_volatile(otyper) & !(1 << 1));
-        core::ptr::write_volatile(ospeedr, core::ptr::read_volatile(ospeedr) & !(0b11 << 2));
-        core::ptr::write_volatile(pupdr, core::ptr::read_volatile(pupdr) & !(0b11 << 2));
-    }
+    // Set the output latch low before enabling the push-pull output driver.
+    // Low speed and no pull resistors match the previous register configuration.
+    let _usb_fs_vbus = c
+        .pc1
+        .into_push_pull_output_in_state(PinState::Low)
+        .speed(Speed::Low)
+        .internal_resistor(Pull::None);
 
     // USB3300 ULPI: all data/control pins use AF10 except PA4 SOF (AF12).
     // The original firmware selected very-high GPIO speed and no pull resistors.

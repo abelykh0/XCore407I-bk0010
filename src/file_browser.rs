@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8};
 
-use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line, show_usb_status};
+use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line};
 
 pub(crate) const FILE_BROWSER_OPEN: u8 = 1;
 pub(crate) const FILE_BROWSER_UP: u8 = 2;
@@ -73,7 +73,7 @@ pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CA
 pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
  
 unsafe extern "C" {
-    fn bk_set_pc(start: u16);
+    safe fn bk_set_pc(start: u16);
     static mut RamBuffer: [u8; 0x4000];
 }
 
@@ -142,7 +142,7 @@ pub(crate) fn draw_file_browser(
         show_file_browser_line(row + 1, &line, row == selected && count != 0);
     }
 
-    show_file_browser_line(27, b"UP/DOWN MOVE  ENTER LOAD  ESC CANCEL", false);
+    show_file_browser_line(31, b"\x18/\x19 MOVE  ENTER LOAD  ESC CANCEL", false);
 }
 
 /// Build a root-level filename from the name entered in the F3 save dialog.
@@ -248,8 +248,14 @@ pub(crate) unsafe fn draw_save_dialog(state: u8) {
         show_file_browser_line(2, b"ENTER FILE NAME (NO EXTENSION)", false);
         let mut line = [b' '; 64];
         line[..6].copy_from_slice(b"FILE: ");
-        let len = SAVE_FILENAME_LEN.min(SAVE_NAME_CAPACITY);
-        line[6..6 + len].copy_from_slice(&SAVE_FILENAME[..len]);
+        let len = unsafe { SAVE_FILENAME_LEN }.min(SAVE_NAME_CAPACITY);
+        let filename = unsafe {
+            core::slice::from_raw_parts(
+                core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
+                len,
+            )
+        };
+        line[6..6 + len].copy_from_slice(filename);
         line[6 + len..10 + len].copy_from_slice(b".bin");
         show_file_browser_line(4, &line, true);
         show_file_browser_line(27, b"ENTER SAVE  BACKSPACE EDIT  ESC CANCEL", false);
@@ -302,7 +308,7 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
         })
     }).map_err(|_| ())?;
 
-    unsafe { bk_set_pc(start); }
+    bk_set_pc(start);
     Ok(())
 }
 

@@ -9,13 +9,16 @@ pub mod nand_fs;
 pub mod dhara_fs;
 pub mod libc_shims;
 mod copy_words;
+#[path = "../resources/font8x8.rs"]
 mod font8x8;
 mod palette;
+#[path = "../resources/rom.rs"]
 pub mod rom;
 pub mod rtc;
 pub mod bk_audio;
 pub mod tusb;
-pub mod tusb_class_drivers;
+pub mod audio_uac2;
+pub mod uvc_nv12;
 pub mod tusb_descriptors;
 pub mod uvc;
 

@@ -306,18 +306,6 @@ fn write_hex_u32(value: u32) {
     write_status(&digits);
 }
 
-pub(crate) fn write_append_failure(lfs_error: i32, operation: u32, location: u32, storage_error: u32) {
-    write_status(b"\r\nZMODEM append failed; LittleFS error: 0x");
-    write_hex_u32(lfs_error as u32);
-    write_status(b"\r\nDhara operation: ");
-    write_hex_u32(operation);
-    write_status(b" logical sector: 0x");
-    write_hex_u32(location);
-    write_status(b" error: 0x");
-    write_hex_u32(storage_error);
-    write_status(b"\r\n");
-}
-
 fn write_decimal(mut value: usize) {
     let mut digits = [0u8; 10];
     let mut start = digits.len();
@@ -1209,7 +1197,6 @@ pub fn service(
                                         write_status(b" detail=0x");
                                         write_hex_u32(detail);
                                         write_status(b"\r\n");
-                                        previous = None;
                                         break;
                                     }
                                 }

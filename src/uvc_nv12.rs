@@ -9,8 +9,11 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
-use crate::bk_audio::BkEmulatorAudio;
-use crate::uvc::{ControlResponse, UvcClass, active_frame_interval_100ns, active_frame_rate_fps};
+use crate::uvc::{
+    ControlResponse, UvcClass, active_frame_interval_100ns, active_frame_rate_fps,
+    CONTROL_INTERFACE, ENDPOINT_IN, ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
+    NV12_GUID, STREAMING_INTERFACE, VS_TOTAL_LENGTH,
+};
 
 const USB_DESC_INTERFACE: u8 = 0x04;
 const USB_DESC_ENDPOINT: u8 = 0x05;
@@ -19,17 +22,6 @@ const USB_DESC_CS_INTERFACE: u8 = 0x24;
 const USB_CLASS_VIDEO: u8 = 0x0e;
 const USB_SUBCLASS_VIDEO_CONTROL: u8 = 0x01;
 const USB_SUBCLASS_VIDEO_STREAMING: u8 = 0x02;
-const UVC_CONTROL_INTERFACE: u8 = 0;
-const UVC_STREAMING_INTERFACE: u8 = 1;
-const UVC_STREAM_ENDPOINT: u8 = 0x81;
-const UVC_MAX_PACKET_SIZE: u16 = 768;
-const UVC_TRANSACTIONS_PER_MICROFRAME: u8 = 3;
-const UVC_VS_TOTAL_LENGTH_NORMAL: u16 = 77;
-const UVC_VS_TOTAL_LENGTH_CDC: u16 = 77;
-const UVC_NV12_GUID: [u8; 16] = [
-    0x4e, 0x56, 0x31, 0x32, 0x00, 0x00, 0x10, 0x00,
-    0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
-];
 
 #[derive(Clone, Copy)]
 struct ParsedUvcFunction {
@@ -85,7 +77,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
     if descriptors.len() < 9
         || descriptors[0] != 9
         || descriptors[1] != USB_DESC_INTERFACE
-        || descriptors[2] != UVC_CONTROL_INTERFACE
+        || descriptors[2] != CONTROL_INTERFACE
         || descriptors[3] != 0
         || descriptors[4] != 0
         || descriptors[5] != USB_CLASS_VIDEO
@@ -137,7 +129,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
             let subclass = descriptors[offset + 6];
             let protocol = descriptors[offset + 7];
 
-            if offset != 0 && number != UVC_CONTROL_INTERFACE && number != UVC_STREAMING_INTERFACE {
+            if offset != 0 && number != CONTROL_INTERFACE && number != STREAMING_INTERFACE {
                 function_end = offset;
                 break;
             }
@@ -148,19 +140,19 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
             current_interface = number;
             current_alternate = alternate;
             match (number, alternate, subclass) {
-                (UVC_CONTROL_INTERFACE, 0, USB_SUBCLASS_VIDEO_CONTROL) => {
+                (CONTROL_INTERFACE, 0, USB_SUBCLASS_VIDEO_CONTROL) => {
                     if control_interface_seen || endpoint_count != 0 {
                         return None;
                     }
                     control_interface_seen = true;
                 }
-                (UVC_STREAMING_INTERFACE, 0, USB_SUBCLASS_VIDEO_STREAMING) => {
+                (STREAMING_INTERFACE, 0, USB_SUBCLASS_VIDEO_STREAMING) => {
                     if streaming_alt0_seen || endpoint_count != 0 {
                         return None;
                     }
                     streaming_alt0_seen = true;
                 }
-                (UVC_STREAMING_INTERFACE, 1, USB_SUBCLASS_VIDEO_STREAMING) => {
+                (STREAMING_INTERFACE, 1, USB_SUBCLASS_VIDEO_STREAMING) => {
                     if streaming_alt1_seen || endpoint_count != 1 {
                         return None;
                     }
@@ -169,7 +161,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                 _ => return None,
             }
         } else if descriptor_type == USB_DESC_CS_INTERFACE
-            && current_interface == UVC_CONTROL_INTERFACE
+            && current_interface == CONTROL_INTERFACE
         {
             if length < 3 {
                 return None;
@@ -186,7 +178,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                             descriptors[offset + 9], descriptors[offset + 10],
                         ]) != 48_000_000
                         || descriptors[offset + 11] != 1
-                        || descriptors[offset + 12] != UVC_STREAMING_INTERFACE
+                        || descriptors[offset + 12] != STREAMING_INTERFACE
                     {
                         return None;
                     }
@@ -216,7 +208,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                 _ => return None,
             }
         } else if descriptor_type == USB_DESC_CS_INTERFACE
-            && current_interface == UVC_STREAMING_INTERFACE
+            && current_interface == STREAMING_INTERFACE
             && current_alternate == 0
         {
             if length < 3 {
@@ -228,8 +220,8 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                     if length != 14
                         || vs_header_seen
                         || descriptors[offset + 3] != 1
-                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != (if crate::uvc::cdc_mode_enabled() { UVC_VS_TOTAL_LENGTH_CDC } else { UVC_VS_TOTAL_LENGTH_NORMAL })
-                        || descriptors[offset + 6] != UVC_STREAM_ENDPOINT
+                        || u16::from_le_bytes([descriptors[offset + 4], descriptors[offset + 5]]) != VS_TOTAL_LENGTH
+                        || descriptors[offset + 6] != ENDPOINT_IN
                         || descriptors[offset + 8] != 2
                         || descriptors[offset + 12] != 1
                     {
@@ -240,7 +232,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                 // Still-image frame descriptor with no alternate still sizes.
                 3 => {
                     if length != 6
-                        || descriptors[offset + 3] != UVC_STREAM_ENDPOINT
+                        || descriptors[offset + 3] != ENDPOINT_IN
                         || descriptors[offset + 4] != 0
                         || descriptors[offset + 5] != 0
                     {
@@ -253,7 +245,7 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                         || nv12_format_seen
                         || descriptors[offset + 3] != 1
                         || descriptors[offset + 4] != 1
-                        || descriptors[offset + 5..offset + 21] != UVC_NV12_GUID
+                        || descriptors[offset + 5..offset + 21] != NV12_GUID
                         || descriptors[offset + 21] != 12
                         || descriptors[offset + 22] != 1
                     {
@@ -320,8 +312,8 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                 return None;
             }
             let address = descriptors[offset + 2];
-            if address == UVC_STREAM_ENDPOINT {
-                if current_interface != UVC_STREAMING_INTERFACE || current_alternate != 1 {
+            if address == ENDPOINT_IN {
+                if current_interface != STREAMING_INTERFACE || current_alternate != 1 {
                     return None;
                 }
                 let attributes = descriptors[offset + 3];
@@ -331,8 +323,8 @@ fn parse_uvc_function(descriptors: &[u8]) -> Option<ParsedUvcFunction> {
                 let packet_bytes = max_packet & 0x07ff;
                 let transactions = (((max_packet >> 11) & 0x03) + 1) as u8;
                 if attributes != 0x05
-                    || packet_bytes != UVC_MAX_PACKET_SIZE
-                    || transactions != UVC_TRANSACTIONS_PER_MICROFRAME
+                    || packet_bytes != MAX_PACKET_SIZE
+                    || transactions != ISO_PACKETS_PER_MICROFRAME
                     || descriptors[offset + 6] != 1
                     || streaming_endpoint_offset.is_some()
                 {
@@ -387,7 +379,7 @@ pub extern "C" fn xcore_tud_uvc_open(
     let endpoint_desc = unsafe { descriptors.as_ptr().add(parsed.endpoint_offset) };
     let packet_size = u16::from_le_bytes(unsafe { [*endpoint_desc.add(4), *endpoint_desc.add(5)] }) & 0x07ff;
     if !UVC_ENDPOINT_ALLOCATED.load(Ordering::Acquire) {
-        if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, UVC_STREAM_ENDPOINT, packet_size) } {
+        if !unsafe { xcore_usbd_edpt_iso_alloc(rhport, ENDPOINT_IN, packet_size) } {
             return 0;
         }
         UVC_ENDPOINT_ALLOCATED.store(true, Ordering::Release);
@@ -406,7 +398,7 @@ pub extern "C" fn xcore_tud_uvc_open(
 pub extern "C" fn xcore_tud_uvc_reset(_rhport: u8) {
     cortex_m::interrupt::free(|_| {
     let _ = with_uvc_state(|state| {
-        let _ = state.set_interface(UVC_STREAMING_INTERFACE, 0);
+        let _ = state.set_interface(STREAMING_INTERFACE, 0);
     });
     UVC_ENDPOINT_ALLOCATED.store(false, Ordering::Release);
 
@@ -418,19 +410,19 @@ fn submit_uvc_batch(rhport: u8, batch: (&'static [u8], u8)) -> bool {
     if bytes.is_empty() || bytes.len() > u16::MAX as usize {
         return false;
     }
-    if !unsafe { xcore_usbd_edpt_claim(rhport, UVC_STREAM_ENDPOINT) } {
+    if !unsafe { xcore_usbd_edpt_claim(rhport, ENDPOINT_IN) } {
         return false;
     }
     let submitted = unsafe {
         xcore_usbd_edpt_xfer(
             rhport,
-            UVC_STREAM_ENDPOINT,
+            ENDPOINT_IN,
             bytes.as_ptr() as *mut u8,
             bytes.len() as u16,
         )
     };
     if !submitted {
-        unsafe { xcore_usbd_edpt_release(rhport, UVC_STREAM_ENDPOINT); }
+        unsafe { xcore_usbd_edpt_release(rhport, ENDPOINT_IN); }
     }
     submitted
 }
@@ -446,7 +438,7 @@ fn submit_uvc_batch_isr(rhport: u8, batch: (&'static [u8], u8)) -> bool {
     unsafe {
         xcore_usbd_edpt_xfer_isr(
             rhport,
-            UVC_STREAM_ENDPOINT,
+            ENDPOINT_IN,
             bytes.as_ptr() as *mut u8,
             bytes.len() as u16,
         )
@@ -461,10 +453,10 @@ pub extern "C" fn xcore_tud_uvc_endpoint_descriptor() -> *const c_void {
 /// C class-driver helpers: request decoding and EP0 stages live in TinyUSB's C layer.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_get_interface(interface: u8, alternate: *mut u8) -> bool {
-    if alternate.is_null() || (interface != UVC_CONTROL_INTERFACE && interface != UVC_STREAMING_INTERFACE) {
+    if alternate.is_null() || (interface != CONTROL_INTERFACE && interface != STREAMING_INTERFACE) {
         return false;
     }
-    let value = if interface == UVC_STREAMING_INTERFACE {
+    let value = if interface == STREAMING_INTERFACE {
         let Some(value) = with_uvc_state(|state| state.alternate_setting()) else {
             return false;
         };
@@ -478,7 +470,7 @@ pub extern "C" fn xcore_tud_uvc_get_interface(interface: u8, alternate: *mut u8)
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_set_interface(alternate: u8) -> bool {
-    with_uvc_state(|state| state.set_interface(UVC_STREAMING_INTERFACE, alternate).is_ok())
+    with_uvc_state(|state| state.set_interface(STREAMING_INTERFACE, alternate).is_ok())
         .unwrap_or(false)
 }
 
@@ -552,7 +544,7 @@ pub extern "C" fn xcore_tud_uvc_xfer(
     _xferred_bytes: u32,
 ) -> bool {
     cortex_m::interrupt::free(|_| {
-    if ep_addr != UVC_STREAM_ENDPOINT {
+    if ep_addr != ENDPOINT_IN {
         return false;
     }
     let batch = with_uvc_state(|state| {
@@ -579,7 +571,7 @@ pub extern "C" fn xcore_tud_uvc_xfer_isr(
     result: i32,
     _xferred_bytes: u32,
 ) -> bool {
-    if ep_addr != UVC_STREAM_ENDPOINT {
+    if ep_addr != ENDPOINT_IN {
         return false;
     }
     let batch = with_uvc_state(|state| {
@@ -600,7 +592,7 @@ pub extern "C" fn xcore_tud_uvc_xfer_isr(
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_task(rhport: u8) {
     cortex_m::interrupt::free(|_| {
-    let ready = unsafe { xcore_usbd_edpt_ready(rhport, UVC_STREAM_ENDPOINT) };
+    let ready = unsafe { xcore_usbd_edpt_ready(rhport, ENDPOINT_IN) };
     if !ready {
         return;
     }
@@ -615,76 +607,5 @@ pub extern "C" fn xcore_tud_uvc_task(rhport: u8) {
         let _ = submit_uvc_batch(rhport, batch);
     }
 
-    })
-}
-
-const UAC_STREAM_INTERFACE: u8 = 3;
-
-static AUDIO_STATE_READY: AtomicBool = AtomicBool::new(false);
-static mut AUDIO_STATE: MaybeUninit<BkEmulatorAudio> = MaybeUninit::uninit();
-
-fn audio_state_ptr() -> Option<*mut BkEmulatorAudio> {
-    if !AUDIO_STATE_READY.load(Ordering::Acquire) {
-        return None;
-    }
-    Some(core::ptr::addr_of_mut!(AUDIO_STATE).cast::<BkEmulatorAudio>())
-}
-
-fn initialize_audio_state() -> bool {
-    if AUDIO_STATE_READY.load(Ordering::Acquire) {
-        return true;
-    }
-    unsafe {
-        core::ptr::addr_of_mut!(AUDIO_STATE)
-            .cast::<BkEmulatorAudio>()
-            .write(BkEmulatorAudio::new());
-    }
-    AUDIO_STATE_READY.store(true, Ordering::Release);
-    true
-}
-
-/// Called by TinyUSB after it has applied SET_INTERFACE to the audio stream.
-#[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) -> bool {
-    if interface != UAC_STREAM_INTERFACE {
-        return true;
-    }
-    if alternate > 1 {
-        return false;
-    }
-    cortex_m::interrupt::free(|_| {
-        if !initialize_audio_state() {
-            return false;
-        }
-        let Some(state) = audio_state_ptr() else {
-            return false;
-        };
-        unsafe { (&mut *state).tinyusb_set_active(alternate == 1); }
-        true
-    })
-}
-
-/// Render a bounded batch of PCM samples from the main loop.
-#[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_audio_render() {
-    if let Some(state) = audio_state_ptr() {
-        unsafe { (&mut *state).render_available(448); }
-    }
-}
-
-/// USB completion callback: copy pre-rendered PCM samples only.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
-    unsafe { crate::bk_audio::fill_usb_packet(buffer, capacity) }
-}
-
-/// TinyUSB calls this on unmount/reset; the next SET_INTERFACE will reinitialize
-/// capture state and start a fresh audio stream.
-#[unsafe(no_mangle)]
-pub extern "C" fn xcore_tud_audio_stop() {
-    cortex_m::interrupt::free(|_| {
-        if let Some(state) = audio_state_ptr() {
-            unsafe { (&mut *state).tinyusb_set_active(false); }
-        }
     })
 }
