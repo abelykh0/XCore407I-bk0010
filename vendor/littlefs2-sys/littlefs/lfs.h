@@ -385,6 +385,16 @@ typedef struct lfs_mdir {
     lfs_block_t tail[2];
 } lfs_mdir_t;
 
+// Cached metadata tag location used by the short directory iterator.
+typedef struct lfs_dir_tag_cache_entry {
+    lfs_tag_t tag;
+    lfs_off_t off;
+} lfs_dir_tag_cache_entry_t;
+
+// Maximum number of metadata tags cached for one short directory listing.
+// Each entry stores only the decoded tag and its offset, not tag payload.
+#define LFS_DIR_TAG_CACHE_SIZE 128
+
 // littlefs directory type
 typedef struct lfs_dir {
     struct lfs_dir *next;
@@ -398,6 +408,11 @@ typedef struct lfs_dir {
     // State for the reverse-order short directory iterator.
     uint16_t short_id;
     bool short_started;
+
+    // Reserved compact index for metadata tags in a single-pair directory.
+    lfs_dir_tag_cache_entry_t tag_cache[LFS_DIR_TAG_CACHE_SIZE];
+    uint16_t tag_cache_count;
+    bool tag_cache_valid;
 } lfs_dir_t;
 
 // littlefs file type
