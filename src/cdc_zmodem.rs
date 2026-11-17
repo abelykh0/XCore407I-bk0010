@@ -332,40 +332,64 @@ fn append_file(
 ) -> Result<(), i32> {
     let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::IO.code())?;
     #[cfg(feature = "list-profile")]
-    let open_started = crate::write_diag::cycle_count();
+    let append_started = crate::write_diag::cycle_count();
+    #[cfg(feature = "list-profile")]
+    let mut callback_started = 0u32;
+    #[cfg(feature = "list-profile")]
+    let mut callback_finished = 0u32;
     let result = fs.open_file_with_options_and_then_with_allocation(
         |options| options.write(true).append(true),
         path,
         allocation,
         |file| {
-            let mut written = 0usize;
-            while written < data.len() {
-                #[cfg(feature = "list-profile")]
-                let write_started = crate::write_diag::cycle_count();
-                let count = file.write(&data[written..])?;
-                #[cfg(feature = "list-profile")]
-                crate::write_diag::record_lfs_write(
-                    crate::write_diag::cycle_count().wrapping_sub(write_started), count,
-                );
-                if count == 0 {
-                    return Err(LfsError::IO);
+            #[cfg(feature = "list-profile")]
+            { callback_started = crate::write_diag::cycle_count(); }
+            let callback_result = (|| {
+                let mut written = 0usize;
+                while written < data.len() {
+                    #[cfg(feature = "list-profile")]
+                    let write_started = crate::write_diag::cycle_count();
+                    let count = file.write(&data[written..])?;
+                    #[cfg(feature = "list-profile")]
+                    crate::write_diag::record_lfs_write(
+                        crate::write_diag::cycle_count().wrapping_sub(write_started), count,
+                    );
+                    if count == 0 {
+                        return Err(LfsError::IO);
+                    }
+                    written += count;
                 }
-                written += count;
-            }
+                #[cfg(feature = "list-profile")]
+                let flush_started = crate::write_diag::cycle_count();
+                let flush_result = file.flush();
+                #[cfg(feature = "list-profile")]
+                crate::write_diag::record_lfs_flush(
+                    crate::write_diag::cycle_count().wrapping_sub(flush_started),
+                );
+                flush_result
+            })();
             #[cfg(feature = "list-profile")]
-            let flush_started = crate::write_diag::cycle_count();
-            let flush_result = file.flush();
-            #[cfg(feature = "list-profile")]
-            crate::write_diag::record_lfs_flush(
-                crate::write_diag::cycle_count().wrapping_sub(flush_started),
-            );
-            flush_result
+            { callback_finished = crate::write_diag::cycle_count(); }
+            callback_result
         },
     );
     #[cfg(feature = "list-profile")]
-    crate::write_diag::record_lfs_append(
-        crate::write_diag::cycle_count().wrapping_sub(open_started),
-    );
+    {
+        let append_finished = crate::write_diag::cycle_count();
+        let total = append_finished.wrapping_sub(append_started);
+        let open = if callback_started == 0 {
+            total
+        } else {
+            callback_started.wrapping_sub(append_started)
+        };
+        let callback = if callback_started == 0 {
+            0
+        } else {
+            callback_finished.wrapping_sub(callback_started)
+        };
+        let close = total.saturating_sub(open).saturating_sub(callback);
+        crate::write_diag::record_lfs_append(total, open, callback, close);
+    }
     result.map_err(|error| error.code())
 }
 
