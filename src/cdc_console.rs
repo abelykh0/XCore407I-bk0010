@@ -365,14 +365,63 @@ pub(crate) fn write_send_complete(name: &[u8], size: u32, elapsed_seconds: u32) 
     write_status(b".\r\n> ");
 }
 
-pub(crate) fn write_receive_complete(name: &[u8], size: u32, elapsed_seconds: u32) {
-    write_status(b"\r\nReceived file ");
-    write_status(name);
-    write_status(b" size ");
-    write_decimal_grouped(size as usize);
-    write_status(b" bytes in ");
-    write_transfer_duration(elapsed_seconds);
-    write_status(b".\r\n> ");
+fn append_receive_bytes(buffer: &mut [u8; 160], len: &mut usize, bytes: &[u8]) {
+    let end = (*len + bytes.len()).min(buffer.len());
+    let count = end - *len;
+    buffer[*len..end].copy_from_slice(&bytes[..count]);
+    *len = end;
+}
+
+fn append_receive_decimal(buffer: &mut [u8; 160], len: &mut usize, mut value: usize) {
+    let mut digits = [0u8; 10];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 { break; }
+    }
+    append_receive_bytes(buffer, len, &digits[start..]);
+}
+
+fn append_receive_grouped(buffer: &mut [u8; 160], len: &mut usize, mut value: usize) {
+    let mut digits = [0u8; 13];
+    let mut start = digits.len();
+    let mut group_digits = 0usize;
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        group_digits += 1;
+        if value == 0 { break; }
+        if group_digits == 3 {
+            start -= 1;
+            digits[start] = b',';
+            group_digits = 0;
+        }
+    }
+    append_receive_bytes(buffer, len, &digits[start..]);
+}
+
+/// Queue one complete receive notification so the caller can retain it if
+/// the CDC TX FIFO does not accept the entire message.
+pub(crate) fn write_receive_complete(name: &[u8], size: u32, elapsed_seconds: u32) -> bool {
+    let mut buffer = [0u8; 160];
+    let mut len = 0usize;
+    append_receive_bytes(&mut buffer, &mut len, b"\r\nReceived file ");
+    append_receive_bytes(&mut buffer, &mut len, name);
+    append_receive_bytes(&mut buffer, &mut len, b" size ");
+    append_receive_grouped(&mut buffer, &mut len, size as usize);
+    append_receive_bytes(&mut buffer, &mut len, b" bytes in ");
+    let minutes = elapsed_seconds / 60;
+    let seconds = elapsed_seconds % 60;
+    if minutes < 10 { append_receive_bytes(&mut buffer, &mut len, b"0"); }
+    append_receive_decimal(&mut buffer, &mut len, minutes as usize);
+    append_receive_bytes(&mut buffer, &mut len, b":");
+    if seconds < 10 { append_receive_bytes(&mut buffer, &mut len, b"0"); }
+    append_receive_decimal(&mut buffer, &mut len, seconds as usize);
+    append_receive_bytes(&mut buffer, &mut len, b".\r\n> ");
+    write_status_counted(&buffer[..len]) == len
 }
 
 fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
@@ -979,6 +1028,14 @@ pub fn service(
         }
         if zmodem.discard_trailing_input(now_ms) {
             return FormatRequest::None;
+        }
+
+        // Match the startup banner's lifecycle: report only from the normal
+        // foreground console path, once CDC is connected and its data endpoints
+        // are ready. The ZMODEM state retains the record until the whole line
+        // has been accepted into the CDC TX FIFO.
+        if tusb::tud_cdc_n_ready(0) {
+            let _ = zmodem.report_receive_complete();
         }
 
         let mut byte = 0u8;
