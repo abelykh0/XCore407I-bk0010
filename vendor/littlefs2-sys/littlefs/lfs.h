@@ -413,6 +413,7 @@ typedef struct lfs_dir {
     lfs_dir_tag_cache_entry_t tag_cache[LFS_DIR_TAG_CACHE_SIZE];
     uint16_t tag_cache_count;
     bool tag_cache_valid;
+    bool tag_cache_disabled;
 } lfs_dir_t;
 
 // littlefs file type
