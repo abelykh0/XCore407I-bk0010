@@ -31,7 +31,7 @@ use board::{read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
 use file_browser::{
     build_save_path, draw_file_browser, draw_save_dialog, list_root_files,
     load_tetris_from_path, save_file_exists, save_ram_to_path,
-    BROWSER_PATHS, BROWSER_PATH_LENGTHS,
+    BROWSER_FILES,
     FILE_BROWSER_ACTION, FILE_BROWSER_ACTIVE, FILE_BROWSER_OPEN, FILE_BROWSER_UP,
     FILE_BROWSER_DOWN, FILE_BROWSER_ENTER, FILE_BROWSER_ESCAPE,
     MAX_BROWSER_PATH,
@@ -526,8 +526,7 @@ fn main() -> ! {
         }
     }
 
-    let browser_paths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATHS) };
-    let browser_path_lengths = unsafe { &mut *ptr::addr_of_mut!(BROWSER_PATH_LENGTHS) };
+    let browser_files = unsafe { &mut *ptr::addr_of_mut!(BROWSER_FILES) };
     let mut browser_count = 0usize;
     let mut browser_selected = 0usize;
     let mut browser_open = false;
@@ -778,8 +777,7 @@ fn main() -> ! {
             FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
             xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
             let listing_result = list_root_files(
-                &mut *browser_paths,
-                &mut *browser_path_lengths,
+                &mut *browser_files,
                 |done, total| {
                     if done == u32::MAX {
                         show_file_browser_line(
@@ -816,8 +814,7 @@ fn main() -> ! {
                     browser_open = true;
                     FILE_BROWSER_ACTIVE.store(true, Ordering::Release);
                     draw_file_browser(
-                        &*browser_paths,
-                        &*browser_path_lengths,
+                        &*browser_files,
                         browser_count,
                         browser_selected,
                     );
@@ -885,8 +882,9 @@ fn main() -> ! {
                     redraw = true;
                 }
                 FILE_BROWSER_ENTER if browser_count != 0 => {
-                    let path_len = browser_path_lengths[browser_selected] as usize;
-                    let result = load_tetris_from_path(&browser_paths[browser_selected][..path_len]);
+                    let file = &browser_files[browser_selected];
+                    let path_len = file.len as usize;
+                    let result = load_tetris_from_path(&file.path[..path_len]);
                     browser_open = false;
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
                     clear_demo_canvas(0x10);
@@ -906,8 +904,7 @@ fn main() -> ! {
             }
             if redraw {
                 draw_file_browser(
-                    &*browser_paths,
-                    &*browser_path_lengths,
+                    &*browser_files,
                     browser_count,
                     browser_selected,
                 );
