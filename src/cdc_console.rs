@@ -577,7 +577,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
         crate::list_diag::set_directory_active(false);
     }
 
-    match result {
+    match &result {
         Ok(()) => write_status(b"LIST: directory read complete.\r\n"),
         Err(error) => {
             write_status(b"Directory read failed; LittleFS error: 0x");
