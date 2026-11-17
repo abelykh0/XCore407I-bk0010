@@ -883,19 +883,10 @@ pub fn service(
                     break;
                 }
                 // The file is now atomically renamed to its final path.
-                // Report the durable result immediately; ZFIN/OO teardown may
-                // be delayed or missed by the peer.
+                // Defer the console message until the ZMODEM close response
+                // has been queued and the receiver is torn down. The CDC
+                // endpoint still carries protocol traffic at this point.
                 state.receive_file_committed = true;
-                if state.receive_name_len != 0 {
-                    let elapsed_ms =
-                        rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
-                    super::cdc_console::write_receive_complete(
-                        &state.receive_name[..state.receive_name_len],
-                        state.receive_size,
-                        elapsed_ms / 1_000,
-                    );
-                    state.receive_name_len = 0;
-                }
             }
             Action::Event(Event::SessionCompleted) => {
                 // Receiver::poll() surfaces events before queued wire bytes.
