@@ -1073,23 +1073,37 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return true;
     }
 
-    let mut stored = [0u8; ECC_OOB_BYTES + ECC_TAG.len()];
-    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET, &mut stored) {
+    // Read OOB bytes 0..15: factory bad-block markers, four ECC values,
+    // and the ECC tag. An absent tag is valid only for a physically erased
+    // page; otherwise corrupted or unprotected programmed data could bypass
+    // ECC validation.
+    let mut spare = [0u8; ECC_OOB_OFFSET as usize + ECC_OOB_BYTES + ECC_TAG.len()];
+    if !read_page(page, PAGE_SIZE as u16, &mut spare) {
         record_nand_read_failure(2, page);
         return false;
     }
 
-    let tag = &stored[ECC_OOB_BYTES..];
-    if tag == [0xFF, 0xFF] { return true; }
+    let ecc_start = ECC_OOB_OFFSET as usize;
+    let tag_start = ecc_start + ECC_OOB_BYTES;
+    let tag = &spare[tag_start..tag_start + ECC_TAG.len()];
+    if tag == [0xFF, 0xFF] {
+        if out.iter().all(|&byte| byte == 0xFF)
+            && spare.iter().all(|&byte| byte == 0xFF)
+        {
+            return true;
+        }
+        record_nand_read_failure(3, 0xFFFF_FFFF);
+        return false;
+    }
     if tag != ECC_TAG {
         record_nand_read_failure(3, u32::from(tag[0]) | (u32::from(tag[1]) << 8));
         return false;
     }
 
     for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
-        let offset = chunk_index * ECC_BYTES_PER_CHUNK;
+        let offset = ecc_start + chunk_index * ECC_BYTES_PER_CHUNK;
         let stored_ecc = u32::from_le_bytes([
-            stored[offset], stored[offset + 1], stored[offset + 2], 0,
+            spare[offset], spare[offset + 1], spare[offset + 2], 0,
         ]);
         let calculated_ecc = ecc_software_512_fsmc(chunk);
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
