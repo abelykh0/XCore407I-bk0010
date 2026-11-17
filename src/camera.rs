@@ -546,7 +546,11 @@ pub fn show_file_browser_line(row: usize, message: &[u8], _selected: bool) {
 
     for column in 0..columns {
         let raw = message.get(column).copied().unwrap_or(b' ');
-        let character = if (32..=126).contains(&raw) { raw } else { b'?' };
+        let character = if (32..=126).contains(&raw) || matches!(raw, 0x18 | 0x19) {
+            raw
+        } else {
+            b'?'
+        };
         let glyph = (character as usize - 1) * 8;
         for y in 0..8 {
             let bits = FONT8X8[glyph + y];
