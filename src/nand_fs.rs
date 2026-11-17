@@ -1131,8 +1131,8 @@ pub(crate) fn configure_fsmc() {
         // Attribute-space FSMC_PATT2 is used for the final NAND address-byte
         // write (see address_last()). Fields have the same SET/WAIT/HOLD
         // meanings, but use the attribute timing register:
-        // ATTSET=4: address setup; 5 cycles = 29.8 ns. tCS=20 ns gives a
-        //   theoretical minimum encoding of 3 (4 cycles = 23.8 ns).
+        // ATTSET=3: address setup; 4 cycles = 23.8 ns. This is the
+        //   minimum selected from tCS=20 ns.
         // ATTWAIT=2: NWE/NOE assertion; 3 cycles = 17.9 ns. This is the
         //   minimum selected from tWP=12 ns (3 HCLK cycles required).
         // ATTHOLD=18: post-command hold; 18 cycles = 107.1 ns. This is
@@ -1141,7 +1141,7 @@ pub(crate) fn configure_fsmc() {
         //   (encoding 17 = 101.2 ns); encoding 16 would be only 95.2 ns.
         // ATTHIZ=2: write-cycle data-bus Hi-Z interval; encoding 0 is the
         //   controller minimum. No separate NAND AC limit sets this value.
-        let attribute_timing = 4 | (2 << 8) | (18 << 16) | (2 << 24);
+        let attribute_timing = 3 | (2 << 8) | (18 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
         write_volatile(fsmc_pmem2(), common_timing);
         write_volatile(fsmc_patt2(), attribute_timing);
