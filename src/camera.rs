@@ -551,9 +551,22 @@ pub fn show_file_browser_line(row: usize, message: &[u8], _selected: bool) {
         } else {
             b'?'
         };
+        // Draw the navigation arrows directly. These are control-code
+        // glyphs in the font table, but explicit rows avoid passing them
+        // through printable-character/font-index handling.
+        const UP_ARROW: [u8; 8] = [
+            0x18, 0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00,
+        ];
+        const DOWN_ARROW: [u8; 8] = [
+            0x18, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x18, 0x00,
+        ];
         let glyph = (character as usize - 1) * 8;
         for y in 0..8 {
-            let bits = FONT8X8[glyph + y];
+            let bits = match raw {
+                0x18 => UP_ARROW[y],
+                0x19 => DOWN_ARROW[y],
+                _ => FONT8X8[glyph + y],
+            };
             for x in 0..8 {
                 let color = if bits & (0x80 >> x) != 0 {
                     foreground
