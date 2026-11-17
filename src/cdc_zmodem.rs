@@ -758,18 +758,8 @@ pub fn service(
                     // but the receiver's final ZFIN reply must reach CDC IN
                     // before the receiver state/storage can be released.
                     finished = true;
-                    if state.receive_name_len != 0 && !state.transfer_failed {
-                        let elapsed_ms = rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
-                        super::cdc_console::write_receive_complete(
-                            &state.receive_name[..state.receive_name_len],
-                            state.receive_size,
-                            elapsed_ms / 1_000,
-                        );
-                    } else {
-                        super::cdc_console::write_status(
-                            b"\r\nZMODEM upload complete\r\n> ",
-                        );
-                    }
+                    // Report completion after receiver teardown below. This
+                    // keeps console output out of the protocol-action loop.
                     break;
                 }
             }
@@ -1031,6 +1021,20 @@ pub fn service(
             }
         }
         state.receiver = None;
+        if state.session_complete_pending && !failed {
+            if state.receive_name_len != 0 {
+                let elapsed_ms = rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
+                super::cdc_console::write_receive_complete(
+                    &state.receive_name[..state.receive_name_len],
+                    state.receive_size,
+                    elapsed_ms / 1_000,
+                );
+            } else {
+                super::cdc_console::write_status(
+                    b"\r\nZMODEM upload complete\r\n> ",
+                );
+            }
+        }
         state.final_path_len = 0;
         state.receive_name_len = 0;
         state.receive_size = 0;
