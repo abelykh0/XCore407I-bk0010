@@ -2748,6 +2748,8 @@ static int lfs_dir_open_(lfs_t *lfs, lfs_dir_t *dir, const char *path) {
     dir->pos = 0;
     dir->short_id = 0;
     dir->short_started = false;
+    dir->tag_cache_count = 0;
+    dir->tag_cache_valid = false;
 
     // add to list of mdirs
     dir->type = LFS_TYPE_DIR;
@@ -2898,6 +2900,8 @@ static int lfs_dir_rewind_(lfs_t *lfs, lfs_dir_t *dir) {
     dir->pos = 0;
     dir->short_id = 0;
     dir->short_started = false;
+    dir->tag_cache_count = 0;
+    dir->tag_cache_valid = false;
     return 0;
 }
 
