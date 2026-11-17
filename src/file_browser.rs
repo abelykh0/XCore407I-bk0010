@@ -73,7 +73,7 @@ pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CA
 pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
  
 unsafe extern "C" {
-    fn bk_set_pc(start: u16);
+    safe fn bk_set_pc(start: u16);
     static mut RamBuffer: [u8; 0x4000];
 }
 
@@ -308,7 +308,7 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
         })
     }).map_err(|_| ())?;
 
-    unsafe { bk_set_pc(start); }
+    bk_set_pc(start);
     Ok(())
 }
 

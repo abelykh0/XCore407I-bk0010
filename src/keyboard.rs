@@ -81,9 +81,9 @@ static KEYBOARD_QUEUE_TAIL: AtomicU16 = AtomicU16::new(0);
 const PDP_CYCLES_PER_FRAME: u32 = 60_000;
 
 unsafe extern "C" {
-    fn bk_timing_cycles() -> u32;
-    fn bk_try_send_input_byte(value: u8) -> u8;
-    fn bk_request_stop_irq();
+    safe fn bk_timing_cycles() -> u32;
+    safe fn bk_try_send_input_byte(value: u8) -> u8;
+    safe fn bk_request_stop_irq();
     static mut RamBuffer: [u8; 0x4000];
 }
 
@@ -449,7 +449,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             #[cfg(not(feature = "destructive-nand-init"))]
             { true }
         }) {
-            unsafe { bk_request_stop_irq(); }
+            bk_request_stop_irq();
             continue;
         }
 
@@ -557,7 +557,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
 }
 
 pub(crate) fn service_keyboard_frame_pacing() {
-    let now = unsafe { bk_timing_cycles() };
+    let now = bk_timing_cycles();
     if !KEYBOARD_CYCLE_INITIALIZED.load(Ordering::Relaxed) {
         LAST_KEYBOARD_CYCLE.store(now, Ordering::Relaxed);
         KEYBOARD_CYCLE_INITIALIZED.store(true, Ordering::Relaxed);
@@ -572,7 +572,7 @@ pub(crate) fn service_keyboard_frame_pacing() {
     } else if elapsed >= PDP_CYCLES_PER_FRAME {
         if let Some(key) = keyboard_queue_peek() {
             // Leave the byte at the queue head if the BK keyboard port is busy.
-            if unsafe { bk_try_send_input_byte(key) } != 0 {
+            if bk_try_send_input_byte(key) != 0 {
                 keyboard_queue_pop();
             }
         }
