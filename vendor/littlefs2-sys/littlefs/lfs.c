@@ -1091,57 +1091,6 @@ popped:
         return res;
     }
 }
-
-// Build a compact index of the final NAME tags in a metadata directory.
-// The directory traversal resolves tag replacement, deletion, and move
-// semantics once, so subsequent reads do not rescan metadata for each ID.
-#define LFS_DIR_NAME_INDEX_COUNT 1024
-#define LFS_DIR_NAME_INDEX_MAGIC 0x4c465349
-#define LFS_DIR_NAME_INDEX_OFFSET_MASK 0x0003ffff
-
-struct lfs_dir_name_index_context {
-    uint32_t *index;
-    uint16_t count;
-    lfs_block_t block;
-};
-
-static int lfs_dir_name_index_cb(void *data, lfs_tag_t tag, const void *buffer) {
-    struct lfs_dir_name_index_context *ctx = data;
-    uint16_t id = lfs_tag_id(tag);
-    if (id >= ctx->count || lfs_tag_type1(tag) != LFS_TYPE_NAME) {
-        return 0;
-    }
-
-    const struct lfs_diskoff *disk = buffer;
-    if (disk->block != ctx->block || disk->off > LFS_DIR_NAME_INDEX_OFFSET_MASK) {
-        return LFS_ERR_CORRUPT;
-    }
-
-    // bit 31: present; bits 28..30: type; bits 18..27: name length;
-    // bits 0..17: data offset within the metadata block.
-    ctx->index[id] = 0x80000000
-            | ((uint32_t)lfs_tag_type3(tag) << 28)
-            | ((uint32_t)lfs_tag_size(tag) << 18)
-            | disk->off;
-    return 0;
-}
-
-static int lfs_dir_build_name_index(lfs_t *lfs, lfs_dir_t *dir, uint32_t *index) {
-    memset(index, 0, LFS_DIR_NAME_INDEX_COUNT * sizeof(index[0]));
-    struct lfs_dir_name_index_context ctx = {
-        .index = index,
-        .count = dir->m.count,
-        .block = dir->m.pair[0],
-    };
-
-    // Use the same name-tag filtering as LittleFS metadata compaction.
-    return lfs_dir_traverse(lfs, &dir->m, 0, 0xffffffff, NULL, 0,
-            LFS_MKTAG(0x400, 0x3ff, 0),
-            LFS_MKTAG(LFS_TYPE_NAME, 0, 0),
-            0, dir->m.count, 0,
-            lfs_dir_name_index_cb, &ctx);
-}
-
 #endif
 
 static lfs_stag_t lfs_dir_fetchmatch(lfs_t *lfs,
@@ -2865,83 +2814,6 @@ static int lfs_dir_read_(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
 
 static int lfs_dir_read_short_(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
     return lfs_dir_read_internal(lfs, dir, info, false);
-}
-
-static int lfs_dir_read_short_sequential_(lfs_t *lfs, lfs_dir_t *dir,
-        struct lfs_info *info, uint32_t *index) {
-    // The packed index reserves 18 bits for an offset. Fall back to the
-    // original lookup on unusually large metadata blocks.
-    if (!index || lfs->cfg->block_size > 0x40000
-            || dir->m.count > LFS_DIR_NAME_INDEX_COUNT) {
-        return lfs_dir_read_short_(lfs, dir, info);
-    }
-
-    memset(info, 0, sizeof(*info));
-
-    // Preserve the standard littlefs pseudo-entries.
-    if (dir->pos == 0) {
-        info->type = LFS_TYPE_DIR;
-        strcpy(info->name, ".");
-        dir->pos += 1;
-        return true;
-    } else if (dir->pos == 1) {
-        info->type = LFS_TYPE_DIR;
-        strcpy(info->name, "..");
-        dir->pos += 1;
-        return true;
-    }
-
-    while (true) {
-        if (dir->id == dir->m.count) {
-            if (!dir->m.split) {
-                return false;
-            }
-
-            int err = lfs_dir_fetch(lfs, &dir->m, dir->m.tail);
-            if (err) {
-                return err;
-            }
-            dir->id = 0;
-        }
-
-        // The final two words identify which metadata pair the index covers.
-        if (index[LFS_DIR_NAME_INDEX_COUNT] != dir->m.pair[0]
-                || index[LFS_DIR_NAME_INDEX_COUNT + 1] != LFS_DIR_NAME_INDEX_MAGIC) {
-            int err = lfs_dir_build_name_index(lfs, dir, index);
-            if (err) {
-                return err;
-            }
-            index[LFS_DIR_NAME_INDEX_COUNT] = dir->m.pair[0];
-            index[LFS_DIR_NAME_INDEX_COUNT + 1] = LFS_DIR_NAME_INDEX_MAGIC;
-        }
-
-        while (dir->id < dir->m.count) {
-            uint16_t id = dir->id;
-            uint32_t entry = index[id];
-            if (!(entry & 0x80000000)) {
-                dir->id += 1;
-                continue;
-            }
-
-            lfs_size_t size = (entry >> 18) & 0x3ff;
-            lfs_off_t off = entry & LFS_DIR_NAME_INDEX_OFFSET_MASK;
-            if (size >= sizeof(info->name)) {
-                return LFS_ERR_CORRUPT;
-            }
-            int err = lfs_bd_read(lfs, NULL, &lfs->rcache, size,
-                    dir->m.pair[0], off, info->name, size);
-            if (err) {
-                return err;
-            }
-
-            info->name[size] = '\0';
-            dir->id += 1;
-            info->type = (entry >> 28) & 0x7;
-            info->size = 0;
-            dir->pos += 1;
-            return true;
-        }
-    }
 }
 
 static int lfs_dir_seek_(lfs_t *lfs, lfs_dir_t *dir, lfs_off_t off) {
@@ -6463,19 +6335,6 @@ int lfs_dir_read_short(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info) {
 
     err = lfs_dir_read_short_(lfs, dir, info);
 
-    LFS_UNLOCK(lfs->cfg);
-    return err;
-}
-
-
-int lfs_dir_read_short_sequential(lfs_t *lfs, lfs_dir_t *dir,
-        struct lfs_info *info, uint32_t *index) {
-    int err = LFS_LOCK(lfs->cfg);
-    if (err) {
-        return err;
-    }
-
-    err = lfs_dir_read_short_sequential_(lfs, dir, info, index);
     LFS_UNLOCK(lfs->cfg);
     return err;
 }
