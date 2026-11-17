@@ -661,6 +661,44 @@ impl<S: driver::Storage> FileAllocation<S> {
         Ok(())
     }
 
+    /// Read bytes from a file opened with open_with_options.
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn read(&mut self, fs: &Filesystem<'_, S>, buf: &mut [u8]) -> Result<usize> {
+        if !self.opened {
+            return Err(Error::IO);
+        }
+        let return_code = unsafe {
+            ll::lfs_file_read(
+                &mut fs.alloc.borrow_mut().state,
+                addr_of_mut!(self.state),
+                buf.as_mut_ptr() as *mut c_void,
+                buf.len() as u32,
+            )
+        };
+        u32_result(return_code).map(|n| n as usize)
+    }
+
+    /// Seek within a file opened with open_with_options.
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn seek(&mut self, fs: &Filesystem<'_, S>, pos: io::SeekFrom) -> Result<usize> {
+        if !self.opened {
+            return Err(Error::IO);
+        }
+        let return_code = unsafe {
+            ll::lfs_file_seek(
+                &mut fs.alloc.borrow_mut().state,
+                addr_of_mut!(self.state),
+                pos.off(),
+                pos.whence(),
+            )
+        };
+        u32_result(return_code).map(|n| n as usize)
+    }
+
     /// Write bytes to a file opened with open_with_options.
     /// # Safety
     /// This allocation must still be open at the same address used to open it,
