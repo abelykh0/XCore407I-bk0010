@@ -583,7 +583,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     #[cfg(feature = "list-profile")]
     let mut fifo_wait_cycles = 0u32;
     #[cfg(feature = "list-profile")]
-    let mut busy_wait_cycles = 0u32;
+    let busy_wait_cycles;
 
     command(0x80);
     address(0);
