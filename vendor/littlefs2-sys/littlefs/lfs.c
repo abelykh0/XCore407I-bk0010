@@ -2871,7 +2871,8 @@ static int lfs_dir_read_short_sequential_(lfs_t *lfs, lfs_dir_t *dir,
         struct lfs_info *info, uint32_t *index) {
     // The packed index reserves 18 bits for an offset. Fall back to the
     // original lookup on unusually large metadata blocks.
-    if (!index || lfs->cfg->block_size > 0x40000) {
+    if (!index || lfs->cfg->block_size > 0x40000
+            || dir->m.count > LFS_DIR_NAME_INDEX_COUNT) {
         return lfs_dir_read_short_(lfs, dir, info);
     }
 
@@ -2915,21 +2916,26 @@ static int lfs_dir_read_short_sequential_(lfs_t *lfs, lfs_dir_t *dir,
         }
 
         while (dir->id < dir->m.count) {
-            uint16_t id = dir->id++;
+            uint16_t id = dir->id;
             uint32_t entry = index[id];
             if (!(entry & 0x80000000)) {
+                dir->id += 1;
                 continue;
             }
 
             lfs_size_t size = (entry >> 18) & 0x3ff;
             lfs_off_t off = entry & LFS_DIR_NAME_INDEX_OFFSET_MASK;
+            if (size >= sizeof(info->name)) {
+                return LFS_ERR_CORRUPT;
+            }
             int err = lfs_bd_read(lfs, NULL, &lfs->rcache, size,
                     dir->m.pair[0], off, info->name, size);
             if (err) {
                 return err;
             }
 
-            info->name[size] = '\\0';
+            info->name[size] = '\0';
+            dir->id += 1;
             info->type = (entry >> 28) & 0x7;
             info->size = 0;
             dir->pos += 1;
