@@ -170,6 +170,28 @@ impl State {
         (self.input_accepted, self.response_queued, self.response_sent)
     }
 
+    /// Deliver a committed receive notification from the normal console path.
+    /// Keep the record until the complete message has entered the CDC TX FIFO.
+    pub fn report_receive_complete(&mut self) -> bool {
+        if !self.receive_file_committed || self.receive_name_len == 0 {
+            return false;
+        }
+
+        let elapsed_ms = rtc_now_millis().wrapping_sub(self.receive_started_rtc_ms);
+        if !super::cdc_console::write_receive_complete(
+            &self.receive_name[..self.receive_name_len],
+            self.receive_size,
+            elapsed_ms / 1_000,
+        ) {
+            return false;
+        }
+
+        self.receive_name_len = 0;
+        self.receive_size = 0;
+        self.receive_file_committed = false;
+        true
+    }
+
     pub fn last_error(&self) -> u8 {
         self.last_error
     }
@@ -216,9 +238,12 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     state.send_wire_len = 0;
     state.send_wire_pos = 0;
     state.final_path_len = 0;
-    state.receive_name_len = 0;
-    state.receive_size = 0;
-    state.receive_file_committed = false;
+    // A committed receive notification survives a CDC disconnect. The
+    // normal console path will deliver it after the host reconnects.
+    if !state.receive_file_committed {
+        state.receive_name_len = 0;
+        state.receive_size = 0;
+    }
     state.wire_len = 0;
     state.wire_pos = 0;
     state.transfer_started = false;
@@ -1036,21 +1061,14 @@ pub fn service(
             }
         }
         state.receiver = None;
-        // FileCompleted means LittleFS rename succeeded. Report that durable
-        // result even if the peer's final ZFIN/OO close handshake is missed.
-        if state.receive_file_committed && state.receive_name_len != 0 {
-            let elapsed_ms = rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
-            super::cdc_console::write_receive_complete(
-                &state.receive_name[..state.receive_name_len],
-                state.receive_size,
-                elapsed_ms / 1_000,
-            );
-        }
+        // Keep a committed-file notification pending until the normal CDC
+        // console service has accepted the complete message into its TX FIFO.
         let file_committed = state.receive_file_committed;
         state.final_path_len = 0;
-        state.receive_name_len = 0;
-        state.receive_size = 0;
-        state.receive_file_committed = false;
+        if !file_committed {
+            state.receive_name_len = 0;
+            state.receive_size = 0;
+        }
         state.transfer_failed = false;
         state.transfer_started = false;
         state.timeout_pending = false;
