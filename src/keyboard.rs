@@ -25,11 +25,14 @@ static mut PREVIOUS_MODIFIERS: u8 = 0;
 static KEYBOARD_LOCKS: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_DEVICE: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_INSTANCE: AtomicU8 = AtomicU8::new(0);
-// Startup mode is selected as soon as a boot-keyboard interface mounts.
+// Startup mode is selected by F10 during the brief post-mount window,
+// otherwise normal mode is selected when that window expires.
 pub(crate) const BOOT_SELECTION_WAITING: u8 = 0;
 pub(crate) const BOOT_SELECTION_NORMAL: u8 = 1;
 pub(crate) const BOOT_SELECTION_CDC: u8 = 2;
 static BOOT_SELECTION: AtomicU8 = AtomicU8::new(BOOT_SELECTION_WAITING);
+static BOOT_KEYBOARD_MOUNT_TICK: AtomicU32 = AtomicU32::new(0);
+const BOOT_MODE_F10_WINDOW_MS: u32 = 100;
 static EMULATOR_INPUT_ENABLED: AtomicBool = AtomicBool::new(false);
 static HID_MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
 static BOOT_KEYBOARD_MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -67,6 +70,17 @@ pub(crate) fn set_boot_default_normal() {
         Ordering::AcqRel,
         Ordering::Acquire,
     );
+}
+
+pub(crate) fn select_normal_after_mount_window() {
+    if keyboard_is_mounted()
+        && crate::board::TICKS
+            .load(Ordering::Acquire)
+            .wrapping_sub(BOOT_KEYBOARD_MOUNT_TICK.load(Ordering::Acquire))
+            >= BOOT_MODE_F10_WINDOW_MS
+    {
+        set_boot_default_normal();
+    }
 }
 
 pub(crate) fn enable_emulator_input() {
@@ -124,14 +138,9 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
     }
     BOOT_KEYBOARD_MOUNT_COUNT.fetch_add(1, Ordering::Relaxed);
     note_usb_host_activity();
-    // A mounted boot-keyboard interface is sufficient to enter normal
-    // mode. Do not wait for the first key report: some keyboards do not
-    // send an initial idle report after enumeration.
-    let _ = BOOT_SELECTION.compare_exchange(
-        BOOT_SELECTION_WAITING,
-        BOOT_SELECTION_NORMAL,
-        Ordering::AcqRel,
-        Ordering::Acquire,
+    BOOT_KEYBOARD_MOUNT_TICK.store(
+        crate::board::TICKS.load(Ordering::Acquire),
+        Ordering::Release,
     );
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);

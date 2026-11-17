@@ -214,8 +214,8 @@ fn main() -> ! {
     #[cfg(feature = "cpu-cycle-diag")]
     enable_cycle_counter(&mut core);
 
-    // Emulator initialization is deferred until a boot-keyboard interface mounts.
-    // CDC mode never initializes BK or storage UI.
+    // Emulator initialization is deferred until the boot-keyboard startup
+    // selection completes. F10 selects CDC; otherwise normal mode is used.
 
     configure_board_pins(
         &mut device.RCC,
@@ -259,9 +259,8 @@ fn main() -> ! {
         );
     }
 
-    // Keep discovery active until a boot-keyboard interface mounts. The
-    // mount callback selects normal mode immediately; this timeout is only
-    // for recovering when no boot keyboard is detected.
+    // Allow time for USB discovery, then give a mounted keyboard 100 ms
+    // to report F10 before defaulting to normal mode.
     const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
     let mut keyboard_host_restart_attempted = false;
     USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
@@ -287,8 +286,10 @@ fn main() -> ! {
             USB_HOST_TASK_PENDING.store(false, Ordering::Release);
         }
 
-        // A boot-keyboard mount selects NORMAL immediately. Do not wait for
-        // the keyboard to send its first input report.
+        // Once a boot keyboard mounts, allow 100 ms for an F10 report.
+        // If none arrives, select normal mode without waiting for another
+        // report from the keyboard.
+        keyboard::select_normal_after_mount_window();
         if keyboard::boot_selection() != keyboard::BOOT_SELECTION_WAITING {
             break;
         }
