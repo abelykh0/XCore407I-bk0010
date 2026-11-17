@@ -83,13 +83,6 @@ pub(crate) fn record_zmodem_submit(cycles: u32) {
 }
 
 pub(crate) fn record_lfs_create(cycles: u32) { add(&LFS_CREATE_US, cycles_to_us(cycles)); }
-pub(crate) fn record_lfs_append(total: u32, open: u32, callback: u32, close: u32) {
-    add(&LFS_APPEND_CALLS, 1);
-    add(&LFS_APPEND_US, cycles_to_us(total));
-    add(&LFS_OPEN_US, cycles_to_us(open));
-    add(&LFS_CALLBACK_US, cycles_to_us(callback));
-    add(&LFS_CLOSE_US, cycles_to_us(close));
-}
 pub(crate) fn record_lfs_append_open(cycles: u32) {
     add(&LFS_OPEN_US, cycles_to_us(cycles));
 }
