@@ -44,9 +44,7 @@ pub(crate) fn begin() {
     DIRECTORY_CDC_CYCLES.store(0, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Release);
 }
-pub(crate) fn end() -> Snapshot {
-    ACTIVE.store(false, Ordering::Release);
-    DIRECTORY_ACTIVE.store(false, Ordering::Relaxed);
+pub(crate) fn snapshot() -> Snapshot {
     Snapshot {
         dhara_reads: DHARA_READS.load(Ordering::Relaxed),
         dhara_cycles: DHARA_CYCLES.load(Ordering::Relaxed),
@@ -58,6 +56,11 @@ pub(crate) fn end() -> Snapshot {
         cdc_cycles: CDC_CYCLES.load(Ordering::Relaxed),
         directory_cdc_cycles: DIRECTORY_CDC_CYCLES.load(Ordering::Relaxed),
     }
+}
+pub(crate) fn end() -> Snapshot {
+    ACTIVE.store(false, Ordering::Release);
+    DIRECTORY_ACTIVE.store(false, Ordering::Relaxed);
+    snapshot()
 }
 pub(crate) fn record_dhara_read(cycles: u32) {
     if is_active() {
