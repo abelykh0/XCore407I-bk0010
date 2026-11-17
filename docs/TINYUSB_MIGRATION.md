@@ -33,7 +33,7 @@ This work is isolated on `experiment/tinyusb-device-migration`. Do not merge int
      service-interval capacity (MPS multiplied by the descriptor multiplier),
      not just the 768-byte per-transaction MPS.
 
-3. `usb/tusb_config.h`
+3. `csrc/usb_device/tusb_config.h`
    - Defines port 0 as FS host and port 1 as HS device.
    - Enables internal DMA for the HS device controller.
    - Sets the UVC class staging buffer to 2304 bytes and the UAC2 IN staging

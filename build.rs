@@ -47,7 +47,7 @@ fn compiler_include_paths() -> Vec<String> {
 
 fn main() {
     println!("cargo:rerun-if-changed=csrc/bk");
-    println!("cargo:rerun-if-changed=usb/tusb_config.h");
+    println!("cargo:rerun-if-changed=csrc/usb_device/tusb_config.h");
     println!("cargo:rerun-if-changed=csrc/usb_device/config.h");
     println!("cargo:rerun-if-changed=csrc/usb_device/audio_uac2.c");
     println!("cargo:rerun-if-changed=csrc/usb_device/audio_uac2.h");
@@ -112,7 +112,6 @@ fn main() {
         .flag("-w") // Suppress all compiler warnings from TinyUSB only.
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
-        .include("usb")
         .include("csrc/usb_device")
         .file("csrc/usb_device/uvc_nv12.c")
         .file("csrc/usb_device/audio_uac2.c")
@@ -157,7 +156,7 @@ fn main() {
             "-fvisibility=default",
             "-fshort-enums",
         ])
-        .clang_arg("-Iusb")
+        .clang_arg("-Icsrc/usb_device")
         .clang_arg(format!("-I{tinyusb_root}/src"))
         .clang_arg(format!("-I{cmsis_device}"))
         .clang_arg(format!("-I{cmsis_core}"))
