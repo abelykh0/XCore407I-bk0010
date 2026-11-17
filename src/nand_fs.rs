@@ -1329,9 +1329,10 @@ pub(crate) fn configure_fsmc() {
         // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
         // individual 512-byte data chunks; ECCEN remains clear while idle.
         // TCLR controls CLE-to-RE delay (tCLR), not the NAND tWHR interval.
-        // Keep TAR at its previous value of 2; with MEMSET=2, ALE-to-RE is
-        // (2 + 2 + 2) HCLK cycles = about 35.7 ns at 168 MHz.
-        let control = (1 << 1) | (1 << 2) | (1 << 3) | (6 << 9) | (2 << 13) | (1 << 17);
+        // Reduce TCLR from 6 to 0: with MEMSET=2, CLE-to-RE is
+        // (0 + 2 + 2) HCLK cycles = about 23.8 ns at 168 MHz (> tCLR min 10 ns).
+        // Keep TAR at 2: ALE-to-RE remains about 35.7 ns.
+        let control = (1 << 1) | (1 << 2) | (1 << 3) | (2 << 13) | (1 << 17);
         write_volatile(pcr2, control);
         let _ = read_volatile(pcr2);
     }
