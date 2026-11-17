@@ -228,13 +228,31 @@ pub extern "C" fn tuh_hid_report_received_cb(
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
 
         let selection = BOOT_SELECTION.load(Ordering::Acquire);
-        if selection == BOOT_SELECTION_NORMAL
+        if selection == BOOT_SELECTION_WAITING {
+            // F10 selects CDC during the 100 ms window after keyboard mount.
+            // Other keys do not end the window; normal mode is selected when
+            // the window expires.
+            if bytes[2..8].contains(&0x43) {
+                let _ = BOOT_SELECTION.compare_exchange(
+                    BOOT_SELECTION_WAITING,
+                    BOOT_SELECTION_CDC,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            }
+            unsafe {
+                let mut keys = [0u8; 6];
+                keys.copy_from_slice(&bytes[2..8]);
+                PREVIOUS_KEYS = keys;
+                PREVIOUS_MODIFIERS = bytes[0];
+            }
+        } else if selection == BOOT_SELECTION_NORMAL
             && EMULATOR_INPUT_ENABLED.load(Ordering::Acquire)
         {
             process_boot_keyboard_report(dev_addr, instance, bytes);
         } else {
-            // Ignore all keyboard input in CDC/error startup modes and while
-            // the emulator is still being initialized.
+            // Ignore keyboard input in CDC mode and while the emulator is
+            // being initialized.
             unsafe {
                 let mut keys = [0u8; 6];
                 keys.copy_from_slice(&bytes[2..8]);
