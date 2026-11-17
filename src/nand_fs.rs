@@ -387,7 +387,7 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
         }
         return false;
     }
-    for byte in out { *byte = read_data(); }
+    for byte in out.iter_mut() { *byte = read_data(); }
     #[cfg(feature = "list-profile")]
     if let Some(started) = read_started {
         crate::list_diag::record_nand_read(
