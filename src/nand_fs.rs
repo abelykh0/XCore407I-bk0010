@@ -114,7 +114,6 @@ fn fsmc_eccr2() -> *const u32 {
 
 const FSMC_SR_FEMPT: u32 = 1 << 6;
 const FSMC_PCR_ECCEN: u32 = 1 << 6;
-const FSMC_PCR_ECCEN: u32 = 1 << 6;
 const FSMC_ECC_CHUNK_SIZE: usize = 512;
 const FSMC_ECC_CHUNKS_PER_PAGE: usize = PAGE_SIZE / FSMC_ECC_CHUNK_SIZE;
 
