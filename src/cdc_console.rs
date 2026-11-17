@@ -39,6 +39,8 @@ static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
 const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+#[cfg(feature = "list-profile")]
+const HELP_WRITE_PROFILE: &[u8] = b"  WRITE PROFILE Show last ZMODEM receive timing breakdown\r\n";
 #[cfg(feature = "nand-diagnostics")]
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
@@ -200,6 +202,52 @@ fn write_cdc_diagnostics() {
         write_decimal(banner_rx as usize);
     }
     write_status(b"\r\n");
+}
+
+#[cfg(feature = "list-profile")]
+fn write_write_profile(zmodem: &cdc_zmodem::State) {
+    let p = crate::write_diag::snapshot();
+    let (error, detail, wire_received, wire_consumed) = zmodem.protocol_diagnostics();
+    let dhara_residual = p.dhara_write_us
+        .saturating_sub(p.nand_program_us)
+        .saturating_sub(p.nand_erase_us);
+    write_status(b"\r\nWRITE PROFILE (last completed receive)\r\n");
+    write_status(b"Transfer: "); write_decimal((p.transfer_us / 1_000) as usize);
+    write_status(b" ms  ZMODEM wire RX/consumed: "); write_decimal(wire_received as usize);
+    write_status(b"/"); write_decimal(wire_consumed as usize); write_status(b" bytes\r\n");
+    write_status(b"ZMODEM poll: "); write_decimal(p.zmodem_poll_calls as usize);
+    write_status(b" calls, "); write_decimal(p.zmodem_poll_us as usize); write_status(b" us; submit: ");
+    write_decimal(p.zmodem_submit_calls as usize); write_status(b" calls, ");
+    write_decimal(p.zmodem_submit_us as usize); write_status(b" us\r\n");
+    write_status(b"LittleFS create: "); write_decimal(p.lfs_create_us as usize); write_status(b" us; append writes: ");
+    write_decimal(p.lfs_append_calls as usize); write_status(b" calls / ");
+    write_decimal(p.lfs_append_us as usize); write_status(b" us total\r\n");
+    write_status(b"  append open: "); write_decimal(p.lfs_open_us as usize);
+    write_status(b" us; write callback: "); write_decimal(p.lfs_callback_us as usize);
+    write_status(b" us; close: "); write_decimal(p.lfs_close_us as usize);
+    write_status(b" us; commit/rename: "); write_decimal(p.lfs_commit_us as usize); write_status(b" us\r\n");
+    write_status(b"LittleFS write: ");
+    write_decimal(p.lfs_write_calls as usize); write_status(b" calls / ");
+    write_decimal(p.lfs_write_bytes as usize); write_status(b" bytes / ");
+    write_decimal(p.lfs_write_us as usize); write_status(b" us\r\n");
+    write_status(b"Dhara map_write: "); write_decimal(p.dhara_write_calls as usize);
+    write_status(b" calls / "); write_decimal(p.dhara_write_pages as usize);
+    write_status(b" pages / "); write_decimal(p.dhara_write_us as usize); write_status(b" us\r\n");
+    write_status(b"NAND page program: "); write_decimal(p.nand_program_calls as usize);
+    write_status(b" calls / "); write_decimal(p.nand_program_us as usize);
+    write_status(b" us; FSMC FIFO waits: "); write_decimal(p.nand_fifo_wait_us as usize);
+    write_status(b" us; NAND busy: "); write_decimal(p.nand_busy_wait_us as usize); write_status(b" us\r\n");
+    let ecc_fsmc_us = p.nand_program_us
+        .saturating_sub(p.nand_fifo_wait_us)
+        .saturating_sub(p.nand_busy_wait_us);
+    write_status(b"  ECC/FSMC data feed + setup (derived): ");
+    write_decimal(ecc_fsmc_us as usize); write_status(b" us\r\n");
+    write_status(b"NAND erase: "); write_decimal(p.nand_erase_calls as usize);
+    write_status(b" calls / "); write_decimal(p.nand_erase_us as usize); write_status(b" us\r\n");
+    write_status(b"Dhara residual (map time minus program/erase): ");
+    write_decimal(dhara_residual as usize); write_status(b" us (approx.)\r\n");
+    if error != 0 { write_status(b"Last protocol error: "); write_decimal(error as usize); write_status(b" detail="); write_decimal(detail as usize); write_status(b"\r\n"); }
+    write_status(b"Times are accumulated per operation; LittleFS/Dhara/NAND rows overlap and must not be added.\r\n> ");
 }
 
 /// Print the exact non-destructive storage initialization or mount failure.
@@ -1096,6 +1144,8 @@ pub fn service(
                         write_status(HELP);
                         #[cfg(feature = "nand-diagnostics")]
                         write_status(HELP_NAND_DIAGNOSTICS);
+                        #[cfg(feature = "list-profile")]
+                        write_status(HELP_WRITE_PROFILE);
                     } else if line.len() > 5
                         && line[..5].eq_ignore_ascii_case(b"SEND ")
                     {
@@ -1113,6 +1163,9 @@ pub fn service(
                         }
                     } else if command_is(line, b"SEND") {
                         write_status(b"\r\nUsage: SEND filename\r\n> ");
+                    } else if cfg!(feature = "list-profile") && command_is(line, b"WRITE PROFILE") {
+                        #[cfg(feature = "list-profile")]
+                        write_write_profile(zmodem);
                     } else if command_is(line, b"STATUS") {
                         write_status(if fs.is_some() {
                             STATUS_MOUNTED

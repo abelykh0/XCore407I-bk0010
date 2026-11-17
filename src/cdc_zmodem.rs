@@ -136,7 +136,10 @@ impl State {
     }
 
     pub fn active(&self) -> bool {
-        self.receiver.is_some() || self.sender.is_some() || self.session_complete_pending
+        self.receiver.is_some()
+            || self.sender.is_some()
+            || self.session_complete_pending
+            || self.file_allocation.is_open()
     }
 
     /// Discard trailing sender bytes after a failed session so they cannot
@@ -287,6 +290,20 @@ fn create_new_file(
 }
 
 fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
+    if state.file_allocation.is_open() {
+        #[cfg(feature = "list-profile")]
+        let close_started = crate::write_diag::cycle_count();
+        if unsafe { state.file_allocation.close(fs) }.is_err() {
+            if state.last_error == 0 {
+                state.last_error = 8;
+            }
+            return;
+        }
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_lfs_append_close(
+            crate::write_diag::cycle_count().wrapping_sub(close_started),
+        );
+    }
     if state.final_path_len != 0 {
         if let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) {
             if fs.remove(path).is_err() && state.last_error == 0 {
@@ -307,7 +324,25 @@ fn create_temp_file(
     if fs.exists(path) {
         fs.remove(path).map_err(|_| 2)?;
     }
-    create_new_file(fs, allocation, TEMP_PATH).map_err(|stage| if stage == 1 { 3 } else { 4 })
+    create_new_file(fs, allocation, TEMP_PATH).map_err(|stage| if stage == 1 { 3 } else { 4 })?;
+    #[cfg(feature = "list-profile")]
+    let open_started = crate::write_diag::cycle_count();
+    let open_result = unsafe {
+        allocation.open_with_options(
+            fs,
+            |options| options.write(true),
+            path,
+        )
+    };
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_lfs_append_open(
+        crate::write_diag::cycle_count().wrapping_sub(open_started),
+    );
+    if open_result.is_err() {
+        let _ = fs.remove(path);
+        return Err(7);
+    }
+    Ok(())
 }
 
 fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Result<(), (u32, i32)> {
@@ -320,6 +355,15 @@ fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Re
     if fs.exists(final_path) {
         return Err((3, 0));
     }
+    if state.file_allocation.is_open() {
+        #[cfg(feature = "list-profile")]
+        let close_started = crate::write_diag::cycle_count();
+        unsafe { state.file_allocation.close(fs) }.map_err(|error| (5, error.code()))?;
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_lfs_append_close(
+            crate::write_diag::cycle_count().wrapping_sub(close_started),
+        );
+    }
     fs.rename(temp, final_path).map_err(|error| (4, error.code()))?;
     state.final_path_len = 0;
     Ok(())
@@ -330,23 +374,30 @@ fn append_file(
     allocation: &mut FileAllocation<ActiveStorage>,
     data: &[u8],
 ) -> Result<(), i32> {
-    let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::IO.code())?;
-    fs.open_file_with_options_and_then_with_allocation(
-        |options| options.write(true).append(true),
-        path,
-        allocation,
-        |file| {
-            let mut written = 0usize;
-            while written < data.len() {
-                let count = file.write(&data[written..])?;
-                if count == 0 {
-                    return Err(LfsError::IO);
-                }
-                written += count;
-            }
-            file.flush()
-        },
-    ).map_err(|error| error.code())
+    #[cfg(feature = "list-profile")]
+    let append_started = crate::write_diag::cycle_count();
+    let mut written = 0usize;
+    while written < data.len() {
+        #[cfg(feature = "list-profile")]
+        let write_started = crate::write_diag::cycle_count();
+        let count = unsafe { allocation.write(fs, &data[written..]) }
+            .map_err(|error| error.code())?;
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_lfs_write(
+            crate::write_diag::cycle_count().wrapping_sub(write_started), count,
+        );
+        if count == 0 {
+            return Err(LfsError::IO.code());
+        }
+        written += count;
+    }
+    // littlefs2's Write::flush is intentionally a no-op. The persistent
+    // handle is synchronized once, when it is closed at commit/abort.
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_lfs_append_callback(
+        crate::write_diag::cycle_count().wrapping_sub(append_started),
+    );
+    Ok(())
 }
 
 /// Create a deterministic 4 KiB file and read it twice through LittleFS/Dhara:
@@ -770,7 +821,14 @@ pub fn service(
             }
         }
 
-        match receiver.poll() {
+        #[cfg(feature = "list-profile")]
+        let poll_started = crate::write_diag::cycle_count();
+        let action = receiver.poll();
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_zmodem_poll(
+            crate::write_diag::cycle_count().wrapping_sub(poll_started),
+        );
+        match action {
             Action::WriteWire(bytes) => {
                 state.response_queued = true;
                 let bytes_len = bytes.len();
@@ -853,7 +911,18 @@ pub fn service(
                     Some(len) => match Path::from_bytes_with_nul(&state.final_path[..len]) {
                         Err(_) => Some(2),
                         Ok(path) if fs.exists(path) => Some(3),
-                        Ok(_) => create_temp_file(fs, &mut state.file_allocation).err().map(|stage| stage + 3),
+                        Ok(_) => {
+                            #[cfg(feature = "list-profile")]
+                            crate::write_diag::begin();
+                            #[cfg(feature = "list-profile")]
+                            let create_started = crate::write_diag::cycle_count();
+                            let create_result = create_temp_file(fs, &mut state.file_allocation);
+                            #[cfg(feature = "list-profile")]
+                            crate::write_diag::record_lfs_create(
+                                crate::write_diag::cycle_count().wrapping_sub(create_started),
+                            );
+                            create_result.err().map(|stage| stage + 3)
+                        },
                     },
                 };
                 if rejection.is_none() {
@@ -895,7 +964,14 @@ pub fn service(
                 }
             }
             Action::Event(Event::FileCompleted) => {
-                if let Err((stage, error)) = commit_temp_file(fs, state) {
+                #[cfg(feature = "list-profile")]
+                let commit_started = crate::write_diag::cycle_count();
+                let commit_result = commit_temp_file(fs, state);
+                #[cfg(feature = "list-profile")]
+                crate::write_diag::record_lfs_commit(
+                    crate::write_diag::cycle_count().wrapping_sub(commit_started),
+                );
+                if let Err((stage, error)) = commit_result {
                     state.last_error = 5;
                     state.commit_stage = stage;
                     state.commit_lfs_error = error;
@@ -914,9 +990,12 @@ pub fn service(
                 // Defer the console message until the ZMODEM close response
                 // has been queued and the receiver is torn down. The CDC
                 // endpoint still carries protocol traffic at this point.
-                state.receive_elapsed_seconds =
-                    rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms) / 1_000;
+                let receive_elapsed_ms =
+                    rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
+                state.receive_elapsed_seconds = receive_elapsed_ms / 1_000;
                 state.receive_file_committed = true;
+                #[cfg(feature = "list-profile")]
+                crate::write_diag::finish(receive_elapsed_ms);
             }
             Action::Event(Event::SessionCompleted) => {
                 // Receiver::poll() surfaces events before queued wire bytes.
@@ -962,7 +1041,14 @@ pub fn service(
                 if state.wire_pos < state.wire_len {
                     let input = &state.wire[state.wire_pos..state.wire_len];
 
-                    match receiver.submit_wire(input) {
+                    #[cfg(feature = "list-profile")]
+                    let submit_started = crate::write_diag::cycle_count();
+                    let submit_result = receiver.submit_wire(input);
+                    #[cfg(feature = "list-profile")]
+                    crate::write_diag::record_zmodem_submit(
+                        crate::write_diag::cycle_count().wrapping_sub(submit_started),
+                    );
+                    match submit_result {
                         Ok(consumed) if consumed != 0 => {
                             state.input_accepted = true;
                             state.wire_consumed_bytes = state.wire_consumed_bytes.wrapping_add(consumed as u32);

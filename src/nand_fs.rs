@@ -399,6 +399,8 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
 }
 
 pub(crate) fn erase_physical_block(block: u16) -> bool {
+    #[cfg(feature = "list-profile")]
+    let erase_started = crate::write_diag::cycle_count();
     let first_page = block as u32 * PAGES_PER_BLOCK;
     command(0x60);
     address(first_page as u8);
@@ -414,6 +416,10 @@ pub(crate) fn erase_physical_block(block: u16) -> bool {
         record_nand_device_failure(3, block as u32, status as u32);
         return false;
     }
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_nand_erase(
+        crate::write_diag::cycle_count().wrapping_sub(erase_started),
+    );
     true
 }
 
@@ -572,6 +578,12 @@ fn ecc_data_fingerprint(data: &[u8]) -> u32 {
 /// Program a full page and store four FSMC-generated 512-byte ECC values.
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
+    #[cfg(feature = "list-profile")]
+    let program_started = crate::write_diag::cycle_count();
+    #[cfg(feature = "list-profile")]
+    let mut fifo_wait_cycles = 0u32;
+    #[cfg(feature = "list-profile")]
+    let busy_wait_cycles;
 
     command(0x80);
     address(0);
@@ -621,7 +633,11 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if sequence_trace_enabled {
             sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(fsmc_sr2()) };
         }
+        #[cfg(feature = "list-profile")]
+        let fifo_started = crate::write_diag::cycle_count();
         let (fifo_empty, fifo_polls) = wait_fsmc_fifo_empty();
+        #[cfg(feature = "list-profile")]
+        { fifo_wait_cycles = fifo_wait_cycles.wrapping_add(crate::write_diag::cycle_count().wrapping_sub(fifo_started)); }
         if sequence_trace_enabled {
             sequence_trace.fifo_poll_count[chunk_index] = fifo_polls;
         }
@@ -666,7 +682,11 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if sequence_trace_enabled {
         sequence_trace.oob_status_before_wait = unsafe { read_volatile(fsmc_sr2()) };
     }
+    #[cfg(feature = "list-profile")]
+    let oob_fifo_started = crate::write_diag::cycle_count();
     let (oob_fifo_empty, oob_fifo_polls) = wait_fsmc_fifo_empty();
+    #[cfg(feature = "list-profile")]
+    { fifo_wait_cycles = fifo_wait_cycles.wrapping_add(crate::write_diag::cycle_count().wrapping_sub(oob_fifo_started)); }
     if sequence_trace_enabled {
         sequence_trace.oob_fifo_poll_count = oob_fifo_polls;
     }
@@ -681,7 +701,12 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         sequence_trace.flags |= 1;
     }
     command(0x10);
-    if !wait_ready_rb() {
+    #[cfg(feature = "list-profile")]
+    let busy_started = crate::write_diag::cycle_count();
+    let ready = wait_ready_rb();
+    #[cfg(feature = "list-profile")]
+    { busy_wait_cycles = crate::write_diag::cycle_count().wrapping_sub(busy_started); }
+    if !ready {
         record_nand_device_failure(4, page, 0);
         return false;
     }
@@ -691,6 +716,12 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         record_nand_device_failure(5, page, status as u32);
         return false;
     }
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_nand_program(
+        crate::write_diag::cycle_count().wrapping_sub(program_started),
+        fifo_wait_cycles,
+        busy_wait_cycles,
+    );
     if sequence_trace_enabled {
         sequence_trace.flags |= 1 << 1; // NAND program-confirm/status succeeded.
         if ECC_SEQUENCE_TRACE_CAPTURED.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed).is_ok() {

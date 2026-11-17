@@ -610,6 +610,7 @@ pub struct FileAllocation<S: driver::Storage> {
     cache: UnsafeCell<Bytes<S::CACHE_SIZE>>,
     state: ll::lfs_file_t,
     config: ll::lfs_file_config,
+    opened: bool,
 }
 
 impl<S: driver::Storage> Default for FileAllocation<S> {
@@ -623,6 +624,101 @@ impl<S: driver::Storage> FileAllocation<S> {
         let cache_size: u32 = <S as driver::Storage>::CACHE_SIZE::to_u32();
         debug_assert!(cache_size > 0);
         unsafe { mem::MaybeUninit::zeroed().assume_init() }
+    }
+
+    /// Open a file using this allocation and keep it open across calls.
+    ///
+    /// The allocation must remain at a stable address until close succeeds.
+    /// Unlike the closure-based API, this explicitly managed API does not close
+    /// the file automatically.
+    /// # Safety
+    /// The allocation must remain at a stable address until close succeeds,
+    /// and the filesystem must remain mounted for the entire open lifetime.
+    pub unsafe fn open_with_options(
+        &mut self,
+        fs: &Filesystem<'_, S>,
+        o: impl FnOnce(&mut OpenOptions) -> &OpenOptions,
+        path: &Path,
+    ) -> Result<()> {
+        if self.opened {
+            return Err(Error::IO);
+        }
+
+        let mut options = OpenOptions::new();
+        o(&mut options);
+        self.config.buffer = self.cache.get() as *mut _;
+        let return_code = unsafe {
+            ll::lfs_file_opencfg(
+                &mut fs.alloc.borrow_mut().state,
+                addr_of_mut!(self.state),
+                path.as_ptr(),
+                options.0.bits(),
+                addr_of!(self.config),
+            )
+        };
+        result_from((), return_code)?;
+        self.opened = true;
+        Ok(())
+    }
+
+    /// Write bytes to a file opened with open_with_options.
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn write(&mut self, fs: &Filesystem<'_, S>, buf: &[u8]) -> Result<usize> {
+        if !self.opened {
+            return Err(Error::IO);
+        }
+        let return_code = unsafe {
+            ll::lfs_file_write(
+                &mut fs.alloc.borrow_mut().state,
+                addr_of_mut!(self.state),
+                buf.as_ptr() as *const c_void,
+                buf.len() as u32,
+            )
+        };
+        u32_result(return_code).map(|n| n as usize)
+    }
+
+    /// Synchronize an open file without closing it.
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn sync(&mut self, fs: &Filesystem<'_, S>) -> Result<()> {
+        if !self.opened {
+            return Err(Error::IO);
+        }
+        let return_code = unsafe {
+            ll::lfs_file_sync(
+                &mut fs.alloc.borrow_mut().state,
+                addr_of_mut!(self.state),
+            )
+        };
+        result_from((), return_code)
+    }
+
+    /// Synchronize and close the file. A failed close leaves it marked open,
+    /// allowing the caller to report the error rather than reuse its state.
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn close(&mut self, fs: &Filesystem<'_, S>) -> Result<()> {
+        if !self.opened {
+            return Err(Error::IO);
+        }
+        let return_code = unsafe {
+            ll::lfs_file_close(
+                &mut fs.alloc.borrow_mut().state,
+                addr_of_mut!(self.state),
+            )
+        };
+        result_from((), return_code)?;
+        self.opened = false;
+        Ok(())
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.opened
     }
 }
 
