@@ -22,12 +22,19 @@ const _: () = assert!(core::mem::size_of::<Receiver>() <= RECEIVER_STORAGE_CAPAC
 const TRANSFER_TIMEOUT_MS: u32 = 60_000;
 const TEMP_PATH: &[u8] = b"/.zmodem-upload\0";
 
+#[inline]
+fn rtc_now_millis() -> u32 {
+    let rtc = unsafe { &*stm32f4::stm32f407::RTC::ptr() };
+    crate::rtc::unix_time_millis(rtc)
+}
+
 pub struct State {
     receiver: Option<NonNull<Receiver>>,
     sender: Option<Sender>,
     send_path: [u8; NAME_CAPACITY + 2],
     send_path_len: usize,
     send_size: u32,
+    send_started_rtc_ms: u32,
     send_buffer: [u8; 1024],
     send_wire: [u8; WIRE_CAPACITY],
     send_wire_len: usize,
@@ -37,6 +44,10 @@ pub struct State {
     file_allocation: FileAllocation<ActiveStorage>,
     final_path: [u8; NAME_CAPACITY + 2],
     final_path_len: usize,
+    receive_name: [u8; NAME_CAPACITY],
+    receive_name_len: usize,
+    receive_size: u32,
+    receive_started_rtc_ms: u32,
     wire: [u8; WIRE_CAPACITY],
     wire_len: usize,
     wire_pos: usize,
@@ -75,6 +86,7 @@ impl State {
             send_path: [0; NAME_CAPACITY + 2],
             send_path_len: 0,
             send_size: 0,
+            send_started_rtc_ms: 0,
             send_buffer: [0; 1024],
             send_wire: [0; WIRE_CAPACITY],
             send_wire_len: 0,
@@ -84,6 +96,10 @@ impl State {
             file_allocation: FileAllocation::new(),
             final_path: [0; NAME_CAPACITY + 2],
             final_path_len: 0,
+            receive_name: [0; NAME_CAPACITY],
+            receive_name_len: 0,
+            receive_size: 0,
+            receive_started_rtc_ms: 0,
             wire: [0; WIRE_CAPACITY],
             wire_len: 0,
             wire_pos: 0,
@@ -198,6 +214,8 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     state.send_wire_len = 0;
     state.send_wire_pos = 0;
     state.final_path_len = 0;
+    state.receive_name_len = 0;
+    state.receive_size = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
     state.transfer_started = false;
@@ -399,6 +417,9 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     receiver.set_manual_file_accept(true);
     let receiver = NonNull::from(receiver);
     state.final_path_len = 0;
+    state.receive_name_len = 0;
+    state.receive_size = 0;
+    state.receive_started_rtc_ms = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
     state.last_activity_ms = now_ms;
@@ -452,6 +473,7 @@ pub fn start_send(
     state.send_path = path_bytes;
     state.send_path_len = path_len;
     state.send_size = size;
+    state.send_started_rtc_ms = rtc_now_millis();
     state.send_wire_len = 0;
     state.send_wire_pos = 0;
     state.send_last_activity_ms = now_ms;
@@ -470,9 +492,11 @@ fn service_sender(
     let Some(mut sender) = state.sender.take() else {
         if state.session_complete_pending {
             state.session_complete_pending = false;
+            let elapsed_ms = rtc_now_millis().wrapping_sub(state.send_started_rtc_ms);
             super::cdc_console::write_send_complete(
                 &state.send_path[1..state.send_path_len - 1],
                 state.send_size,
+                elapsed_ms / 1_000,
             );
             state.send_path_len = 0;
             state.send_wire_len = 0;
@@ -734,9 +758,18 @@ pub fn service(
                     // but the receiver's final ZFIN reply must reach CDC IN
                     // before the receiver state/storage can be released.
                     finished = true;
-                    super::cdc_console::write_status(
-                        b"\r\nZMODEM upload complete\r\n> ",
-                    );
+                    if state.receive_name_len != 0 && !state.transfer_failed {
+                        let elapsed_ms = rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
+                        super::cdc_console::write_receive_complete(
+                            &state.receive_name[..state.receive_name_len],
+                            state.receive_size,
+                            elapsed_ms / 1_000,
+                        );
+                    } else {
+                        super::cdc_console::write_status(
+                            b"\r\nZMODEM upload complete\r\n> ",
+                        );
+                    }
                     break;
                 }
             }
@@ -772,6 +805,7 @@ pub fn service(
                     let _ = receiver.abort();
                     break;
                 }
+                state.receive_size = state.receive_size.wrapping_add(bytes_len as u32);
                 if receiver.file_written(bytes_len).is_err() {
                     state.last_error = 3;
                     super::cdc_console::write_status(
@@ -805,6 +839,10 @@ pub fn service(
                         let _ = receiver.abort();
                         break;
                     }
+                    state.receive_name_len = info.name.len();
+                    state.receive_name[..state.receive_name_len].copy_from_slice(info.name);
+                    state.receive_size = 0;
+                    state.receive_started_rtc_ms = rtc_now_millis();
                 } else {
                     state.final_path_len = 0;
                     let message: &[u8] = match rejection.unwrap_or(0) {
@@ -990,6 +1028,8 @@ pub fn service(
         }
         state.receiver = None;
         state.final_path_len = 0;
+        state.receive_name_len = 0;
+        state.receive_size = 0;
         state.transfer_failed = false;
         state.transfer_started = false;
         state.timeout_pending = false;
