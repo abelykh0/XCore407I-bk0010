@@ -153,10 +153,18 @@ impl BkEmulatorAudio {
 }
 
 /// Copy one USB microframe of pre-rendered PCM. Missing samples are zero-filled.
+///
+/// # Safety
+/// If non-null and sufficiently large, `buffer` must point to a valid,
+/// writable allocation of at least `capacity` bytes for the duration of this call.
 pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     if buffer.is_null() || capacity < PACKET_BYTES as u16 {
         return 0;
     }
+
+    // The caller supplies the DMA packet buffer; validate its pointer and
+    // declared extent once, then keep all packet writes within this slice.
+    let buffer = unsafe { core::slice::from_raw_parts_mut(buffer, capacity as usize) };
 
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
@@ -173,11 +181,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         } else {
             0
         };
-        unsafe {
-            buffer.add(index * 2)
-                .cast::<i16>()
-                .write_unaligned(sample.to_le());
-        }
+        let bytes = sample.to_le_bytes();
+        buffer[index * 2] = bytes[0];
+        buffer[index * 2 + 1] = bytes[1];
     }
     PCM_TAIL.store(tail, Ordering::Release);
     PACKET_BYTES as u16
