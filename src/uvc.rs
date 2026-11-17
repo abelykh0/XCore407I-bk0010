@@ -6,7 +6,7 @@
 //! The USB controller glue must expose interface 0/1 and a high-bandwidth HS
 //! ISO IN endpoint at `ENDPOINT_IN`.
 
-use crate::camera::{Nv12DemoImage, HEIGHT, WIDTH};
+use crate::camera::Nv12DemoImage;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 pub const CONTROL_INTERFACE: u8 = 0;
