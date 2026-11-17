@@ -922,7 +922,7 @@ fn main() -> ! {
             || INIT_STATE.load(Ordering::Acquire) != INIT_IDLE;
         if emulator_paused != emulator_was_paused {
             pacing_start_ms = TICKS.load(Ordering::Relaxed);
-            pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
+            pacing_start_cycles = if emulator_enabled { bk_timing_cycles() } else { 0 };
             emulator_was_paused = emulator_paused;
         }
 
@@ -940,7 +940,7 @@ fn main() -> ! {
             let elapsed_dwt = now_dwt.wrapping_sub(diagnostic_last_dwt);
             if elapsed_dwt >= DWT_CYCLES_PER_SECOND {
                 if !emulator_enabled { continue; }
-                let now_pdp = unsafe { bk_timing_cycles() };
+                let now_pdp = bk_timing_cycles();
                 let elapsed_pdp = now_pdp.wrapping_sub(diagnostic_last_pdp);
                 let pdp_cycles_per_second =
                     (elapsed_pdp as u64 * DWT_CYCLES_PER_SECOND as u64
@@ -958,7 +958,7 @@ fn main() -> ! {
         if !emulator_paused {
             let now_ms = TICKS.load(Ordering::Relaxed);
             let elapsed_ms = now_ms.wrapping_sub(pacing_start_ms);
-            let now_cycles = unsafe { bk_timing_cycles() };
+            let now_cycles = bk_timing_cycles();
             let elapsed_cycles = now_cycles.wrapping_sub(pacing_start_cycles);
 
             // Rebase every second so both wrapping counters remain unambiguous.
