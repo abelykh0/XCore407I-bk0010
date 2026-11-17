@@ -38,7 +38,9 @@ static CDC_BANNER_COMPLETE_RX_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  WRITE PROFILE Show last ZMODEM receive timing breakdown\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+#[cfg(feature = "list-profile")]
+const HELP_WRITE_PROFILE: &[u8] = b"  WRITE PROFILE Show last ZMODEM receive timing breakdown\\r\\n";
 #[cfg(feature = "nand-diagnostics")]
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
@@ -217,7 +219,10 @@ fn write_write_profile(zmodem: &cdc_zmodem::State) {
     write_status(b" calls, "); write_decimal(p.zmodem_poll_us as usize); write_status(b" us; submit: ");
     write_decimal(p.zmodem_submit_calls as usize); write_status(b" calls, ");
     write_decimal(p.zmodem_submit_us as usize); write_status(b" us\r\n");
-    write_status(b"LittleFS append operation (includes write/flush): "); write_decimal(p.lfs_append_us as usize); write_status(b" us; write: ");
+    write_status(b"LittleFS create: "); write_decimal(p.lfs_create_us as usize); write_status(b" us; append operation: ");
+    write_decimal(p.lfs_append_us as usize); write_status(b" us; commit/rename: ");
+    write_decimal(p.lfs_commit_us as usize); write_status(b" us\\r\\n");
+    write_status(b"LittleFS write: ");
     write_decimal(p.lfs_write_calls as usize); write_status(b" calls / ");
     write_decimal(p.lfs_write_bytes as usize); write_status(b" bytes / ");
     write_decimal(p.lfs_write_us as usize); write_status(b" us; flush: ");
@@ -1136,6 +1141,8 @@ pub fn service(
                         write_status(HELP);
                         #[cfg(feature = "nand-diagnostics")]
                         write_status(HELP_NAND_DIAGNOSTICS);
+                        #[cfg(feature = "list-profile")]
+                        write_status(HELP_WRITE_PROFILE);
                     } else if line.len() > 5
                         && line[..5].eq_ignore_ascii_case(b"SEND ")
                     {
