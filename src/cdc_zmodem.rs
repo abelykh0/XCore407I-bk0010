@@ -1038,6 +1038,7 @@ pub fn service(
                 elapsed_ms / 1_000,
             );
         }
+        let file_committed = state.receive_file_committed;
         state.final_path_len = 0;
         state.receive_name_len = 0;
         state.receive_size = 0;
@@ -1046,7 +1047,7 @@ pub fn service(
         state.transfer_started = false;
         state.timeout_pending = false;
         state.session_complete_pending = false;
-        if failed || state.receive_file_committed {
+        if failed || file_committed {
             // The peer may send the final ASCII "OO" just after our ZFIN
             // reply. Keep it out of the console even when it arrives late.
             state.discard_input_until_ms = now_ms.wrapping_add(1_000);
