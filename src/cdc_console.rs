@@ -1661,9 +1661,9 @@ pub fn service(
                             write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"LIST PROFILE") || command_is(line, b"LIST PROFILE SHORT") {
-                        if let Some(fs) = fs {
+                        if let Some(_fs) = fs {
                             #[cfg(feature = "list-profile")]
-                            list_files(fs, !command_is(line, b"LIST PROFILE SHORT"), true);
+                            list_files(_fs, !command_is(line, b"LIST PROFILE SHORT"), true);
                             #[cfg(not(feature = "list-profile"))]
                             write_status(b"LIST PROFILE requires firmware built with --features list-profile.\r\n> ");
                         } else {

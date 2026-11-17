@@ -77,7 +77,7 @@ where
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
-use crate::nand_ecc::{correct_ecc_chunk, ecc_software_512, ecc_software_512_fsmc};
+use crate::nand_ecc::{correct_ecc_chunk, ecc_software_512_fsmc};
 
 use littlefs2::{
     fs::{Allocation as LittleFsAllocation, Filesystem},
