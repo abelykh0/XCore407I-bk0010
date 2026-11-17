@@ -90,6 +90,17 @@ pub(crate) fn record_lfs_append(total: u32, open: u32, callback: u32, close: u32
     add(&LFS_CALLBACK_US, cycles_to_us(callback));
     add(&LFS_CLOSE_US, cycles_to_us(close));
 }
+pub(crate) fn record_lfs_append_open(cycles: u32) {
+    add(&LFS_OPEN_US, cycles_to_us(cycles));
+}
+pub(crate) fn record_lfs_append_callback(cycles: u32) {
+    add(&LFS_APPEND_CALLS, 1);
+    add(&LFS_APPEND_US, cycles_to_us(cycles));
+    add(&LFS_CALLBACK_US, cycles_to_us(cycles));
+}
+pub(crate) fn record_lfs_append_close(cycles: u32) {
+    add(&LFS_CLOSE_US, cycles_to_us(cycles));
+}
 pub(crate) fn record_lfs_commit(cycles: u32) { add(&LFS_COMMIT_US, cycles_to_us(cycles)); }
 
 pub(crate) fn record_lfs_write(cycles: u32, bytes: usize) {
