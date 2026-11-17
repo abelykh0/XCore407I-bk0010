@@ -716,6 +716,12 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         record_nand_device_failure(5, page, status as u32);
         return false;
     }
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_nand_program(
+        crate::write_diag::cycle_count().wrapping_sub(program_started),
+        fifo_wait_cycles,
+        busy_wait_cycles,
+    );
     if sequence_trace_enabled {
         sequence_trace.flags |= 1 << 1; // NAND program-confirm/status succeeded.
         if ECC_SEQUENCE_TRACE_CAPTURED.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
@@ -798,12 +804,6 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             }
         }
     }
-    #[cfg(feature = "list-profile")]
-    crate::write_diag::record_nand_program(
-        crate::write_diag::cycle_count().wrapping_sub(program_started),
-        fifo_wait_cycles,
-        busy_wait_cycles,
-    );
     true
 }
 
