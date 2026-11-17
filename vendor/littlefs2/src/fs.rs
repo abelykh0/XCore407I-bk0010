@@ -1025,23 +1025,10 @@ impl<S: driver::Storage> ReadDir<'_, '_, S> {
     /// Read the next directory entry without looking up its file size.
     /// The returned metadata size is zero.
     pub fn next_without_size(&mut self) -> Option<Result<DirEntry>> {
-        self.read_next(false, None)
+        self.read_next(false)
     }
 
-    /// Read the next entry using a caller-owned sequential metadata index.
-    /// The index requires 1026 words and may be reused for subsequent entries.
-    pub fn next_without_size_sequential(
-        &mut self,
-        index: &mut [u32; 1026],
-    ) -> Option<Result<DirEntry>> {
-        self.read_next(false, Some(index))
-    }
-
-    fn read_next(
-        &mut self,
-        include_size: bool,
-        index: Option<&mut [u32; 1026]>,
-    ) -> Option<Result<DirEntry>> {
+    fn read_next(&mut self, include_size: bool) -> Option<Result<DirEntry>> {
         let mut info: ll::lfs_info = unsafe { mem::MaybeUninit::zeroed().assume_init() };
         let return_code = unsafe {
             if include_size {
@@ -1049,13 +1036,6 @@ impl<S: driver::Storage> ReadDir<'_, '_, S> {
                     &mut self.fs.alloc.borrow_mut().state,
                     addr_of_mut!((*(*self.alloc.borrow_mut())).state),
                     &mut info,
-                )
-            } else if let Some(index) = index {
-                ll::lfs_dir_read_short_sequential(
-                    &mut self.fs.alloc.borrow_mut().state,
-                    addr_of_mut!((*(*self.alloc.borrow_mut())).state),
-                    &mut info,
-                    index.as_mut_ptr(),
                 )
             } else {
                 ll::lfs_dir_read_short(
@@ -1083,7 +1063,7 @@ impl<S: driver::Storage> Iterator for ReadDir<'_, '_, S> {
     type Item = Result<DirEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.read_next(true, None)
+        self.read_next(true)
     }
 }
 
