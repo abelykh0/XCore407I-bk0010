@@ -102,3 +102,9 @@ void tud_umount_cb(void) {
   xcore_tud_audio_stop();
 }
 #endif
+
+// Referenced by the UVC registration object to force this callback object
+// out of the static archive. TinyUSB's weak callback defaults otherwise
+// satisfy its own references before this object is extracted.
+void xcore_audio_uac2_link_anchor(void) {
+}

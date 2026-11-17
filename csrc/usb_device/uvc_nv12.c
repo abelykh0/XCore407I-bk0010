@@ -155,6 +155,8 @@ static usbd_class_driver_t const xcore_class_drivers[] = {
 };
 
 usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
+  // Ensure the separate UAC2 callback object is extracted from the static archive.
+  xcore_audio_uac2_link_anchor();
   *driver_count = (uint8_t) (sizeof(xcore_class_drivers) / sizeof(xcore_class_drivers[0]));
   return xcore_class_drivers;
 }
