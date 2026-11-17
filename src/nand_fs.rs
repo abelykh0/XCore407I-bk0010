@@ -1316,7 +1316,7 @@ pub(crate) fn configure_fsmc() {
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
         let pcr2 = fsmc_pcr2();
-        // First timing experiment: reduce common-space MEMWAIT from 8 to 5 HCLK cycles.
+        // First timing experiment: reduce the common-space MEMWAIT field from 8 to 5.
         // Keep MEMSET, MEMHOLD, MEMHIZ, and all attribute-space timings unchanged.
         let common_timing = 4 | (5 << 8) | (4 << 16) | (2 << 24);
         // RM0090 §36.6.5: the final NAND address byte is written through
