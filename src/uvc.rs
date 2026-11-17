@@ -13,9 +13,12 @@ pub const CONTROL_INTERFACE: u8 = 0;
 pub const STREAMING_INTERFACE: u8 = 1;
 pub const ENDPOINT_IN: u8 = 0x81;
 pub const MAX_PACKET_SIZE: u16 = 768;
-// Three USB transactions carry one UVC payload transfer per high-speed
-// microframe: the first has the UVC header and the others continue image data.
 pub const ISO_PACKETS_PER_MICROFRAME: u8 = 3;
+pub const VS_TOTAL_LENGTH: u16 = 77;
+pub const NV12_GUID: [u8; 16] = [
+    0x4e, 0x56, 0x31, 0x32, 0x00, 0x00, 0x10, 0x00,
+    0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+];
 // USB batch capacity is transport-sized; the camera renderer fills it across
 // as many source-row segments as needed. One transfer header occupies four bytes.
 pub const ISO_BATCH_BYTES: usize =
@@ -380,70 +383,4 @@ fn normalize_stream_control(d: &mut [u8; PROBE_LENGTH]) {
     d[26..34].copy_from_slice(&canonical[26..34]);
 }
 
-/// Build the 158-byte configuration descriptor used by the original
-/// two-interface UVC function. Returns None if the caller's buffer is small.
-pub fn configuration_descriptor(out: &mut [u8]) -> Option<usize> {
-    let mut w = DescriptorWriter { out, pos: 0 };
-    // Configuration and Video Interface Association.
-    w.desc(&[9, 2, 158, 0, 2, 1, 0, 0x80, 50])?;
-    w.desc(&[8, 0x0b, 0, 2, 0x0e, 3, 0, 0])?;
-    // VideoControl interface and UVC 1.1 header, input and output terminals.
-    w.desc(&[9, 4, 0, 0, 0, 0x0e, 1, 0, 0])?;
-    w.desc(&[13, 0x24, 1, 0x10, 0x01, 30, 0, 0x00, 0x6c, 0xdc, 0x02, 1, 1])?;
-    w.desc(&[8, 0x24, 2, 1, 0x00, 0x02, 0, 0])?;
-    w.desc(&[9, 0x24, 3, 2, 0x01, 0x01, 0, 1, 0])?;
-    // VideoStreaming alternate 0 and class-specific format/frame descriptors.
-    w.desc(&[9, 4, 1, 0, 0, 0x0e, 2, 0, 0])?;
-    w.desc(&[14, 0x24, 1, 1, 77, 0, ENDPOINT_IN, 0, 2, 0, 0, 0, 1, 0])?;
-    // Uncompressed NV12 (GUID {3231564E-0000-0010-8000-00AA00389B71}).
-    w.desc(&[
-        27, 0x24, 4, 1, 1, 0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b,
-        0x71, 12, 1, 0, 0, 0, 0,
-    ])?;
-    let mut frame = [0u8; 30];
-    frame[0..5].copy_from_slice(&[30, 0x24, 5, 1, 0]);
-    frame[5..7].copy_from_slice(&(WIDTH as u16).to_le_bytes());
-    frame[7..9].copy_from_slice(&(HEIGHT as u16).to_le_bytes());
-    let bitrate = FRAME_BIT_RATE;
-    frame[9..13].copy_from_slice(&bitrate.to_le_bytes());
-    frame[13..17].copy_from_slice(&bitrate.to_le_bytes());
-    frame[17..21].copy_from_slice(&FRAME_BYTES.to_le_bytes());
-    let frame_interval = active_frame_interval_100ns();
-    frame[21..25].copy_from_slice(&frame_interval.to_le_bytes());
-    frame[25] = 1;
-    frame[26..30].copy_from_slice(&frame_interval.to_le_bytes());
-    w.desc(&frame)?;
-    w.desc(&[6, 0x24, 0x0d, 1, 1, 4])?;
-    // Alternate 1 is the high-speed isochronous IN stream endpoint.
-    w.desc(&[9, 4, 1, 1, 1, 0x0e, 2, 0, 0])?;
-    let encoded_max_packet = MAX_PACKET_SIZE | (((ISO_PACKETS_PER_MICROFRAME - 1) as u16) << 11);
-    w.desc(&[
-        7,
-        5,
-        ENDPOINT_IN,
-        5,
-        encoded_max_packet as u8,
-        (encoded_max_packet >> 8) as u8,
-        1,
-    ])?;
-    if w.pos != 158 {
-        return None;
-    }
-    Some(w.pos)
-}
 
-struct DescriptorWriter<'a> {
-    out: &'a mut [u8],
-    pos: usize,
-}
-impl DescriptorWriter<'_> {
-    fn desc(&mut self, bytes: &[u8]) -> Option<()> {
-        let end = self.pos.checked_add(bytes.len())?;
-        if end > self.out.len() {
-            return None;
-        }
-        self.out[self.pos..end].copy_from_slice(bytes);
-        self.pos = end;
-        Some(())
-    }
-}

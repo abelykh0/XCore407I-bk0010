@@ -6,8 +6,7 @@
 use crate::camera::{HEIGHT, WIDTH};
 use crate::uvc::{
     active_frame_interval_100ns, active_frame_rate_fps, FRAME_BIT_RATE, FRAME_BYTES,
-    FRAME_INTERVAL_100NS,
-    ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
+    FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE, NV12_GUID,
 };
 
 const CDC_CONFIGURATION_DESCRIPTOR_LEN: usize = 224;
@@ -76,7 +75,9 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
         9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
         14, 0x24, 0x01, 1, 77, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
         27, 0x24, 0x04, 1, 1,
-        0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
+    ]);
+    push_bytes(&mut descriptor, &mut offset, &NV12_GUID);
+    push_bytes(&mut descriptor, &mut offset, &[
         12, 1, 0, 0, 0, 0,
         30, 0x24, 0x05, 1, 0,
     ]);
@@ -150,7 +151,9 @@ const fn build_normal_configuration_descriptor() -> [u8; NORMAL_CONFIGURATION_DE
         9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
         14, 0x24, 0x01, 1, 77, 0, 0x81, 0, 2, 0, 0, 0, 1, 0,
         27, 0x24, 0x04, 1, 1,
-        0x4e, 0x56, 0x31, 0x32, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
+    ]);
+    push_bytes(&mut descriptor, &mut offset, &NV12_GUID);
+    push_bytes(&mut descriptor, &mut offset, &[
         12, 1, 0, 0, 0, 0,
         30, 0x24, 0x05, 1, 0,
     ]);
