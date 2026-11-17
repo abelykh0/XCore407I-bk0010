@@ -15,7 +15,8 @@ pub mod rom;
 pub mod rtc;
 pub mod bk_audio;
 pub mod tusb;
-pub mod tusb_class_drivers;
+pub mod audio_uac2;
+pub mod uvc_nv12;
 pub mod tusb_descriptors;
 pub mod uvc;
 

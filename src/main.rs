@@ -61,7 +61,7 @@ static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
 fn service_cdc_scan_io() {
     unsafe {
         let _ = tusb::tud_task_ext(1, false);
-        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
     }
     xcore407i_blinker::cdc_console::service_connection();
 
@@ -79,7 +79,7 @@ fn service_cdc_scan_io() {
 fn service_file_browser_io() {
     unsafe {
         let _ = tusb::tud_task_ext(1, false);
-        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
     }
     if USB_FS_READY.load(Ordering::Acquire)
         && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
@@ -421,7 +421,7 @@ fn main() -> ! {
                             }
                             loop {
                                 let _ = tusb::tud_task_ext(1, false);
-                                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                                 // Keep USB/UVC and the video producer alive inside synchronous
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
                                 FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
@@ -449,14 +449,14 @@ fn main() -> ! {
                             xcore407i_blinker::cdc_console::report_storage_error(error);
                             loop {
                                 let _ = tusb::tud_task_ext(1, false);
-                                xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                                 let requested = xcore407i_blinker::cdc_console::service(
                                     None,
                                     &mut zmodem_state,
                                     TICKS.load(Ordering::Relaxed),
                                     &mut || {
                                         let _ = tusb::tud_task_ext(1, false);
-                                        xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                                        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                                         while prepare_next_video_batch(&mut video_renderer) {}
                                     },
                                 );
@@ -500,7 +500,7 @@ fn main() -> ! {
                     |completed, total| {
                         unsafe {
                             let _ = tusb::tud_task_ext(1, false);
-                            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+                            xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
                         }
                         while prepare_next_video_batch(&mut video_renderer) {}
                         if completed == total || completed >= last_reported + 32 {
@@ -566,7 +566,7 @@ fn main() -> ! {
         // endpoints are re-armed directly by their class xfer_isr callbacks.
         unsafe {
             let _ = tusb::tud_task_ext(1, false);
-            xcore407i_blinker::tusb_class_drivers::xcore_tud_uvc_task(1);
+            xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
