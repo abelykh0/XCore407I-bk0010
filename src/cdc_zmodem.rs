@@ -949,7 +949,7 @@ pub fn service(
                     rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms) / 1_000;
                 state.receive_file_committed = true;
                 #[cfg(feature = "list-profile")]
-                crate::write_diag::finish(state.receive_elapsed_seconds);
+                crate::write_diag::finish(state.receive_elapsed_seconds.saturating_mul(1_000));
             }
             Action::Event(Event::SessionCompleted) => {
                 // Receiver::poll() surfaces events before queued wire bytes.
