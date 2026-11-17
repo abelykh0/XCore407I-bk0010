@@ -1133,15 +1133,15 @@ pub(crate) fn configure_fsmc() {
         // meanings, but use the attribute timing register:
         // ATTSET=4: address setup; 5 cycles = 29.8 ns. tCS=20 ns gives a
         //   theoretical minimum encoding of 3 (4 cycles = 23.8 ns).
-        // ATTWAIT=8: NWE/NOE assertion; 9 cycles = 53.6 ns. Based on
-        //   tWP=12 ns alone, encoding 2 (3 cycles = 17.9 ns) is the minimum.
+        // ATTWAIT=2: NWE/NOE assertion; 3 cycles = 17.9 ns. This is the
+        //   minimum selected from tWP=12 ns (3 HCLK cycles required).
         // ATTHOLD=18: post-command hold; 18 cycles = 107.1 ns. This is
         //   intentionally longer than tWB(max)=100 ns. If this delay is
         //   relied on to cover tWB, the theoretical minimum is 17 cycles
         //   (encoding 17 = 101.2 ns); encoding 16 would be only 95.2 ns.
         // ATTHIZ=2: write-cycle data-bus Hi-Z interval; encoding 0 is the
         //   controller minimum. No separate NAND AC limit sets this value.
-        let attribute_timing = 4 | (8 << 8) | (18 << 16) | (2 << 24);
+        let attribute_timing = 4 | (2 << 8) | (18 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
         write_volatile(fsmc_pmem2(), common_timing);
         write_volatile(fsmc_patt2(), attribute_timing);
