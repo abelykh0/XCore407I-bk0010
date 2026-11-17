@@ -668,7 +668,7 @@ fn report_list_profile(
 
     let dhara_overhead = stats.dhara_cycles.saturating_sub(stats.nand_cycles);
     let directory_residual = directory_cycles
-        .saturating_sub(stats.dhara_cycles)
+        .saturating_sub(directory_stats.dhara_cycles)
         .saturating_sub(stats.directory_cdc_cycles);
 
     write_status(b"\r\nLIST PROFILE (");
