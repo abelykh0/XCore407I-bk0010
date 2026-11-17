@@ -631,7 +631,10 @@ impl<S: driver::Storage> FileAllocation<S> {
     /// The allocation must remain at a stable address until close succeeds.
     /// Unlike the closure-based API, this explicitly managed API does not close
     /// the file automatically.
-    pub fn open_with_options(
+    /// # Safety
+    /// The allocation must remain at a stable address until close succeeds,
+    /// and the filesystem must remain mounted for the entire open lifetime.
+    pub unsafe fn open_with_options(
         &mut self,
         fs: &Filesystem<'_, S>,
         o: impl FnOnce(&mut OpenOptions) -> &OpenOptions,
@@ -659,7 +662,10 @@ impl<S: driver::Storage> FileAllocation<S> {
     }
 
     /// Write bytes to a file opened with open_with_options.
-    pub fn write(&mut self, fs: &Filesystem<'_, S>, buf: &[u8]) -> Result<usize> {
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn write(&mut self, fs: &Filesystem<'_, S>, buf: &[u8]) -> Result<usize> {
         if !self.opened {
             return Err(Error::IO);
         }
@@ -675,7 +681,10 @@ impl<S: driver::Storage> FileAllocation<S> {
     }
 
     /// Synchronize an open file without closing it.
-    pub fn sync(&mut self, fs: &Filesystem<'_, S>) -> Result<()> {
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn sync(&mut self, fs: &Filesystem<'_, S>) -> Result<()> {
         if !self.opened {
             return Err(Error::IO);
         }
@@ -690,7 +699,10 @@ impl<S: driver::Storage> FileAllocation<S> {
 
     /// Synchronize and close the file. A failed close leaves it marked open,
     /// allowing the caller to report the error rather than reuse its state.
-    pub fn close(&mut self, fs: &Filesystem<'_, S>) -> Result<()> {
+    /// # Safety
+    /// This allocation must still be open at the same address used to open it,
+    /// and fs must be the same mounted filesystem.
+    pub unsafe fn close(&mut self, fs: &Filesystem<'_, S>) -> Result<()> {
         if !self.opened {
             return Err(Error::IO);
         }
