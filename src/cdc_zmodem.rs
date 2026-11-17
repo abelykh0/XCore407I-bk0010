@@ -366,6 +366,8 @@ pub fn run_ecc_storage_diagnostic(
     );
     if write_result.is_err() { return 4; }
 
+    let previous_ecc_setting = crate::nand_fs::ecc_check_enabled();
+    let mut ecc_read_error = None;
     for ecc_enabled in [false, true] {
         crate::nand_fs::set_ecc_check_enabled(ecc_enabled);
         let read_result = fs.open_file_with_options_and_then_with_allocation(
@@ -388,10 +390,14 @@ pub fn run_ecc_storage_diagnostic(
                 Ok(())
             },
         );
-        crate::nand_fs::set_ecc_check_enabled(false);
         if read_result.is_err() {
-            return if ecc_enabled { 6 } else { 5 };
+            ecc_read_error = Some(if ecc_enabled { 6 } else { 5 });
+            break;
         }
+    }
+    crate::nand_fs::set_ecc_check_enabled(previous_ecc_setting);
+    if let Some(error) = ecc_read_error {
+        return error;
     }
 
     if fs.remove(path).is_err() { return 7; }
