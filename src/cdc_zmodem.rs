@@ -136,7 +136,10 @@ impl State {
     }
 
     pub fn active(&self) -> bool {
-        self.receiver.is_some() || self.sender.is_some() || self.session_complete_pending
+        self.receiver.is_some()
+            || self.sender.is_some()
+            || self.session_complete_pending
+            || self.file_allocation.is_open()
     }
 
     /// Discard trailing sender bytes after a failed session so they cannot
@@ -335,7 +338,11 @@ fn create_temp_file(
     crate::write_diag::record_lfs_append_open(
         crate::write_diag::cycle_count().wrapping_sub(open_started),
     );
-    open_result.map_err(|_| 7)
+    if open_result.is_err() {
+        let _ = fs.remove(path);
+        return Err(7);
+    }
+    Ok(())
 }
 
 fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Result<(), (u32, i32)> {
