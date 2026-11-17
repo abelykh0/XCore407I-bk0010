@@ -9,6 +9,7 @@
 #include "class/video/video.h"
 #include "device/usbd_pvt.h"
 #include "uvc_nv12.h"
+#include "audio_uac2.h"
 
 
 static void xcore_driver_init(void) {
