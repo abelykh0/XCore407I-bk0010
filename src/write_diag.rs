@@ -6,7 +6,7 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRANSFER_US: AtomicU32 = AtomicU32::new(0);
 static ZP_CALLS: AtomicU32 = AtomicU32::new(0); static ZP_US: AtomicU32 = AtomicU32::new(0);
 static ZS_CALLS: AtomicU32 = AtomicU32::new(0); static ZS_US: AtomicU32 = AtomicU32::new(0);
-static LO_US: AtomicU32 = AtomicU32::new(0);
+static LFS_APPEND_US: AtomicU32 = AtomicU32::new(0);
 static LW_CALLS: AtomicU32 = AtomicU32::new(0); static LW_BYTES: AtomicU32 = AtomicU32::new(0); static LW_US: AtomicU32 = AtomicU32::new(0); static LF_US: AtomicU32 = AtomicU32::new(0);
 static DW_CALLS: AtomicU32 = AtomicU32::new(0); static DW_PAGES: AtomicU32 = AtomicU32::new(0); static DW_US: AtomicU32 = AtomicU32::new(0);
 static NP_CALLS: AtomicU32 = AtomicU32::new(0); static NP_US: AtomicU32 = AtomicU32::new(0); static NF_US: AtomicU32 = AtomicU32::new(0); static NB_US: AtomicU32 = AtomicU32::new(0);
@@ -22,7 +22,7 @@ pub(crate) fn begin() {
 pub(crate) fn finish(elapsed_ms: u32) { TRANSFER_US.store(elapsed_ms.saturating_mul(1_000), Ordering::Relaxed); ACTIVE.store(false, Ordering::Release); }
 pub(crate) fn record_zmodem_poll(c: u32) { add(&ZP_CALLS,1); add(&ZP_US,us(c)); }
 pub(crate) fn record_zmodem_submit(c: u32) { add(&ZS_CALLS,1); add(&ZS_US,us(c)); }
-pub(crate) fn record_lfs_open(c: u32) { add(&LO_US,us(c)); }
+pub(crate) fn record_lfs_append(c: u32) { add(&LO_US,us(c)); }
 pub(crate) fn record_lfs_write(c: u32,b: usize) { add(&LW_CALLS,1); add(&LW_BYTES,b as u32); add(&LW_US,us(c)); }
 pub(crate) fn record_lfs_flush(c: u32) { add(&LF_US,us(c)); }
 pub(crate) fn record_dhara_write(c: u32,p: usize) { add(&DW_CALLS,1); add(&DW_PAGES,p as u32); add(&DW_US,us(c)); }
@@ -30,7 +30,7 @@ pub(crate) fn record_nand_program(c: u32,f: u32,b: u32) { add(&NP_CALLS,1); add(
 pub(crate) fn record_nand_erase(c: u32) { add(&NE_CALLS,1); add(&NE_US,us(c)); }
 #[derive(Clone,Copy)] pub(crate) struct Snapshot {
  pub transfer_us:u32, pub zmodem_poll_calls:u32,pub zmodem_poll_us:u32,pub zmodem_submit_calls:u32,pub zmodem_submit_us:u32,
- pub lfs_open_us:u32,pub lfs_write_calls:u32,pub lfs_write_bytes:u32,pub lfs_write_us:u32,pub lfs_flush_us:u32,
+ pub lfs_append_us:u32,pub lfs_write_calls:u32,pub lfs_write_bytes:u32,pub lfs_write_us:u32,pub lfs_flush_us:u32,
  pub dhara_write_calls:u32,pub dhara_write_pages:u32,pub dhara_write_us:u32,pub nand_program_calls:u32,pub nand_program_us:u32,
  pub nand_fifo_wait_us:u32,pub nand_busy_wait_us:u32,pub nand_erase_calls:u32,pub nand_erase_us:u32,
 }
