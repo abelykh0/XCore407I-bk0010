@@ -1260,11 +1260,12 @@ pub(crate) fn ecc_hardware_compare_page(
     Ok(result)
 }
 
-static NAND_ECC_CHECK_ENABLED: AtomicBool = AtomicBool::new(true);
+// Software ECC validation is disabled in normal filesystem operation. It may
+// be enabled only by explicit NAND/ECC diagnostic commands.
+static NAND_ECC_DIAGNOSTIC_CHECK_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Temporarily bypass ECC validation/correction for a controlled storage diagnostic.
 pub(crate) fn set_ecc_check_enabled(enabled: bool) {
-    NAND_ECC_CHECK_ENABLED.store(enabled, Ordering::Release);
+    NAND_ECC_DIAGNOSTIC_CHECK_ENABLED.store(enabled, Ordering::Release);
 }
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
@@ -1278,7 +1279,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return false;
     }
 
-    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
+    if !NAND_ECC_DIAGNOSTIC_CHECK_ENABLED.load(Ordering::Acquire) {
         return true;
     }
 
