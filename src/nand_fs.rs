@@ -1316,9 +1316,9 @@ pub(crate) fn configure_fsmc() {
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
         let pcr2 = fsmc_pcr2();
-        // Timing experiments: MEMSET 4 -> 3, MEMWAIT 8 -> 5, MEMHOLD 4 -> 3.
-        // Keep MEMHIZ and all attribute-space timings unchanged.
-        let common_timing = 3 | (5 << 8) | (3 << 16) | (2 << 24);
+        // Timing experiments: MEMSET 4 -> 3, MEMWAIT 8 -> 5, MEMHOLD 4 -> 3, MEMHIZ 2 -> 1.
+        // Keep all attribute-space timings unchanged.
+        let common_timing = 3 | (5 << 8) | (3 << 16) | (1 << 24);
         // RM0090 §36.6.5: the final NAND address byte is written through
         // attribute space with ATTHOLD long enough to cover tWB. At HCLK =
         // 168 MHz, 18 cycles provide about 107 ns (> K9F1G08U0E tWB max 100 ns).
