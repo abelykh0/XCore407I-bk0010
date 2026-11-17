@@ -43,7 +43,7 @@ pub(crate) const MAX_BROWSER_PATH: usize = MAX_BROWSER_FILENAME + 2; // '/' + na
 #[derive(Clone, Copy)]
 pub(crate) struct BrowserFile {
     pub(crate) path: [u8; MAX_BROWSER_PATH],
-    pub(crate) len: u16,
+    pub(crate) len: u8,
 }
 
 impl BrowserFile {
@@ -92,9 +92,9 @@ unsafe extern "C" {
 /// Compare root-level filenames lexicographically without regard to ASCII case.
 fn compare_browser_names(
     left: &[u8; MAX_BROWSER_PATH],
-    left_len: u16,
+    left_len: u8,
     right: &[u8; MAX_BROWSER_PATH],
-    right_len: u16,
+    right_len: u8,
 ) -> core::cmp::Ordering {
     let left = &left[1..left_len as usize - 1];
     let right = &right[1..right_len as usize - 1];
@@ -145,7 +145,7 @@ pub(crate) fn list_root_files(
             }
 
             files[count].path[..path_bytes.len()].copy_from_slice(path_bytes);
-            files[count].len = path_bytes.len() as u16;
+            files[count].len = path_bytes.len() as u8;
             count += 1;
             Ok(())
         })?;
