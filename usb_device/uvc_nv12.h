@@ -2,7 +2,7 @@
 //
 // Private bridge between TinyUSB's UVC class-driver ABI and Rust.
 #ifndef XCORE_UVC_NV12_H
-#define XCORE_TUSB_CLASS_DRIVERS_H
+#define XCORE_UVC_NV12_H
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -53,8 +53,6 @@ fn main() {
     println!("cargo:rerun-if-changed=usb_device/audio_uac2.h");
     println!("cargo:rerun-if-changed=usb_device/uvc_nv12.c");
     println!("cargo:rerun-if-changed=usb_device/uvc_nv12.h");
-    println!("cargo:rerun-if-changed=usb_device/uvc_nv12.c");
-    println!("cargo:rerun-if-changed=usb_device/uvc_nv12.h");
     println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
     println!("cargo:rerun-if-changed=vendor/dhara");
     println!("cargo:rerun-if-changed=csrc/dhara_adapter.c");
@@ -188,5 +186,4 @@ fn main() {
 
     // Track all config and source inputs so incremental builds re-run correctly.
     println!("cargo:rerun-if-changed={tinyusb_root}/src");
-    println!("cargo:rerun-if-changed=usb/tusb_config.h");
 }
