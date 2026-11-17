@@ -259,11 +259,9 @@ fn main() -> ! {
         );
     }
 
-    // Show the keyboard diagnostic screen after 5 seconds without a
-    // successful USB-host discovery event. Each successful stage refreshes
-    // USB_FS_LAST_ACTIVITY_TICK; host servicing continues on the blue screen.
-    // F10 selects CDC only before this timeout. A keyboard discovered later
-    // starts the emulator directly, without another mode-selection step.
+    // Allow an initially detected keyboard time to report F10. If it does
+    // not, select normal mode; restart the host only when no boot keyboard
+    // was detected in the initial discovery window.
     const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
     let mut keyboard_host_restart_attempted = false;
     USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
@@ -299,7 +297,10 @@ fn main() -> ! {
         let now = TICKS.load(Ordering::Relaxed);
         let last_activity = USB_FS_LAST_ACTIVITY_TICK.load(Ordering::Acquire);
         if now.wrapping_sub(last_activity) >= USB_DISCOVERY_INACTIVITY_TIMEOUT_MS {
-            if !keyboard_host_restart_attempted && USB_FS_READY.load(Ordering::Acquire) {
+            if !keyboard_host_restart_attempted
+                && USB_FS_READY.load(Ordering::Acquire)
+                && !keyboard::keyboard_is_mounted()
+            {
                 // One recovery attempt before declaring the keyboard unavailable.
                 // Keep the boot-selection loop active so F10 is still recognized
                 // if the keyboard enumerates after the host restart.
