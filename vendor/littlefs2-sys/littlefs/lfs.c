@@ -2357,6 +2357,13 @@ fixmlist:;
     for (struct lfs_mlist *d = lfs->mlist; d; d = d->next) {
         if (lfs_pair_cmp(d->m.pair, oldpair) == 0) {
             d->m = *dir;
+            if (d->type == LFS_TYPE_DIR) {
+                lfs_dir_t *ddir = (lfs_dir_t*)d;
+                ddir->tag_cache_count = 0;
+                ddir->tag_cache_valid = false;
+                ddir->short_id = 0;
+                ddir->short_started = false;
+            }
             if (d->m.pair != pair) {
                 for (int i = 0; i < attrcount; i++) {
                     if (lfs_tag_type3(attrs[i].tag) == LFS_TYPE_DELETE &&
@@ -2479,12 +2486,24 @@ static int lfs_dir_orphaningcommit(lfs_t *lfs, lfs_mdir_t *dir,
             if (lfs_pair_cmp(lpair, d->m.pair) == 0) {
                 d->m.pair[0] = ldir.pair[0];
                 d->m.pair[1] = ldir.pair[1];
+                if (d->type == LFS_TYPE_DIR) {
+                    lfs_dir_t *ddir = (lfs_dir_t*)d;
+                    ddir->tag_cache_count = 0;
+                    ddir->tag_cache_valid = false;
+                    ddir->short_id = 0;
+                    ddir->short_started = false;
+                }
             }
 
             if (d->type == LFS_TYPE_DIR &&
                     lfs_pair_cmp(lpair, ((lfs_dir_t*)d)->head) == 0) {
-                ((lfs_dir_t*)d)->head[0] = ldir.pair[0];
-                ((lfs_dir_t*)d)->head[1] = ldir.pair[1];
+                lfs_dir_t *ddir = (lfs_dir_t*)d;
+                ddir->head[0] = ldir.pair[0];
+                ddir->head[1] = ldir.pair[1];
+                ddir->tag_cache_count = 0;
+                ddir->tag_cache_valid = false;
+                ddir->short_id = 0;
+                ddir->short_started = false;
             }
         }
 
