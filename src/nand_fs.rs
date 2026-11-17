@@ -84,9 +84,6 @@ use littlefs2::{
     io::Result as LfsResult,
 };
 
-// Sequential directory index lives in ordinary SRAM; CCM is already fully allocated.
-static mut LIST_DIRECTORY_INDEX: [u32; 1026] = [0; 1026];
-
 const NAND_BASE: usize = 0x7000_0000;
 
 // Access FSMC NAND Bank 2 through the PAC register block rather than
@@ -1225,17 +1222,12 @@ pub fn read_root_directory(
     include_file_sizes: bool,
     mut visit: impl FnMut(&[u8], bool, usize) -> LfsResult<()>,
 ) -> LfsResult<()> {
-    // Keep the sequential index in static SRAM instead of consuming firmware
-    // stack space. The filesystem console serializes directory operations.
-    let directory_index = unsafe { &mut *core::ptr::addr_of_mut!(LIST_DIRECTORY_INDEX) };
-    // The CCM section is NOLOAD, so invalidate its cache marker explicitly.
-    directory_index[1025] = 0;
     fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
         loop {
             let item = if include_file_sizes {
                 directory.next()
             } else {
-                directory.next_without_size_sequential(directory_index)
+                directory.next_without_size()
             };
             let Some(item) = item else {
                 break;
