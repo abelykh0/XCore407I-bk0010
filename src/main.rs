@@ -25,7 +25,7 @@ use board::{
     configure_board_pins, configure_exception_priorities, system_clock_168mhz, TICKS,
 };
 #[cfg(feature = "cpu-cycle-diag")]
-use board::{enable_cycle_counter, read_dwt_cycle_count};
+use board::{enable_cycle_counter, read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
 use file_browser::{
     build_save_path, draw_file_browser, draw_save_dialog, list_root_files,
     load_tetris_from_path, save_file_exists, save_ram_to_path,
