@@ -142,7 +142,7 @@ pub(crate) fn draw_file_browser(
         show_file_browser_line(row + 1, &line, row == selected && count != 0);
     }
 
-    show_file_browser_line(27, b"UP/DOWN MOVE  ENTER LOAD  ESC CANCEL", false);
+    show_file_browser_line(27, b"\x18/\x19 MOVE  ENTER LOAD  ESC CANCEL", false);
 }
 
 /// Build a root-level filename from the name entered in the F3 save dialog.
