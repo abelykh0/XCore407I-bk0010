@@ -649,7 +649,11 @@ fn service_sender(
 
     if finished {
         state.sender = None;
-        state.send_path_len = 0;
+        // SessionCompleted is finalized on the next service pass, which still
+        // needs the filename for the completion message. Preserve it until then.
+        if !state.session_complete_pending {
+            state.send_path_len = 0;
+        }
         state.send_wire_len = 0;
         state.send_wire_pos = 0;
     } else {
