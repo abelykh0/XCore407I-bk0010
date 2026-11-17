@@ -110,5 +110,4 @@ cargo build --release --target thumbv7em-none-eabihf --features cpu-cycle-diag
 - Investigate keyboard startup detection.
 - Improve music playback performance.
 - Complete keyboard support (СУ, АР2).
-- Add file deletion and improve file management.
 - БК-0011 support.
