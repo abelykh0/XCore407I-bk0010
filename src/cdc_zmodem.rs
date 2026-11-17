@@ -559,6 +559,14 @@ pub fn start_send(
     let info = FileInfo::new(name, Some(Position::new(size))).with_mode(0x8000 | 0o644);
     sender.start_file(info).map_err(|_| 5)?;
 
+    // Retain one LittleFS read handle for the complete ZMODEM send.
+    // State is stored at a stable address throughout the transfer.
+    unsafe {
+        state.file_allocation
+            .open_with_options(fs, |options| options.read(true), path)
+            .map_err(|_| 3)?;
+    }
+
     state.send_path = path_bytes;
     state.send_path_len = path_len;
     state.send_size = size;
@@ -626,22 +634,11 @@ fn service_sender(
                     sender.abort();
                     break;
                 }
-                let path = match Path::from_bytes_with_nul(&state.send_path[..state.send_path_len]) {
-                    Ok(path) => path,
-                    Err(_) => {
-                        sender.abort();
-                        break;
-                    }
+                let read_result = unsafe {
+                    state.file_allocation
+                        .seek(fs, SeekFrom::Start(offset.get()))
+                        .and_then(|_| state.file_allocation.read(fs, &mut state.send_buffer[..max_len]))
                 };
-                let read_result = fs.open_file_with_options_and_then_with_allocation(
-                    |options| options.read(true),
-                    path,
-                    &mut state.file_allocation,
-                    |file| {
-                        file.seek(SeekFrom::Start(offset.get()))?;
-                        file.read(&mut state.send_buffer[..max_len])
-                    },
-                );
                 match read_result {
                     Ok(count) if count != 0 => {
                         if sender.submit_file(&state.send_buffer[..count]).is_err() {
@@ -761,6 +758,13 @@ fn service_sender(
     }
 
     if finished {
+        if state.file_allocation.is_open() {
+            if unsafe { state.file_allocation.close(fs) }.is_err() {
+                super::cdc_console::write_status(
+                    b"\r\nZMODEM send: LittleFS close failed; reset required before another transfer.\r\n> ",
+                );
+            }
+        }
         state.sender = None;
         // SessionCompleted is finalized on the next service pass, which still
         // needs the filename for the completion message. Preserve it until then.
