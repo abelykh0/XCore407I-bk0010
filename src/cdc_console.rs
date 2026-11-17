@@ -542,7 +542,9 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
     write_status(b" bytes\r\n");
     write_status(b"LIST: reading root directory...\r\n");
 
+    #[cfg(feature = "list-profile")]
     let mut file_count = 0u32;
+    #[cfg(feature = "list-profile")]
     let mut directory_count = 0u32;
     let mut output = ListOutput::new();
     #[cfg(feature = "list-profile")]
@@ -552,8 +554,10 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
     #[cfg(feature = "list-profile")]
     let directory_started = if profile { crate::list_diag::cycle_count() } else { 0 };
     let result = crate::nand_fs::read_root_directory(fs, show_sizes, |path_bytes, is_dir, size| {
+        #[cfg(feature = "list-profile")]
         if is_dir { directory_count = directory_count.wrapping_add(1); }
-        else { file_count = file_count.wrapping_add(1); }
+        #[cfg(feature = "list-profile")]
+        if !is_dir { file_count = file_count.wrapping_add(1); }
         let path = &path_bytes[..path_bytes.len() - 1];
         output.push(b"  ");
         output.push(path);
