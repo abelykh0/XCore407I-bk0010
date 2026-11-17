@@ -217,7 +217,7 @@ fn write_write_profile(zmodem: &cdc_zmodem::State) {
     write_status(b" calls, "); write_decimal(p.zmodem_poll_us as usize); write_status(b" us; submit: ");
     write_decimal(p.zmodem_submit_calls as usize); write_status(b" calls, ");
     write_decimal(p.zmodem_submit_us as usize); write_status(b" us\r\n");
-    write_status(b"LittleFS open: "); write_decimal(p.lfs_open_us as usize); write_status(b" us; write: ");
+    write_status(b"LittleFS append operation (includes write/flush): "); write_decimal(p.lfs_open_us as usize); write_status(b" us; write: ");
     write_decimal(p.lfs_write_calls as usize); write_status(b" calls / ");
     write_decimal(p.lfs_write_bytes as usize); write_status(b" bytes / ");
     write_decimal(p.lfs_write_us as usize); write_status(b" us; flush: ");
@@ -229,6 +229,11 @@ fn write_write_profile(zmodem: &cdc_zmodem::State) {
     write_status(b" calls / "); write_decimal(p.nand_program_us as usize);
     write_status(b" us; FSMC FIFO waits: "); write_decimal(p.nand_fifo_wait_us as usize);
     write_status(b" us; NAND busy: "); write_decimal(p.nand_busy_wait_us as usize); write_status(b" us\r\n");
+    let ecc_fsmc_us = p.nand_program_us
+        .saturating_sub(p.nand_fifo_wait_us)
+        .saturating_sub(p.nand_busy_wait_us);
+    write_status(b"  ECC/FSMC data feed + setup (derived): ");
+    write_decimal(ecc_fsmc_us as usize); write_status(b" us\r\n");
     write_status(b"NAND erase: "); write_decimal(p.nand_erase_calls as usize);
     write_status(b" calls / "); write_decimal(p.nand_erase_us as usize); write_status(b" us\r\n");
     write_status(b"Dhara residual (map time minus program/erase): ");
