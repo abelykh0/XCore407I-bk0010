@@ -331,22 +331,42 @@ fn append_file(
     data: &[u8],
 ) -> Result<(), i32> {
     let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::IO.code())?;
-    fs.open_file_with_options_and_then_with_allocation(
+    #[cfg(feature = "list-profile")]
+    let open_started = crate::write_diag::cycle_count();
+    let result = fs.open_file_with_options_and_then_with_allocation(
         |options| options.write(true).append(true),
         path,
         allocation,
         |file| {
             let mut written = 0usize;
             while written < data.len() {
+                #[cfg(feature = "list-profile")]
+                let write_started = crate::write_diag::cycle_count();
                 let count = file.write(&data[written..])?;
+                #[cfg(feature = "list-profile")]
+                crate::write_diag::record_lfs_write(
+                    crate::write_diag::cycle_count().wrapping_sub(write_started), count,
+                );
                 if count == 0 {
                     return Err(LfsError::IO);
                 }
                 written += count;
             }
-            file.flush()
+            #[cfg(feature = "list-profile")]
+            let flush_started = crate::write_diag::cycle_count();
+            let flush_result = file.flush();
+            #[cfg(feature = "list-profile")]
+            crate::write_diag::record_lfs_flush(
+                crate::write_diag::cycle_count().wrapping_sub(flush_started),
+            );
+            flush_result
         },
-    ).map_err(|error| error.code())
+    );
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_lfs_open(
+        crate::write_diag::cycle_count().wrapping_sub(open_started),
+    );
+    result.map_err(|error| error.code())
 }
 
 /// Create a deterministic 4 KiB file and read it twice through LittleFS/Dhara:
@@ -770,7 +790,14 @@ pub fn service(
             }
         }
 
-        match receiver.poll() {
+        #[cfg(feature = "list-profile")]
+        let poll_started = crate::write_diag::cycle_count();
+        let action = receiver.poll();
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_zmodem_poll(
+            crate::write_diag::cycle_count().wrapping_sub(poll_started),
+        );
+        match action {
             Action::WriteWire(bytes) => {
                 state.response_queued = true;
                 let bytes_len = bytes.len();
@@ -853,7 +880,11 @@ pub fn service(
                     Some(len) => match Path::from_bytes_with_nul(&state.final_path[..len]) {
                         Err(_) => Some(2),
                         Ok(path) if fs.exists(path) => Some(3),
-                        Ok(_) => create_temp_file(fs, &mut state.file_allocation).err().map(|stage| stage + 3),
+                        Ok(_) => {
+                            #[cfg(feature = "list-profile")]
+                            crate::write_diag::begin();
+                            create_temp_file(fs, &mut state.file_allocation).err().map(|stage| stage + 3)
+                        },
                     },
                 };
                 if rejection.is_none() {
@@ -917,6 +948,8 @@ pub fn service(
                 state.receive_elapsed_seconds =
                     rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms) / 1_000;
                 state.receive_file_committed = true;
+                #[cfg(feature = "list-profile")]
+                crate::write_diag::finish();
             }
             Action::Event(Event::SessionCompleted) => {
                 // Receiver::poll() surfaces events before queued wire bytes.
@@ -962,7 +995,14 @@ pub fn service(
                 if state.wire_pos < state.wire_len {
                     let input = &state.wire[state.wire_pos..state.wire_len];
 
-                    match receiver.submit_wire(input) {
+                    #[cfg(feature = "list-profile")]
+                    let submit_started = crate::write_diag::cycle_count();
+                    let submit_result = receiver.submit_wire(input);
+                    #[cfg(feature = "list-profile")]
+                    crate::write_diag::record_zmodem_submit(
+                        crate::write_diag::cycle_count().wrapping_sub(submit_started),
+                    );
+                    match submit_result {
                         Ok(consumed) if consumed != 0 => {
                             state.input_accepted = true;
                             state.wire_consumed_bytes = state.wire_consumed_bytes.wrapping_add(consumed as u32);
