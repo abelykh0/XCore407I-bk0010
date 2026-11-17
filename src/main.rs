@@ -103,7 +103,7 @@ fn service_file_browser_io() {
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
-    fn bk_timing_cycles() -> u32;
+    safe fn bk_timing_cycles() -> u32;
 }
 
 
@@ -533,7 +533,7 @@ fn main() -> ! {
     let mut keyboard_host_status_last = USB_FS_STATUS.load(Ordering::Acquire);
     let mut keyboard_host_ready_last = USB_FS_READY.load(Ordering::Acquire);
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
-    let mut pacing_start_cycles = if emulator_enabled { unsafe { bk_timing_cycles() } } else { 0 };
+    let mut pacing_start_cycles = if emulator_enabled { bk_timing_cycles() } else { 0 };
     let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
     let mut init_screen_state = INIT_IDLE;
