@@ -262,7 +262,9 @@ fn main() -> ! {
     // Allow an initially detected keyboard time to report F10. If it does
     // not, select normal mode; restart the host only when no boot keyboard
     // was detected in the initial discovery window.
-    const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 5_000;
+    // A mounted keyboard gets a short chance to send its initial report (F10).
+    // Only an absent keyboard uses this timeout to trigger host recovery.
+    const USB_DISCOVERY_INACTIVITY_TIMEOUT_MS: u32 = 500;
     let mut keyboard_host_restart_attempted = false;
     USB_FS_LAST_ACTIVITY_TICK.store(TICKS.load(Ordering::Acquire), Ordering::Release);
     while keyboard::boot_selection() == keyboard::BOOT_SELECTION_WAITING {
