@@ -624,8 +624,6 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
             }
         }
     }
-    write_status(b"> ");
-
     #[cfg(feature = "list-profile")]
     if profile {
         let total_cycles = crate::list_diag::cycle_count().wrapping_sub(total_started);
@@ -634,7 +632,11 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
             show_sizes, file_count, directory_count, total_cycles,
             total_space_cycles, directory_cycles, available_cycles, stats,
         );
+    } else {
+        write_status(b"> ");
     }
+    #[cfg(not(feature = "list-profile"))]
+    write_status(b"> ");
 }
 
 #[cfg(feature = "list-profile")]
