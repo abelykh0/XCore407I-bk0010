@@ -8,8 +8,8 @@ const ECC_CHUNK_SIZE: usize = 512;
 
 /// Linux FSMC driver's 512-byte NAND_ECC_SOFT_HAMMING_SM_ORDER
 /// reference algorithm, expressed without alignment-dependent word loads.
-fn ecc_software_512(data: &[u8]) -> u32 {
-    if data.len() != FSMC_ECC_CHUNK_SIZE {
+pub(crate) fn ecc_software_512(data: &[u8]) -> u32 {
+    if data.len() != ECC_CHUNK_SIZE {
         return 0;
     }
 
@@ -153,7 +153,7 @@ fn ecc_linux_to_fsmc(ecc: u32) -> u32 {
     (!rotated) & 0x00FF_FFFF
 }
 
-fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
+pub(crate) fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
     ecc_linux_to_fsmc(ecc_software_512(data))
 }
 
@@ -190,14 +190,14 @@ fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
         | address_bits(b0);
     let bit_index = address_bits(b2 >> 2);
 
-    if byte_index >= FSMC_ECC_CHUNK_SIZE || bit_index >= 8 {
+    if byte_index >= ECC_CHUNK_SIZE || bit_index >= 8 {
         return None;
     }
     Some((byte_index, bit_index))
 }
 
-fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
-    if data.len() != FSMC_ECC_CHUNK_SIZE {
+pub(crate) fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
+    if data.len() != ECC_CHUNK_SIZE {
         return false;
     }
 
@@ -221,11 +221,11 @@ fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
 /// Reference vectors from Linux ecc_sw_hamming_calculate() using
 /// NAND_ECC_SOFT_HAMMING_SM_ORDER and 512-byte steps.
 pub(crate) fn ecc_software_selftest() -> [u32; 4] {
-    let zero = [0u8; FSMC_ECC_CHUNK_SIZE];
-    let erased = [0xFFu8; FSMC_ECC_CHUNK_SIZE];
-    let mut single_bit = [0u8; FSMC_ECC_CHUNK_SIZE];
+    let zero = [0u8; ECC_CHUNK_SIZE];
+    let erased = [0xFFu8; ECC_CHUNK_SIZE];
+    let mut single_bit = [0u8; ECC_CHUNK_SIZE];
     single_bit[0] = 1;
-    let mut pseudo_random = [0u8; FSMC_ECC_CHUNK_SIZE];
+    let mut pseudo_random = [0u8; ECC_CHUNK_SIZE];
     let mut state = 0x1234_5678u32;
     for byte in &mut pseudo_random {
         state ^= state << 13;
