@@ -54,7 +54,7 @@ pub(crate) fn try_init_usb_fs_host(rcc: &pac::RCC, nvic: &mut NVIC) -> bool {
 
     rcc.ahb2rstr().modify(|_, w| w.otgfsrst().set_bit());
     for _ in 0..16 {
-        unsafe { core::arch::asm!("nop"); }
+        cortex_m::asm::nop();
     }
     rcc.ahb2rstr().modify(|_, w| w.otgfsrst().clear_bit());
     let _ = rcc.ahb2rstr().read().bits();
