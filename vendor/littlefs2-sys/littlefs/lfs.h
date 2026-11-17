@@ -688,11 +688,6 @@ int lfs_dir_read(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info);
 // Read a directory entry without looking up its file size.
 int lfs_dir_read_short(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *info);
 
-// Sequential short-directory read using caller-provided per-ID name index.
-// index must contain at least 1026 uint32_t entries.
-int lfs_dir_read_short_sequential(lfs_t *lfs, lfs_dir_t *dir,
-        struct lfs_info *info, uint32_t *index);
-
 // Change the position of the directory
 //
 // The new off must be a value previous returned from tell and specifies
