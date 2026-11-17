@@ -23,7 +23,6 @@ use xcore407i_blinker::rtc;
 
 use board::{
     configure_board_pins, configure_exception_priorities, system_clock_168mhz, TICKS,
-    SYSTEM_CORE_CLOCK_HZ,
 };
 #[cfg(feature = "cpu-cycle-diag")]
 use board::{enable_cycle_counter, read_dwt_cycle_count};
