@@ -7,6 +7,8 @@ pub mod cdc_zmodem;
 pub mod camera;
 pub mod nand_fs;
 mod nand_ecc;
+#[cfg(feature = "list-profile")]
+mod list_diag;
 pub mod dhara_fs;
 pub mod libc_shims;
 mod copy_words;
