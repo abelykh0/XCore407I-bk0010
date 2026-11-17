@@ -363,7 +363,7 @@ fn append_file(
         },
     );
     #[cfg(feature = "list-profile")]
-    crate::write_diag::record_lfs_open(
+    crate::write_diag::record_lfs_append(
         crate::write_diag::cycle_count().wrapping_sub(open_started),
     );
     result.map_err(|error| error.code())
@@ -945,11 +945,12 @@ pub fn service(
                 // Defer the console message until the ZMODEM close response
                 // has been queued and the receiver is torn down. The CDC
                 // endpoint still carries protocol traffic at this point.
-                state.receive_elapsed_seconds =
-                    rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms) / 1_000;
+                let receive_elapsed_ms =
+                    rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
+                state.receive_elapsed_seconds = receive_elapsed_ms / 1_000;
                 state.receive_file_committed = true;
                 #[cfg(feature = "list-profile")]
-                crate::write_diag::finish(state.receive_elapsed_seconds.saturating_mul(1_000));
+                crate::write_diag::finish(receive_elapsed_ms);
             }
             Action::Event(Event::SessionCompleted) => {
                 // Receiver::poll() surfaces events before queued wire bytes.
