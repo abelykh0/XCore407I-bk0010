@@ -980,6 +980,12 @@ fn main() -> ! {
                         // Refill buffers while the emulator runs, outside USB IRQs.
                         while prepare_next_video_batch(&mut video_renderer) {}
                     }
+
+                    // Convert queued BK speaker transitions into PCM in thread
+                    // context. The USB audio completion callback only drains
+                    // this ring and must never perform sample rendering itself.
+                    xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
+
                     service_keyboard_frame_pacing();
                 }
             }
