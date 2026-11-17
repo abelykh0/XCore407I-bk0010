@@ -364,8 +364,12 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
     if out.is_empty() || column as usize + out.len() > PAGE_SIZE + SPARE_SIZE {
         return false;
     }
-    let profile = crate::list_diag::is_active();
-    let read_started = if profile { crate::list_diag::cycle_count() } else { 0 };
+    #[cfg(feature = "list-profile")]
+    let read_started = if crate::list_diag::is_active() {
+        Some(crate::list_diag::cycle_count())
+    } else {
+        None
+    };
     command(0x00);
     address(column as u8);
     address((column >> 8) as u8);
@@ -374,18 +378,20 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
     command(0x30);
     if !wait_ready_rb_timeout(timeout) {
         record_nand_device_failure(1, page, 0);
-        if profile {
+        #[cfg(feature = "list-profile")]
+        if let Some(started) = read_started {
             crate::list_diag::record_nand_read(
-                crate::list_diag::cycle_count().wrapping_sub(read_started),
+                crate::list_diag::cycle_count().wrapping_sub(started),
                 out.len(),
             );
         }
         return false;
     }
     for byte in out { *byte = read_data(); }
-    if profile {
+    #[cfg(feature = "list-profile")]
+    if let Some(started) = read_started {
         crate::list_diag::record_nand_read(
-            crate::list_diag::cycle_count().wrapping_sub(read_started),
+            crate::list_diag::cycle_count().wrapping_sub(started),
             out.len(),
         );
     }
