@@ -8,7 +8,9 @@ pub mod camera;
 pub mod nand_fs;
 mod nand_ecc;
 #[cfg(feature = "list-profile")]
-mod list_diag;\n#[cfg(feature = "list-profile")]\nmod write_diag;
+mod list_diag;
+#[cfg(feature = "list-profile")]
+mod write_diag;
 pub mod dhara_fs;
 pub mod libc_shims;
 mod copy_words;
