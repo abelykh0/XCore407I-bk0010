@@ -290,7 +290,7 @@ fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
     if state.file_allocation.is_open() {
         #[cfg(feature = "list-profile")]
         let close_started = crate::write_diag::cycle_count();
-        if state.file_allocation.close(fs).is_err() {
+        if unsafe { state.file_allocation.close(fs) }.is_err() {
             if state.last_error == 0 {
                 state.last_error = 8;
             }
@@ -324,11 +324,13 @@ fn create_temp_file(
     create_new_file(fs, allocation, TEMP_PATH).map_err(|stage| if stage == 1 { 3 } else { 4 })?;
     #[cfg(feature = "list-profile")]
     let open_started = crate::write_diag::cycle_count();
-    let open_result = allocation.open_with_options(
-        fs,
-        |options| options.write(true).append(true),
-        path,
-    );
+    let open_result = unsafe {
+        allocation.open_with_options(
+            fs,
+            |options| options.write(true).append(true),
+            path,
+        )
+    };
     #[cfg(feature = "list-profile")]
     crate::write_diag::record_lfs_append_open(
         crate::write_diag::cycle_count().wrapping_sub(open_started),
@@ -349,7 +351,7 @@ fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Re
     if state.file_allocation.is_open() {
         #[cfg(feature = "list-profile")]
         let close_started = crate::write_diag::cycle_count();
-        state.file_allocation.close(fs).map_err(|error| (5, error.code()))?;
+        unsafe { state.file_allocation.close(fs) }.map_err(|error| (5, error.code()))?;
         #[cfg(feature = "list-profile")]
         crate::write_diag::record_lfs_append_close(
             crate::write_diag::cycle_count().wrapping_sub(close_started),
@@ -371,7 +373,8 @@ fn append_file(
     while written < data.len() {
         #[cfg(feature = "list-profile")]
         let write_started = crate::write_diag::cycle_count();
-        let count = allocation.write(fs, &data[written..]).map_err(|error| error.code())?;
+        let count = unsafe { allocation.write(fs, &data[written..]) }
+            .map_err(|error| error.code())?;
         #[cfg(feature = "list-profile")]
         crate::write_diag::record_lfs_write(
             crate::write_diag::cycle_count().wrapping_sub(write_started), count,
