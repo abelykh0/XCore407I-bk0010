@@ -1228,6 +1228,8 @@ pub fn read_root_directory(
     // Keep the sequential index in CCM RAM instead of consuming firmware
     // stack space. The filesystem console serializes directory operations.
     let directory_index = unsafe { &mut *core::ptr::addr_of_mut!(LIST_DIRECTORY_INDEX) };
+    // The CCM section is NOLOAD, so invalidate its cache marker explicitly.
+    directory_index[1025] = 0;
     fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
         loop {
             let item = if include_file_sizes {
