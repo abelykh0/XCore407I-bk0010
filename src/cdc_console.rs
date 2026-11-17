@@ -1322,7 +1322,7 @@ pub fn service(
                         }
                     } else if command_is(line, b"ECCSCAN") {
                         write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
-                        let vectors = crate::nand_fs::ecc_software_selftest();
+                        let vectors = crate::nand_ecc::ecc_software_selftest();
                         let vectors_ok = vectors == [0x00FF_FFFF, 0x00FF_FFFF, 0x00AA_AAAA, 0x0069_5659];
                         write_status(if vectors_ok { b"Software ECC reference vectors: PASS\r\n" } else { b"Software ECC reference vectors: FAIL\r\n" });
 
