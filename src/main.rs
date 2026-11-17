@@ -23,6 +23,7 @@ use xcore407i_blinker::rtc;
 
 use board::{
     configure_board_pins, configure_exception_priorities, system_clock_168mhz, TICKS,
+    SYSTEM_CORE_CLOCK_HZ,
 };
 #[cfg(feature = "cpu-cycle-diag")]
 use board::{enable_cycle_counter, read_dwt_cycle_count};
@@ -936,7 +937,7 @@ fn main() -> ! {
         #[cfg(feature = "cpu-cycle-diag")]
         {
             // DWT provides an independent wall-time reference for the PDP rate.
-            const DWT_CYCLES_PER_SECOND: u32 = 168_000_000;
+            const DWT_CYCLES_PER_SECOND: u32 = SYSTEM_CORE_CLOCK_HZ;
             let now_dwt = read_dwt_cycle_count();
             let elapsed_dwt = now_dwt.wrapping_sub(diagnostic_last_dwt);
             if elapsed_dwt >= DWT_CYCLES_PER_SECOND {

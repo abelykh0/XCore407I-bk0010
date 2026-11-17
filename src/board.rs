@@ -16,7 +16,10 @@ pub extern "C" fn tusb_time_millis_api() -> u32 {
 
 // DWC2 STM32 clock setup reads this CMSIS system-clock symbol.
 #[unsafe(no_mangle)]
-pub static SystemCoreClock: u32 = 168_000_000;
+pub(crate) const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;
+
+#[unsafe(no_mangle)]
+pub static SystemCoreClock: u32 = SYSTEM_CORE_CLOCK_HZ;
 
 // C BK platform callback: return the low 32 bits of Unix milliseconds (UTC).
 #[unsafe(no_mangle)]
