@@ -2746,6 +2746,8 @@ static int lfs_dir_open_(lfs_t *lfs, lfs_dir_t *dir, const char *path) {
     dir->head[1] = dir->m.pair[1];
     dir->id = 0;
     dir->pos = 0;
+    dir->short_id = 0;
+    dir->short_started = false;
 
     // add to list of mdirs
     dir->type = LFS_TYPE_DIR;
@@ -2775,6 +2777,33 @@ static int lfs_dir_read_internal(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *in
         strcpy(info->name, "..");
         dir->pos += 1;
         return true;
+    }
+
+    // The short iterator can visit IDs in descending order when the
+    // directory is represented by a single metadata pair. This aligns the
+    // request order with lfs_dir_getslice()'s backwards metadata scan.
+    // Split directories retain the original iterator until their pair
+    // ordering is handled by the optimized path.
+    if (!include_size && !dir->m.split) {
+        if (!dir->short_started) {
+            dir->short_id = dir->m.count;
+            dir->short_started = true;
+        }
+
+        while (dir->short_id > 0) {
+            dir->short_id -= 1;
+            int err = lfs_dir_getname(lfs, &dir->m, dir->short_id, info);
+            if (err && err != LFS_ERR_NOENT) {
+                return err;
+            }
+
+            if (err != LFS_ERR_NOENT) {
+                dir->pos += 1;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     while (true) {
@@ -2867,6 +2896,8 @@ static int lfs_dir_rewind_(lfs_t *lfs, lfs_dir_t *dir) {
 
     dir->id = 0;
     dir->pos = 0;
+    dir->short_id = 0;
+    dir->short_started = false;
     return 0;
 }
 
