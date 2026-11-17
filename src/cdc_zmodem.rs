@@ -47,6 +47,7 @@ pub struct State {
     receive_name: [u8; NAME_CAPACITY],
     receive_name_len: usize,
     receive_size: u32,
+    receive_file_committed: bool,
     receive_started_rtc_ms: u32,
     wire: [u8; WIRE_CAPACITY],
     wire_len: usize,
@@ -99,6 +100,7 @@ impl State {
             receive_name: [0; NAME_CAPACITY],
             receive_name_len: 0,
             receive_size: 0,
+            receive_file_committed: false,
             receive_started_rtc_ms: 0,
             wire: [0; WIRE_CAPACITY],
             wire_len: 0,
@@ -216,6 +218,7 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     state.final_path_len = 0;
     state.receive_name_len = 0;
     state.receive_size = 0;
+    state.receive_file_committed = false;
     state.wire_len = 0;
     state.wire_pos = 0;
     state.transfer_started = false;
@@ -419,6 +422,7 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.final_path_len = 0;
     state.receive_name_len = 0;
     state.receive_size = 0;
+    state.receive_file_committed = false;
     state.receive_started_rtc_ms = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
@@ -872,6 +876,9 @@ pub fn service(
                     let _ = receiver.abort();
                     break;
                 }
+                // The file is now atomically renamed to its final path. Keep
+                // this fact independently of the later ZFIN session handshake.
+                state.receive_file_committed = true;
             }
             Action::Event(Event::SessionCompleted) => {
                 // Receiver::poll() surfaces events before queued wire bytes.
@@ -1021,28 +1028,27 @@ pub fn service(
             }
         }
         state.receiver = None;
-        if state.session_complete_pending && !failed {
-            if state.receive_name_len != 0 {
-                let elapsed_ms = rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
-                super::cdc_console::write_receive_complete(
-                    &state.receive_name[..state.receive_name_len],
-                    state.receive_size,
-                    elapsed_ms / 1_000,
-                );
-            } else {
-                super::cdc_console::write_status(
-                    b"\r\nZMODEM upload complete\r\n> ",
-                );
-            }
+        // FileCompleted means LittleFS rename succeeded. Report that durable
+        // result even if the peer's final ZFIN/OO close handshake is missed.
+        if state.receive_file_committed && state.receive_name_len != 0 {
+            let elapsed_ms = rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
+            super::cdc_console::write_receive_complete(
+                &state.receive_name[..state.receive_name_len],
+                state.receive_size,
+                elapsed_ms / 1_000,
+            );
         }
         state.final_path_len = 0;
         state.receive_name_len = 0;
         state.receive_size = 0;
+        state.receive_file_committed = false;
         state.transfer_failed = false;
         state.transfer_started = false;
         state.timeout_pending = false;
         state.session_complete_pending = false;
-        if failed {
+        if failed || state.receive_file_committed {
+            // The peer may send the final ASCII "OO" just after our ZFIN
+            // reply. Keep it out of the console even when it arrives late.
             state.discard_input_until_ms = now_ms.wrapping_add(1_000);
         }
         camera::release_cdc_receiver_storage();
