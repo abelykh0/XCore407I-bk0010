@@ -67,14 +67,23 @@ pub(crate) fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::F
     pwr.cr().modify(|_, w| w.vos().set_bit()); // scale 1
 
     // Enable instruction/data caches, prefetch, and five wait states.
-    flash.acr().write(|w| unsafe { w.bits((1 << 10) | (1 << 9) | (1 << 8) | 5) });
+    flash.acr().write(|w| {
+        w.latency().ws5()
+            .prften().enabled()
+            .icen().enabled()
+            .dcen().enabled()
+    });
 
     rcc.cr().modify(|_, w| w.hseon().set_bit());
     while !rcc.cr().read().hserdy().bit_is_set() {}
 
     // PLLM=4, PLLN=168, PLLP=/2, PLL source=HSE, PLLQ=7.
     rcc.pllcfgr().write(|w| unsafe {
-        w.bits(4 | (168 << 6) | (1 << 22) | (7 << 24))
+        w.pllm().bits(4)
+            .plln().bits(168)
+            .pllp().div2()
+            .pllsrc().hse()
+            .pllq().bits(7)
     });
 
     rcc.cr().modify(|_, w| w.pllon().set_bit());
