@@ -287,6 +287,20 @@ fn create_new_file(
 }
 
 fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
+    if state.file_allocation.is_open() {
+        #[cfg(feature = "list-profile")]
+        let close_started = crate::write_diag::cycle_count();
+        if state.file_allocation.close(fs).is_err() {
+            if state.last_error == 0 {
+                state.last_error = 8;
+            }
+            return;
+        }
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_lfs_append_close(
+            crate::write_diag::cycle_count().wrapping_sub(close_started),
+        );
+    }
     if state.final_path_len != 0 {
         if let Ok(path) = Path::from_bytes_with_nul(TEMP_PATH) {
             if fs.remove(path).is_err() && state.last_error == 0 {
@@ -307,7 +321,19 @@ fn create_temp_file(
     if fs.exists(path) {
         fs.remove(path).map_err(|_| 2)?;
     }
-    create_new_file(fs, allocation, TEMP_PATH).map_err(|stage| if stage == 1 { 3 } else { 4 })
+    create_new_file(fs, allocation, TEMP_PATH).map_err(|stage| if stage == 1 { 3 } else { 4 })?;
+    #[cfg(feature = "list-profile")]
+    let open_started = crate::write_diag::cycle_count();
+    let open_result = allocation.open_with_options(
+        fs,
+        |options| options.write(true).append(true),
+        path,
+    );
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_lfs_append_open(
+        crate::write_diag::cycle_count().wrapping_sub(open_started),
+    );
+    open_result.map_err(|_| 7)
 }
 
 fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Result<(), (u32, i32)> {
@@ -320,6 +346,15 @@ fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Re
     if fs.exists(final_path) {
         return Err((3, 0));
     }
+    if state.file_allocation.is_open() {
+        #[cfg(feature = "list-profile")]
+        let close_started = crate::write_diag::cycle_count();
+        state.file_allocation.close(fs).map_err(|error| (5, error.code()))?;
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_lfs_append_close(
+            crate::write_diag::cycle_count().wrapping_sub(close_started),
+        );
+    }
     fs.rename(temp, final_path).map_err(|error| (4, error.code()))?;
     state.final_path_len = 0;
     Ok(())
@@ -330,67 +365,29 @@ fn append_file(
     allocation: &mut FileAllocation<ActiveStorage>,
     data: &[u8],
 ) -> Result<(), i32> {
-    let path = Path::from_bytes_with_nul(TEMP_PATH).map_err(|_| LfsError::IO.code())?;
     #[cfg(feature = "list-profile")]
     let append_started = crate::write_diag::cycle_count();
-    #[cfg(feature = "list-profile")]
-    let mut callback_started = 0u32;
-    #[cfg(feature = "list-profile")]
-    let mut callback_finished = 0u32;
-    let result = fs.open_file_with_options_and_then_with_allocation(
-        |options| options.write(true).append(true),
-        path,
-        allocation,
-        |file| {
-            #[cfg(feature = "list-profile")]
-            { callback_started = crate::write_diag::cycle_count(); }
-            let callback_result = (|| {
-                let mut written = 0usize;
-                while written < data.len() {
-                    #[cfg(feature = "list-profile")]
-                    let write_started = crate::write_diag::cycle_count();
-                    let count = file.write(&data[written..])?;
-                    #[cfg(feature = "list-profile")]
-                    crate::write_diag::record_lfs_write(
-                        crate::write_diag::cycle_count().wrapping_sub(write_started), count,
-                    );
-                    if count == 0 {
-                        return Err(LfsError::IO);
-                    }
-                    written += count;
-                }
-                #[cfg(feature = "list-profile")]
-                let flush_started = crate::write_diag::cycle_count();
-                let flush_result = file.flush();
-                #[cfg(feature = "list-profile")]
-                crate::write_diag::record_lfs_flush(
-                    crate::write_diag::cycle_count().wrapping_sub(flush_started),
-                );
-                flush_result
-            })();
-            #[cfg(feature = "list-profile")]
-            { callback_finished = crate::write_diag::cycle_count(); }
-            callback_result
-        },
-    );
-    #[cfg(feature = "list-profile")]
-    {
-        let append_finished = crate::write_diag::cycle_count();
-        let total = append_finished.wrapping_sub(append_started);
-        let open = if callback_started == 0 {
-            total
-        } else {
-            callback_started.wrapping_sub(append_started)
-        };
-        let callback = if callback_started == 0 {
-            0
-        } else {
-            callback_finished.wrapping_sub(callback_started)
-        };
-        let close = total.saturating_sub(open).saturating_sub(callback);
-        crate::write_diag::record_lfs_append(total, open, callback, close);
+    let mut written = 0usize;
+    while written < data.len() {
+        #[cfg(feature = "list-profile")]
+        let write_started = crate::write_diag::cycle_count();
+        let count = allocation.write(fs, &data[written..]).map_err(|error| error.code())?;
+        #[cfg(feature = "list-profile")]
+        crate::write_diag::record_lfs_write(
+            crate::write_diag::cycle_count().wrapping_sub(write_started), count,
+        );
+        if count == 0 {
+            return Err(LfsError::IO.code());
+        }
+        written += count;
     }
-    result.map_err(|error| error.code())
+    // littlefs2's Write::flush is intentionally a no-op. The persistent
+    // handle is synchronized once, when it is closed at commit/abort.
+    #[cfg(feature = "list-profile")]
+    crate::write_diag::record_lfs_append_callback(
+        crate::write_diag::cycle_count().wrapping_sub(append_started),
+    );
+    Ok(())
 }
 
 /// Create a deterministic 4 KiB file and read it twice through LittleFS/Dhara:
