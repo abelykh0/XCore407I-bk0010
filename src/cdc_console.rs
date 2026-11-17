@@ -345,12 +345,34 @@ fn write_decimal_grouped(mut value: usize) {
     write_status(&digits[start..]);
 }
 
-pub(crate) fn write_send_complete(name: &[u8], size: u32) {
+fn write_transfer_duration(seconds: u32) {
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    if minutes < 10 { write_status(b"0"); }
+    write_decimal(minutes as usize);
+    write_status(b":");
+    if seconds < 10 { write_status(b"0"); }
+    write_decimal(seconds as usize);
+}
+
+pub(crate) fn write_send_complete(name: &[u8], size: u32, elapsed_seconds: u32) {
     write_status(b"\r\nSent file ");
     write_status(name);
     write_status(b" size ");
     write_decimal_grouped(size as usize);
-    write_status(b" bytes.\r\n> ");
+    write_status(b" bytes in ");
+    write_transfer_duration(elapsed_seconds);
+    write_status(b".\r\n> ");
+}
+
+pub(crate) fn write_receive_complete(name: &[u8], size: u32, elapsed_seconds: u32) {
+    write_status(b"\r\nReceived file ");
+    write_status(name);
+    write_status(b" size ");
+    write_decimal_grouped(size as usize);
+    write_status(b" bytes in ");
+    write_transfer_duration(elapsed_seconds);
+    write_status(b".\r\n> ");
 }
 
 fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
