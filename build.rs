@@ -48,8 +48,13 @@ fn compiler_include_paths() -> Vec<String> {
 fn main() {
     println!("cargo:rerun-if-changed=csrc/bk");
     println!("cargo:rerun-if-changed=usb/tusb_config.h");
-    println!("cargo:rerun-if-changed=usb/tusb_class_drivers.c");
-    println!("cargo:rerun-if-changed=usb/tusb_class_drivers.h");
+    println!("cargo:rerun-if-changed=usb_device/config.h");
+    println!("cargo:rerun-if-changed=usb_device/audio_uac2.c");
+    println!("cargo:rerun-if-changed=usb_device/audio_uac2.h");
+    println!("cargo:rerun-if-changed=usb_device/uvc_nv12.c");
+    println!("cargo:rerun-if-changed=usb_device/uvc_nv12.h");
+    println!("cargo:rerun-if-changed=usb_device/uvc_nv12.c");
+    println!("cargo:rerun-if-changed=usb_device/uvc_nv12.h");
     println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
     println!("cargo:rerun-if-changed=vendor/dhara");
     println!("cargo:rerun-if-changed=csrc/dhara_adapter.c");
@@ -111,7 +116,9 @@ fn main() {
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
         .include("usb")
-        .file("usb/tusb_class_drivers.c")
+        .include("usb_device")
+        .file("usb_device/uvc_nv12.c")
+        .file("usb_device/audio_uac2.c")
         .include(format!("{tinyusb_root}/src"))
         .include(&cmsis_device)
         .include(cmsis_core)
