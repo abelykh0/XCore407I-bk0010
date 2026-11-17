@@ -1316,9 +1316,9 @@ pub(crate) fn configure_fsmc() {
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
         let pcr2 = fsmc_pcr2();
-        // Timing experiments: MEMWAIT 8 -> 5, then MEMHOLD 4 -> 3.
-        // Keep MEMSET, MEMHIZ, and all attribute-space timings unchanged.
-        let common_timing = 4 | (5 << 8) | (3 << 16) | (2 << 24);
+        // Timing experiments: MEMSET 4 -> 3, MEMWAIT 8 -> 5, MEMHOLD 4 -> 3.
+        // Keep MEMHIZ and all attribute-space timings unchanged.
+        let common_timing = 3 | (5 << 8) | (3 << 16) | (2 << 24);
         // RM0090 §36.6.5: the final NAND address byte is written through
         // attribute space with ATTHOLD long enough to cover tWB. At HCLK =
         // 168 MHz, 18 cycles provide about 107 ns (> K9F1G08U0E tWB max 100 ns).
@@ -1328,7 +1328,7 @@ pub(crate) fn configure_fsmc() {
         write_volatile(fsmc_patt2(), attribute_timing);
         // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
         // individual 512-byte data chunks; ECCEN remains clear while idle.
-        // TCLR=6 gives (6 + MEMSET(4) + 2) / 168 MHz = 71.4 ns
+        // TCLR=6 gives (6 + MEMSET(3) + 2) / 168 MHz = 65.5 ns
         // from CLE deassertion to RE assertion, exceeding the NAND tWHR
         // minimum of 60 ns for command-to-read/status transitions.
         let control = (1 << 1) | (1 << 2) | (1 << 3) | (6 << 9) | (2 << 13) | (1 << 17);
