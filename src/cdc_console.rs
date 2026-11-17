@@ -349,7 +349,7 @@ pub(crate) fn write_send_complete(name: &[u8], size: u32) {
     write_status(b"\r\nSent file ");
     write_status(name);
     write_status(b" size ");
-    write_decimal(size as usize);
+    write_decimal_grouped(size as usize);
     write_status(b" bytes.\r\n> ");
 }
 
