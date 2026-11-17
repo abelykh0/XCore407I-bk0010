@@ -507,9 +507,9 @@ pub fn show_usb_status(message: &[u8]) {
 
     for character_index in 0..max_chars {
         let character = message.get(character_index).copied().unwrap_or(b' ');
-        // The font table uses one-based character indices. Restrict input to
-        // printable ASCII to keep arbitrary diagnostic strings in bounds.
-        let character = if (1..=128).contains(&character) { character } else { b'?' };
+        // Font glyphs are indexed by character code minus one: all nonzero
+        // byte values (1..=255) are valid; reserve zero as the missing glyph.
+        let character = if character == 0 { b'?' } else { character };
         let glyph = (character as usize - 1) * 8;
 
         for row in 0..8 {
@@ -546,27 +546,12 @@ pub fn show_file_browser_line(row: usize, message: &[u8], _selected: bool) {
 
     for column in 0..columns {
         let raw = message.get(column).copied().unwrap_or(b' ');
-        let character = if (32..=126).contains(&raw) || matches!(raw, 0x18 | 0x19) {
-            raw
-        } else {
-            b'?'
-        };
-        // Draw the navigation arrows directly. These are control-code
-        // glyphs in the font table, but explicit rows avoid passing them
-        // through printable-character/font-index handling.
-        const UP_ARROW: [u8; 8] = [
-            0x18, 0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00,
-        ];
-        const DOWN_ARROW: [u8; 8] = [
-            0x18, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x18, 0x00,
-        ];
+        // The font has 255 glyphs, indexed by byte value minus one.
+        // Only NUL (0) is reserved; every other byte is a valid glyph.
+        let character = if raw == 0 { b'?' } else { raw };
         let glyph = (character as usize - 1) * 8;
         for y in 0..8 {
-            let bits = match raw {
-                0x18 => UP_ARROW[y],
-                0x19 => DOWN_ARROW[y],
-                _ => FONT8X8[glyph + y],
-            };
+            let bits = FONT8X8[glyph + y];
             for x in 0..8 {
                 let color = if bits & (0x80 >> x) != 0 {
                     foreground
@@ -628,7 +613,7 @@ pub fn show_keyboard_input(message: &[u8]) {
 
     for &character in message {
         let column = KEYBOARD_TEXT_COLUMN.fetch_add(1, Ordering::Relaxed) as usize % max_chars;
-        let character = if (1..=128).contains(&character) { character } else { b'?' };
+        let character = if character == 0 { b'?' } else { character };
         let glyph = (character as usize - 1) * 8;
 
         for row in 0..8 {
