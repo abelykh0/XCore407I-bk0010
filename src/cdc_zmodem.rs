@@ -330,7 +330,7 @@ fn create_temp_file(
     let open_result = unsafe {
         allocation.open_with_options(
             fs,
-            |options| options.write(true).append(true),
+            |options| options.write(true),
             path,
         )
     };
