@@ -346,7 +346,7 @@ fn write_decimal_grouped(mut value: usize) {
 }
 
 pub(crate) fn write_send_complete(name: &[u8], size: u32) {
-    write_status(b"\r\nReceived file ");
+    write_status(b"\r\nSent file ");
     write_status(name);
     write_status(b" size ");
     write_decimal(size as usize);
