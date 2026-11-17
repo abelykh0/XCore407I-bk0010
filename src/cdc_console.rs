@@ -38,7 +38,7 @@ static CDC_BANNER_COMPLETE_RX_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
 #[cfg(feature = "nand-diagnostics")]
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
@@ -542,15 +542,44 @@ impl ListOutput {
     }
 }
 
-fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool) {
+fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: bool) {
+    let _ = profile;
+    #[cfg(feature = "list-profile")]
+    if profile {
+        crate::list_diag::begin();
+    }
+
+    #[cfg(feature = "list-profile")]
+    let total_started = if profile { crate::list_diag::cycle_count() } else { 0 };
     write_status(b"\r\nLIST: command accepted.\r\n");
     write_status(b"LittleFS total size: ");
-    write_decimal_grouped(fs.total_space());
+    #[cfg(feature = "list-profile")]
+    let total_space_started = if profile { crate::list_diag::cycle_count() } else { 0 };
+    let total_space = fs.total_space();
+    #[cfg(feature = "list-profile")]
+    let total_space_cycles = if profile {
+        crate::list_diag::cycle_count().wrapping_sub(total_space_started)
+    } else { 0 };
+    write_decimal_grouped(total_space);
     write_status(b" bytes\r\n");
     write_status(b"LIST: reading root directory...\r\n");
 
+    #[cfg(feature = "list-profile")]
+    let mut file_count = 0u32;
+    #[cfg(feature = "list-profile")]
+    let mut directory_count = 0u32;
     let mut output = ListOutput::new();
+    #[cfg(feature = "list-profile")]
+    if profile {
+        crate::list_diag::set_directory_active(true);
+    }
+    #[cfg(feature = "list-profile")]
+    let directory_started = if profile { crate::list_diag::cycle_count() } else { 0 };
     let result = crate::nand_fs::read_root_directory(fs, show_sizes, |path_bytes, is_dir, size| {
+        #[cfg(feature = "list-profile")]
+        if is_dir { directory_count = directory_count.wrapping_add(1); }
+        #[cfg(feature = "list-profile")]
+        if !is_dir { file_count = file_count.wrapping_add(1); }
         let path = &path_bytes[..path_bytes.len() - 1];
         output.push(b"  ");
         output.push(path);
@@ -565,8 +594,26 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool) {
         Ok(())
     });
     output.flush();
+    #[cfg(feature = "list-profile")]
+    let directory_cycles = if profile {
+        crate::list_diag::cycle_count().wrapping_sub(directory_started)
+    } else { 0 };
+    #[cfg(feature = "list-profile")]
+    if profile {
+        crate::list_diag::set_directory_active(false);
+    }
+    #[cfg(feature = "list-profile")]
+    let directory_stats = if profile {
+        crate::list_diag::snapshot()
+    } else {
+        crate::list_diag::Snapshot {
+            dhara_reads: 0, dhara_cycles: 0, nand_reads: 0, nand_bytes: 0,
+            nand_cycles: 0, cdc_calls: 0, cdc_bytes: 0, cdc_cycles: 0,
+            directory_cdc_cycles: 0,
+        }
+    };
 
-    match result {
+    match &result {
         Ok(()) => write_status(b"LIST: directory read complete.\r\n"),
         Err(error) => {
             write_status(b"Directory read failed; LittleFS error: 0x");
@@ -583,28 +630,134 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool) {
                 write_hex_u32(storage_error);
                 write_status(b"\r\n");
             }
-            write_status(b"> ");
-            return;
         }
     }
 
-    // Free-space calculation can be much slower than directory enumeration
-    // on the NAND-backed volume. Run it only after the file entries are shown.
-    write_status(b"LittleFS free space: ");
-    match fs.available_space() {
-        Ok(bytes) => {
-            write_decimal_grouped(bytes);
-            write_status(b" bytes\r\n");
+    #[cfg(feature = "list-profile")]
+    let mut available_cycles = 0u32;
+    if result.is_ok() {
+        write_status(b"LittleFS free space: ");
+        #[cfg(feature = "list-profile")]
+        let available_started = if profile { crate::list_diag::cycle_count() } else { 0 };
+        let available = fs.available_space();
+        #[cfg(feature = "list-profile")]
+        if profile {
+            available_cycles = crate::list_diag::cycle_count().wrapping_sub(available_started);
         }
-        Err(error) => {
-            write_status(b"query failed; LittleFS error 0x");
-            write_hex_u32(error.code() as u32);
-            write_status(b"\r\n");
+        match available {
+            Ok(bytes) => {
+                write_decimal_grouped(bytes);
+                write_status(b" bytes\r\n");
+            }
+            Err(error) => {
+                write_status(b"query failed; LittleFS error 0x");
+                write_hex_u32(error.code() as u32);
+                write_status(b"\r\n");
+            }
         }
     }
+    #[cfg(feature = "list-profile")]
+    if profile {
+        let total_cycles = crate::list_diag::cycle_count().wrapping_sub(total_started);
+        let stats = crate::list_diag::end();
+        report_list_profile(
+            show_sizes, file_count, directory_count, total_cycles,
+            total_space_cycles, directory_cycles, available_cycles,
+            directory_stats, stats,
+        );
+    } else {
+        write_status(b"> ");
+    }
+    #[cfg(not(feature = "list-profile"))]
     write_status(b"> ");
 }
 
+#[cfg(feature = "list-profile")]
+fn report_list_profile(
+    show_sizes: bool, files: u32, directories: u32, total_cycles: u32,
+    total_space_cycles: u32, directory_cycles: u32, available_cycles: u32,
+    directory_stats: crate::list_diag::Snapshot,
+    stats: crate::list_diag::Snapshot,
+) {
+    fn cycles_to_us(cycles: u32) -> usize {
+        ((cycles as u64 * 1_000_000) / 168_000_000) as usize
+    }
+    fn line(label: &[u8], cycles: u32) {
+        write_status(label);
+        write_decimal(cycles_to_us(cycles));
+        write_status(b" us\r\n");
+    }
+
+    let dhara_overhead = stats.dhara_cycles.saturating_sub(stats.nand_cycles);
+    let directory_residual = directory_cycles
+        .saturating_sub(directory_stats.dhara_cycles)
+        .saturating_sub(stats.directory_cdc_cycles);
+
+    write_status(b"\r\nLIST PROFILE (");
+    write_status(if show_sizes { b"with sizes" } else { b"SHORT" });
+    write_status(b")\r\nEntries: ");
+    write_decimal(files as usize);
+    write_status(b" files, ");
+    write_decimal(directories as usize);
+    write_status(b" directories\r\n");
+    line(b"Total LIST: ", total_cycles);
+    line(b"LittleFS total_space: ", total_space_cycles);
+    line(b"Directory traversal + formatting: ", directory_cycles);
+    line(b"LittleFS available_space: ", available_cycles);
+
+    write_status(b"Dhara map reads: ");
+    write_decimal(stats.dhara_reads as usize);
+    write_status(b" calls, ");
+    write_decimal(cycles_to_us(stats.dhara_cycles));
+    write_status(b" us total\r\n");
+    write_status(b"  Dhara excluding NAND (estimate): ");
+    write_decimal(cycles_to_us(dhara_overhead));
+    write_status(b" us\r\n");
+
+    write_status(b"NAND page reads: ");
+    write_decimal(stats.nand_reads as usize);
+    write_status(b", ");
+    write_decimal(stats.nand_bytes as usize);
+    write_status(b" bytes, ");
+    write_decimal(cycles_to_us(stats.nand_cycles));
+    write_status(b" us total\r\n");
+
+    write_status(b"CDC writes: ");
+    write_decimal(stats.cdc_calls as usize);
+    write_status(b", ");
+    write_decimal(stats.cdc_bytes as usize);
+    write_status(b" bytes, ");
+    write_decimal(cycles_to_us(stats.cdc_cycles));
+    write_status(b" us total\r\n");
+    line(b"  CDC during directory: ", stats.directory_cdc_cycles);
+    line(b"Directory residual (LittleFS + formatting estimate): ", directory_residual);
+    let available_dhara_reads = stats.dhara_reads.saturating_sub(directory_stats.dhara_reads);
+    let available_dhara_cycles = stats.dhara_cycles.saturating_sub(directory_stats.dhara_cycles);
+    let available_nand_reads = stats.nand_reads.saturating_sub(directory_stats.nand_reads);
+    let available_nand_bytes = stats.nand_bytes.saturating_sub(directory_stats.nand_bytes);
+    let available_nand_cycles = stats.nand_cycles.saturating_sub(directory_stats.nand_cycles);
+    write_status(b"Directory I/O: Dhara ");
+    write_decimal(directory_stats.dhara_reads as usize);
+    write_status(b" calls, ");
+    write_decimal(cycles_to_us(directory_stats.dhara_cycles));
+    write_status(b" us; NAND ");
+    write_decimal(directory_stats.nand_reads as usize);
+    write_status(b" reads, ");
+    write_decimal(cycles_to_us(directory_stats.nand_cycles));
+    write_status(b" us\r\n");
+    write_status(b"available_space I/O: Dhara ");
+    write_decimal(available_dhara_reads as usize);
+    write_status(b" calls, ");
+    write_decimal(cycles_to_us(available_dhara_cycles));
+    write_status(b" us; NAND ");
+    write_decimal(available_nand_reads as usize);
+    write_status(b" reads, ");
+    write_decimal(cycles_to_us(available_nand_cycles));
+    write_status(b" us (");
+    write_decimal(available_nand_bytes as usize);
+    write_status(b" bytes)\r\n");
+    write_status(b"Compare LIST PROFILE with LIST PROFILE SHORT; repeat both to reduce cache/order effects.\r\n> ");
+}
 
 pub fn report_format_status(bytes: &[u8]) {
     write_status(bytes);
@@ -716,6 +869,12 @@ fn write_status_counted(bytes: &[u8]) -> usize {
     if bytes.is_empty() {
         return 0;
     }
+    #[cfg(feature = "list-profile")]
+    let profile_started = if crate::list_diag::is_active() {
+        Some(crate::list_diag::cycle_count())
+    } else {
+        None
+    };
 
     // TinyUSB's CDC write may accept fewer bytes than requested when its TX
     // FIFO is full. Do not silently discard the tail of diagnostic reports:
@@ -744,6 +903,13 @@ fn write_status_counted(bytes: &[u8]) -> usize {
         }
     }
     let _ = unsafe { tusb::tud_cdc_n_write_flush(0) };
+    #[cfg(feature = "list-profile")]
+    if let Some(started) = profile_started {
+        crate::list_diag::record_cdc_write(
+            crate::list_diag::cycle_count().wrapping_sub(started),
+            offset,
+        );
+    }
     offset
 }
 
@@ -1344,7 +1510,7 @@ pub fn service(
                         }
                     } else if command_is(line, b"ECCSCAN") {
                         write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
-                        let vectors = crate::nand_fs::ecc_software_selftest();
+                        let vectors = crate::nand_ecc::ecc_software_selftest();
                         let vectors_ok = vectors == [0x00FF_FFFF, 0x00FF_FFFF, 0x00AA_AAAA, 0x0069_5659];
                         write_status(if vectors_ok { b"Software ECC reference vectors: PASS\r\n" } else { b"Software ECC reference vectors: FAIL\r\n" });
 
@@ -1494,9 +1660,18 @@ pub fn service(
                         } else {
                             write_status(b"Storage unavailable.\r\n> ");
                         }
+                    } else if command_is(line, b"LIST PROFILE") || command_is(line, b"LIST PROFILE SHORT") {
+                        if let Some(fs) = fs {
+                            #[cfg(feature = "list-profile")]
+                            list_files(fs, !command_is(line, b"LIST PROFILE SHORT"), true);
+                            #[cfg(not(feature = "list-profile"))]
+                            write_status(b"LIST PROFILE requires firmware built with --features list-profile.\r\n> ");
+                        } else {
+                            write_status(b"Storage unavailable.\r\n> ");
+                        }
                     } else if command_is(line, b"LIST") || command_is(line, b"LIST SHORT") {
                         if let Some(fs) = fs {
-                            list_files(fs, !command_is(line, b"LIST SHORT"));
+                            list_files(fs, !command_is(line, b"LIST SHORT"), false);
                         } else {
                             write_status(b"Storage unavailable.\r\n> ");
                         }

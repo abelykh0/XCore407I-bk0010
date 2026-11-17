@@ -77,6 +77,7 @@ where
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
+use crate::nand_ecc::{correct_ecc_chunk, ecc_software_512, ecc_software_512_fsmc};
 
 use littlefs2::{
     fs::{Allocation as LittleFsAllocation, Filesystem},
@@ -363,6 +364,12 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
     if out.is_empty() || column as usize + out.len() > PAGE_SIZE + SPARE_SIZE {
         return false;
     }
+    #[cfg(feature = "list-profile")]
+    let read_started = if crate::list_diag::is_active() {
+        Some(crate::list_diag::cycle_count())
+    } else {
+        None
+    };
     command(0x00);
     address(column as u8);
     address((column >> 8) as u8);
@@ -371,9 +378,23 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
     command(0x30);
     if !wait_ready_rb_timeout(timeout) {
         record_nand_device_failure(1, page, 0);
+        #[cfg(feature = "list-profile")]
+        if let Some(started) = read_started {
+            crate::list_diag::record_nand_read(
+                crate::list_diag::cycle_count().wrapping_sub(started),
+                out.len(),
+            );
+        }
         return false;
     }
-    for byte in out { *byte = read_data(); }
+    for byte in out.iter_mut() { *byte = read_data(); }
+    #[cfg(feature = "list-profile")]
+    if let Some(started) = read_started {
+        crate::list_diag::record_nand_read(
+            crate::list_diag::cycle_count().wrapping_sub(started),
+            out.len(),
+        );
+    }
     true
 }
 
@@ -407,157 +428,6 @@ fn encode_ecc(ecc: u32, out: &mut [u8]) {
     out[0] = ecc as u8;
     out[1] = (ecc >> 8) as u8;
     out[2] = (ecc >> 16) as u8;
-}
-
-/// Linux FSMC driver's 512-byte NAND_ECC_SOFT_HAMMING_SM_ORDER
-/// reference algorithm, expressed without alignment-dependent word loads.
-fn ecc_software_512(data: &[u8]) -> u32 {
-    if data.len() != FSMC_ECC_CHUNK_SIZE {
-        return 0;
-    }
-
-    #[inline]
-    fn inv_parity(value: u8) -> u8 {
-        ((!value.count_ones()) & 1) as u8
-    }
-
-    let mut rp4 = 0u32;
-    let mut rp6 = 0u32;
-    let mut rp8 = 0u32;
-    let mut rp10 = 0u32;
-    let mut rp12 = 0u32;
-    let mut rp14 = 0u32;
-    let mut rp16 = 0u32;
-    let mut par = 0u32;
-
-    // Linux ecc_sw_hamming_calculate(): 8 groups x 16 little-endian words.
-    let words: [u32; 128] = core::array::from_fn(|i| {
-        u32::from_le_bytes([
-            data[i * 4],
-            data[i * 4 + 1],
-            data[i * 4 + 2],
-            data[i * 4 + 3],
-        ])
-    });
-
-    for group in 0..8 {
-        let base = group * 16;
-        let mut t = words[base];
-        rp4 ^= words[base];
-        t ^= words[base + 1];
-        rp6 ^= t;
-        t ^= words[base + 2];
-        rp4 ^= words[base + 2];
-        t ^= words[base + 3];
-        rp8 ^= t;
-
-        t ^= words[base + 4];
-        rp4 ^= words[base + 4];
-        rp6 ^= words[base + 4];
-        t ^= words[base + 5];
-        rp6 ^= words[base + 5];
-        t ^= words[base + 6];
-        rp4 ^= words[base + 6];
-        t ^= words[base + 7];
-        rp10 ^= t;
-
-        t ^= words[base + 8];
-        rp4 ^= words[base + 8];
-        rp6 ^= words[base + 8];
-        rp8 ^= words[base + 8];
-        t ^= words[base + 9];
-        rp6 ^= words[base + 9];
-        rp8 ^= words[base + 9];
-        t ^= words[base + 10];
-        rp4 ^= words[base + 10];
-        rp8 ^= words[base + 10];
-        t ^= words[base + 11];
-        rp8 ^= words[base + 11];
-
-        t ^= words[base + 12];
-        rp4 ^= words[base + 12];
-        rp6 ^= words[base + 12];
-        t ^= words[base + 13];
-        rp6 ^= words[base + 13];
-        t ^= words[base + 14];
-        rp4 ^= words[base + 14];
-        t ^= words[base + 15];
-
-        par ^= t;
-        if group & 1 == 0 { rp12 ^= t; }
-        if group & 2 == 0 { rp14 ^= t; }
-        if group & 4 == 0 { rp16 ^= t; }
-    }
-
-    let fold = |v: u32| -> u8 {
-        let v = v ^ (v >> 16);
-        let v = v ^ (v >> 8);
-        v as u8
-    };
-    let rp4 = fold(rp4);
-    let rp6 = fold(rp6);
-    let rp8 = fold(rp8);
-    let rp10 = fold(rp10);
-    let rp12 = fold(rp12);
-    let rp14 = fold(rp14);
-    let rp16 = fold(rp16);
-
-    // Little-endian Linux SM-order parity packing.
-    let rp3 = fold(par >> 16);
-    let low16 = par & 0xFFFF;
-    let rp2 = (low16 ^ (low16 >> 8)) as u8;
-    let p16 = par ^ (par >> 16);
-    let rp1 = ((p16 >> 8) & 0xFF) as u8;
-    let rp0 = p16 as u8;
-    let par8 = (p16 ^ (p16 >> 8)) as u8;
-
-    let rp5 = par8 ^ rp4;
-    let rp7 = par8 ^ rp6;
-    let rp9 = par8 ^ rp8;
-    let rp11 = par8 ^ rp10;
-    let rp13 = par8 ^ rp12;
-    let rp15 = par8 ^ rp14;
-    let rp17 = par8 ^ rp16;
-
-    let ecc0 = (inv_parity(rp7) << 7)
-        | (inv_parity(rp6) << 6)
-        | (inv_parity(rp5) << 5)
-        | (inv_parity(rp4) << 4)
-        | (inv_parity(rp3) << 3)
-        | (inv_parity(rp2) << 2)
-        | (inv_parity(rp1) << 1)
-        | inv_parity(rp0);
-    let ecc1 = (inv_parity(rp15) << 7)
-        | (inv_parity(rp14) << 6)
-        | (inv_parity(rp13) << 5)
-        | (inv_parity(rp12) << 4)
-        | (inv_parity(rp11) << 3)
-        | (inv_parity(rp10) << 2)
-        | (inv_parity(rp9) << 1)
-        | inv_parity(rp8);
-    let ecc2 = (inv_parity(par8 & 0xF0) << 7)
-        | (inv_parity(par8 & 0x0F) << 6)
-        | (inv_parity(par8 & 0xCC) << 5)
-        | (inv_parity(par8 & 0x33) << 4)
-        | (inv_parity(par8 & 0xAA) << 3)
-        | (inv_parity(par8 & 0x55) << 2)
-        | (inv_parity(rp17) << 1)
-        | inv_parity(rp16);
-
-    (ecc0 as u32) | ((ecc1 as u32) << 8) | ((ecc2 as u32) << 16)
-}
-
-
-/// Convert 512-byte Linux SM-order Hamming ECC to the STM32 FSMC ECCR layout.
-/// Hardware comparisons establish a six-bit left rotation followed by inversion.
-fn ecc_linux_to_fsmc(ecc: u32) -> u32 {
-    let ecc = ecc & 0x00FF_FFFF;
-    let rotated = ((ecc << 6) | (ecc >> 18)) & 0x00FF_FFFF;
-    (!rotated) & 0x00FF_FFFF
-}
-
-fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
-    ecc_linux_to_fsmc(ecc_software_512(data))
 }
 
 /// Snapshot of the most recent page-program ECC verification.
@@ -906,91 +776,6 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     true
 }
 
-/// Decode a 24-bit STM32 FSMC syndrome using Linux's SM-order Hamming
-/// decoder. FSMC ECC is Linux ECC rotated left by six bits and complemented,
-/// so the syndrome is rotated right by six before decoding.
-fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
-    let linux = ((syndrome >> 6) | (syndrome << 18)) & 0x00FF_FFFF;
-    let b0 = linux as u8;
-    let b1 = (linux >> 8) as u8;
-    let b2 = (linux >> 16) as u8;
-
-    // A 512-byte data-bit syndrome has alternating parity in every
-    // address pair, including both high byte-address bits in b2.
-    if ((b0 ^ (b0 >> 1)) & 0x55) != 0x55
-        || ((b1 ^ (b1 >> 1)) & 0x55) != 0x55
-        || ((b2 ^ (b2 >> 1)) & 0x55) != 0x55
-    {
-        return None;
-    }
-
-    // Linux addressbits[] extracts the odd-positioned bits from each
-    // interleaved parity byte: input bits 1,3,5,7 become output bits 0..3.
-    #[inline]
-    fn address_bits(value: u8) -> usize {
-        (((value >> 1) & 1)
-            | ((value >> 2) & 2)
-            | ((value >> 3) & 4)
-            | ((value >> 4) & 8)) as usize
-    }
-
-    let byte_index = (address_bits(b2 & 0x03) << 8)
-        | (address_bits(b1) << 4)
-        | address_bits(b0);
-    let bit_index = address_bits(b2 >> 2);
-
-    if byte_index >= FSMC_ECC_CHUNK_SIZE || bit_index >= 8 {
-        return None;
-    }
-    Some((byte_index, bit_index))
-}
-
-fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
-    if data.len() != FSMC_ECC_CHUNK_SIZE {
-        return false;
-    }
-
-    let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
-    if syndrome == 0 {
-        return true;
-    }
-
-    // A single changed ECC bit is a parity-bit error, not a data-bit error.
-    if syndrome.count_ones() == 1 {
-        return true;
-    }
-
-    let Some((byte_index, bit_index)) = ecc_error_location(syndrome) else {
-        return false;
-    };
-    data[byte_index] ^= 1 << bit_index;
-    true
-}
-
-/// Reference vectors from Linux ecc_sw_hamming_calculate() using
-/// NAND_ECC_SOFT_HAMMING_SM_ORDER and 512-byte steps.
-pub(crate) fn ecc_software_selftest() -> [u32; 4] {
-    let zero = [0u8; FSMC_ECC_CHUNK_SIZE];
-    let erased = [0xFFu8; FSMC_ECC_CHUNK_SIZE];
-    let mut single_bit = [0u8; FSMC_ECC_CHUNK_SIZE];
-    single_bit[0] = 1;
-    let mut pseudo_random = [0u8; FSMC_ECC_CHUNK_SIZE];
-    let mut state = 0x1234_5678u32;
-    for byte in &mut pseudo_random {
-        state ^= state << 13;
-        state ^= state >> 17;
-        state ^= state << 5;
-        *byte = state as u8;
-    }
-    [
-        ecc_software_512(&zero),
-        ecc_software_512(&erased),
-        ecc_software_512(&single_bit),
-        ecc_software_512(&pseudo_random),
-    ]
-}
-
-
 /// Read-only raw NAND interface probe: READ ID and STATUS, without page access.
 pub(crate) fn ecc_scan_interface_probe() -> ([u8; 5], u8, bool) {
     // Avoid FSMC NWAIT stalling the CPU while probing the bus. Restore PCR2
@@ -1260,11 +1045,12 @@ pub(crate) fn ecc_hardware_compare_page(
     Ok(result)
 }
 
-static NAND_ECC_CHECK_ENABLED: AtomicBool = AtomicBool::new(true);
+// Software ECC validation is disabled in normal filesystem operation. It may
+// be enabled only by explicit NAND/ECC diagnostic commands.
+static NAND_ECC_DIAGNOSTIC_CHECK_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Temporarily bypass ECC validation/correction for a controlled storage diagnostic.
 pub(crate) fn set_ecc_check_enabled(enabled: bool) {
-    NAND_ECC_CHECK_ENABLED.store(enabled, Ordering::Release);
+    NAND_ECC_DIAGNOSTIC_CHECK_ENABLED.store(enabled, Ordering::Release);
 }
 
 pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
@@ -1278,7 +1064,7 @@ pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
         return false;
     }
 
-    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
+    if !NAND_ECC_DIAGNOSTIC_CHECK_ENABLED.load(Ordering::Acquire) {
         return true;
     }
 
@@ -1316,22 +1102,70 @@ pub(crate) fn configure_fsmc() {
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
         let pcr2 = fsmc_pcr2();
-        // Timing experiments: MEMSET 4 -> 2, MEMWAIT 8 -> 2, MEMHOLD 4 -> 1, MEMHIZ 2 -> 1.
-        // Keep all attribute-space timings unchanged.
+        // NAND timing reference for this board:
+        // - Samsung K9F1G08U0E, x8 NAND, 3.3 V.
+        // - HCLK = 168 MHz, so one HCLK = 5.952 ns.
+        // - Datasheet minima include tCLS/tALS=12 ns, tCS=20 ns,
+        //   tWP/tRP=12 ns, tWC/tRC=25 ns, tWH=10 ns, tDH/tALH=5 ns,
+        //   tAR/tCLR=10 ns, and tWB(max)=100 ns.
+        // The "minimum" values below are register-field lower bounds derived
+        // from those AC limits, not guarantees for PCB signal integrity or
+        // proof that a more aggressive combination works on this board.
+        //
+        // Common-space FSMC_PMEM2 fields (each SET/WAIT encoding is N+1 HCLK):
+        // MEMSET=2: address/control setup before NWE/NOE; 3 cycles = 17.9 ns.
+        //   Datasheet tCS=20 ns implies a theoretical minimum encoding of 3
+        //   (4 cycles = 23.8 ns); tCLS/tALS alone would need encoding 2.
+        //   Current value 2 is below tCS if this phase is the CE-setup phase.
+        // MEMWAIT=2: minimum NWE/NOE assertion phase; 3 cycles = 17.9 ns.
+        //   tWP/tRP=12 ns requires at least 3 HCLK cycles, so encoding 2 is
+        //   the theoretical minimum at 168 MHz (encoding 1 is only 11.9 ns).
+        // MEMHOLD=1: post-command address hold on reads / data hold on writes.
+        //   Encoding 0 is reserved; 1 is the minimum legal value. On reads
+        //   this is (HOLD+2) cycles = 17.9 ns; on writes it is HOLD cycles.
+        // MEMHIZ=1: write-cycle data-bus Hi-Z interval; encoding 0 is the
+        //   minimum legal value (1 HCLK). NAND AC tables give no separate
+        //   numeric minimum for this FSMC bus-turnaround field.
         let common_timing = 2 | (2 << 8) | (1 << 16) | (1 << 24);
-        // RM0090 §36.6.5: the final NAND address byte is written through
-        // attribute space with ATTHOLD long enough to cover tWB. At HCLK =
-        // 168 MHz, 18 cycles provide about 107 ns (> K9F1G08U0E tWB max 100 ns).
-        let attribute_timing = 4 | (8 << 8) | (18 << 16) | (2 << 24);
+        //
+        // Attribute-space FSMC_PATT2 is used for the final NAND address-byte
+        // write (see address_last()). Fields have the same SET/WAIT/HOLD
+        // meanings, but use the attribute timing register:
+        // ATTSET=3: address setup; 4 cycles = 23.8 ns. This is the
+        //   minimum selected from tCS=20 ns.
+        // ATTWAIT=2: NWE/NOE assertion; 3 cycles = 17.9 ns. This is the
+        //   minimum selected from tWP=12 ns (3 HCLK cycles required).
+        // ATTHOLD=18: post-command hold; 18 cycles = 107.1 ns. This is
+        //   intentionally longer than tWB(max)=100 ns. If this delay is
+        //   relied on to cover tWB, the theoretical minimum is 17 cycles
+        //   (encoding 17 = 101.2 ns); encoding 16 would be only 95.2 ns.
+        // ATTHIZ=2: write-cycle data-bus Hi-Z interval; encoding 0 is the
+        //   controller minimum. No separate NAND AC limit sets this value.
+        let attribute_timing = 3 | (2 << 8) | (18 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
         write_volatile(fsmc_pmem2(), common_timing);
         write_volatile(fsmc_patt2(), attribute_timing);
-        // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
-        // individual 512-byte data chunks; ECCEN remains clear while idle.
-        // TCLR controls CLE-to-RE delay (tCLR), not the NAND tWHR interval.
-        // Reduce TCLR from 6 to 0: with MEMSET=2, CLE-to-RE is
-        // (0 + 2 + 2) HCLK cycles = about 23.8 ns at 168 MHz (> tCLR min 10 ns).
-        // Reduce TAR from 2 to 1: ALE-to-RE is about 29.8 ns at 168 MHz.
+        //
+        // FSMC_PCR2 configuration:
+        // PWAITEN=1: enable the NAND-bank wait input; 0 is the disabled
+        //   alternative, not a timing optimization.
+        // PBKEN=1: enable NAND bank 2; it must remain 1 for accesses.
+        // PTYP=1: select NAND Flash (0 selects PC Card/CompactFlash).
+        // PWID=00: 8-bit data bus, matching this x8 NAND; 16-bit is invalid
+        //   for the fitted device.
+        // ECCPS=001: 512-byte ECC chunk, matching the four chunks per 2-KiB
+        //   page. This is a format/algorithm choice, not a speed parameter.
+        // ECCEN=0 while idle; ecc_begin_chunk() enables it only for each
+        // 512-byte chunk. Reserved bits remain zero.
+        //
+        // TCLR=0: CLE-low to RE-low delay:
+        //   (TCLR + SET + 2) HCLK. In common space (MEMSET=2), this is
+        //   4 cycles = 23.8 ns, above tCLR(min)=10 ns. Zero is the minimum
+        //   field encoding and is sufficient by the NAND AC specification.
+        // TAR=1: ALE-low to RE-low delay, same formula. With MEMSET=2 this
+        //   is 5 cycles = 29.8 ns, above tAR(min)=10 ns. TAR=0 would give
+        //   4 cycles = 23.8 ns and is the theoretical minimum.
+        // These TCLR/TAR delays are not the NAND tWHR parameter.
         let control = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 13) | (1 << 17);
         write_volatile(pcr2, control);
         let _ = read_volatile(pcr2);

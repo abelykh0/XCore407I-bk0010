@@ -587,7 +587,19 @@ impl Storage for DharaStorage {
         for (index, page) in buf.chunks_exact_mut(PAGE_SIZE).enumerate() {
             let sector = (off / PAGE_SIZE + index) as u32;
             let mut error = 0i32;
+            #[cfg(feature = "list-profile")]
+            let read_started = if crate::list_diag::is_active() {
+                Some(crate::list_diag::cycle_count())
+            } else {
+                None
+            };
             let result = unsafe { xcore_dhara_map_read(sector, page.as_mut_ptr(), &mut error) };
+            #[cfg(feature = "list-profile")]
+            if let Some(started) = read_started {
+                crate::list_diag::record_dhara_read(
+                    crate::list_diag::cycle_count().wrapping_sub(started),
+                );
+            }
             if result != 0 {
                 record_storage_io_error(1, sector, if error != 0 { error } else { result });
                 return Err(LfsError::IO);

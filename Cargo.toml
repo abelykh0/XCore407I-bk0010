@@ -11,6 +11,7 @@ glob = "0.3"
 [features]
 default = []
 cpu-cycle-diag = []
+list-profile = []
 nand-diagnostics = []
 
 [dependencies]

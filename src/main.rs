@@ -24,8 +24,10 @@ use xcore407i_blinker::rtc;
 use board::{
     configure_board_pins, configure_exception_priorities, system_clock_168mhz, TICKS,
 };
+#[cfg(any(feature = "cpu-cycle-diag", feature = "list-profile"))]
+use board::enable_cycle_counter;
 #[cfg(feature = "cpu-cycle-diag")]
-use board::{enable_cycle_counter, read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
+use board::{read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
 use file_browser::{
     build_save_path, draw_file_browser, draw_save_dialog, list_root_files,
     load_tetris_from_path, save_file_exists, save_ram_to_path,
@@ -211,7 +213,7 @@ fn main() -> ! {
 
     rtc::initialize(&device.RCC, &device.PWR, &device.RTC);
 
-    #[cfg(feature = "cpu-cycle-diag")]
+    #[cfg(any(feature = "cpu-cycle-diag", feature = "list-profile"))]
     enable_cycle_counter(&mut core);
 
     // Emulator initialization is deferred until the boot-keyboard startup

@@ -388,7 +388,7 @@ pub fn run_ecc_storage_diagnostic(
                 Ok(())
             },
         );
-        crate::nand_fs::set_ecc_check_enabled(true);
+        crate::nand_fs::set_ecc_check_enabled(false);
         if read_result.is_err() {
             return if ecc_enabled { 6 } else { 5 };
         }
