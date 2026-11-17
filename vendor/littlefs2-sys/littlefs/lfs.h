@@ -394,6 +394,10 @@ typedef struct lfs_dir {
 
     lfs_off_t pos;
     lfs_block_t head[2];
+
+    // State for the reverse-order short directory iterator.
+    uint16_t short_id;
+    bool short_started;
 } lfs_dir_t;
 
 // littlefs file type
