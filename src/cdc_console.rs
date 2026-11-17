@@ -217,7 +217,7 @@ fn write_write_profile(zmodem: &cdc_zmodem::State) {
     write_status(b" calls, "); write_decimal(p.zmodem_poll_us as usize); write_status(b" us; submit: ");
     write_decimal(p.zmodem_submit_calls as usize); write_status(b" calls, ");
     write_decimal(p.zmodem_submit_us as usize); write_status(b" us\r\n");
-    write_status(b"LittleFS append operation (includes write/flush): "); write_decimal(p.lfs_open_us as usize); write_status(b" us; write: ");
+    write_status(b"LittleFS append operation (includes write/flush): "); write_decimal(p.lfs_append_us as usize); write_status(b" us; write: ");
     write_decimal(p.lfs_write_calls as usize); write_status(b" calls / ");
     write_decimal(p.lfs_write_bytes as usize); write_status(b" bytes / ");
     write_decimal(p.lfs_write_us as usize); write_status(b" us; flush: ");
