@@ -53,7 +53,7 @@ fn main() {
     println!("cargo:rerun-if-changed=usb_device/audio_uac2.h");
     println!("cargo:rerun-if-changed=usb_device/uvc_nv12.c");
     println!("cargo:rerun-if-changed=usb_device/uvc_nv12.h");
-    println!("cargo:rerun-if-changed=vendor/tinyusb-sys/tinyusb/src");
+    println!("cargo:rerun-if-changed=vendor/tinyusb/src");
     println!("cargo:rerun-if-changed=vendor/dhara");
     println!("cargo:rerun-if-changed=csrc/dhara_adapter.c");
 
@@ -99,12 +99,11 @@ fn main() {
         dhara.compile("dhara");
 
     // Build TinyUSB directly from its upstream C sources. This removes the
-    // tinyusb-sys Rust wrapper while retaining the existing checked-in
-    // TinyUSB 0.21.0 source tree during the stack migration.
-    let tinyusb_root = "vendor/tinyusb-sys/tinyusb";
+    // tinyusb-sys Rust wrapper while retaining the checked-in TinyUSB 0.21.0 source tree.
+    let tinyusb_root = "vendor/tinyusb";
     let cmsis_device = format!("{tinyusb_root}/hw/mcu/st/cmsis_device_f4/Include");
-    let cmsis_core = "vendor/tinyusb-sys/../../../Drivers/CMSIS/Include";
-    let cmsis_st_device = "vendor/tinyusb-sys/../../../Drivers/CMSIS/Device/ST/STM32F4xx/Include";
+    let cmsis_core = "vendor/tinyusb/../../../Drivers/CMSIS/Include";
+    let cmsis_st_device = "vendor/tinyusb/../../../Drivers/CMSIS/Device/ST/STM32F4xx/Include";
 
     let mut tinyusb = Build::new();
     tinyusb

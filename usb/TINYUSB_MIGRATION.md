@@ -41,10 +41,9 @@ This work is isolated on `experiment/tinyusb-device-migration`. Do not merge int
    - Sets four-byte DMA alignment and compile-time guards against staging
      buffers larger than 4096 bytes.
 
-4. The TinyUSB C sources are now compiled directly from the root `build.rs`, with
-   bindings generated from `tusb.h` into `src/tusb.rs`. The `tinyusb-sys`
-   Rust wrapper dependency has been removed from `Cargo.toml`; the checked-in
-   TinyUSB 0.21.0 source remains in place.
+4. The TinyUSB C sources are compiled directly from `vendor/tinyusb/src` by
+   the root `build.rs`, with bindings generated from `tusb.h` into `src/tusb.rs`.
+   No `tinyusb-sys` Rust wrapper crate is used.
 5. Existing Rust-side DMA buffers are documented/guarded:
    - UVC producer buffers: two separate 2304-byte, 4-byte-aligned buffers.
    - UAC2 source packet: 12 bytes in a 4-byte-aligned persistent object.
