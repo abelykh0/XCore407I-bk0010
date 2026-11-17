@@ -229,8 +229,7 @@ fn write_write_profile(zmodem: &cdc_zmodem::State) {
     write_status(b"LittleFS write: ");
     write_decimal(p.lfs_write_calls as usize); write_status(b" calls / ");
     write_decimal(p.lfs_write_bytes as usize); write_status(b" bytes / ");
-    write_decimal(p.lfs_write_us as usize); write_status(b" us; flush: ");
-    write_decimal(p.lfs_flush_us as usize); write_status(b" us\r\n");
+    write_decimal(p.lfs_write_us as usize); write_status(b" us\r\n");
     write_status(b"Dhara map_write: "); write_decimal(p.dhara_write_calls as usize);
     write_status(b" calls / "); write_decimal(p.dhara_write_pages as usize);
     write_status(b" pages / "); write_decimal(p.dhara_write_us as usize); write_status(b" us\r\n");
