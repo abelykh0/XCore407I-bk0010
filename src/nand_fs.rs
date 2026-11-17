@@ -84,6 +84,9 @@ use littlefs2::{
     io::Result as LfsResult,
 };
 
+#[unsafe(link_section = ".ccmram.nand")]
+static mut LIST_DIRECTORY_INDEX: [u32; 1026] = [0; 1026];
+
 const NAND_BASE: usize = 0x7000_0000;
 
 // Access FSMC NAND Bank 2 through the PAC register block rather than
@@ -1222,12 +1225,15 @@ pub fn read_root_directory(
     include_file_sizes: bool,
     mut visit: impl FnMut(&[u8], bool, usize) -> LfsResult<()>,
 ) -> LfsResult<()> {
+    // Keep the sequential index in CCM RAM instead of consuming firmware
+    // stack space. The filesystem console serializes directory operations.
+    let directory_index = unsafe { &mut *core::ptr::addr_of_mut!(LIST_DIRECTORY_INDEX) };
     fs.read_dir_and_then(&littlefs2::path!("/"), |directory| {
         loop {
             let item = if include_file_sizes {
                 directory.next()
             } else {
-                directory.next_without_size()
+                directory.next_without_size_sequential(directory_index)
             };
             let Some(item) = item else {
                 break;
