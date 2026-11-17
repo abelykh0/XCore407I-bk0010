@@ -1331,8 +1331,8 @@ pub(crate) fn configure_fsmc() {
         // TCLR controls CLE-to-RE delay (tCLR), not the NAND tWHR interval.
         // Reduce TCLR from 6 to 0: with MEMSET=2, CLE-to-RE is
         // (0 + 2 + 2) HCLK cycles = about 23.8 ns at 168 MHz (> tCLR min 10 ns).
-        // Keep TAR at 2: ALE-to-RE remains about 35.7 ns.
-        let control = (1 << 1) | (1 << 2) | (1 << 3) | (2 << 13) | (1 << 17);
+        // Reduce TAR from 2 to 1: ALE-to-RE is about 29.8 ns at 168 MHz.
+        let control = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 13) | (1 << 17);
         write_volatile(pcr2, control);
         let _ = read_volatile(pcr2);
     }
