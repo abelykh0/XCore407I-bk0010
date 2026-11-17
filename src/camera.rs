@@ -105,12 +105,12 @@ pub const HEIGHT: usize = 512;
 pub const Y_PLANE_BYTES: usize = WIDTH * HEIGHT;
 pub const FRAME_BYTES: usize = Y_PLANE_BYTES + (WIDTH * HEIGHT / 2);
 pub const UVC_HEADER_BYTES: usize = 4;
-// Match the original C packetizer: one 512-pixel NV12 row's worth of payload
-// (512 Y bytes + 256 UV bytes) plus the four-byte UVC header.
-pub const PAYLOAD_BYTES: usize = WIDTH * 3 / 2;
-pub const TRANSFER_BYTES: usize = UVC_HEADER_BYTES + PAYLOAD_BYTES;
 
 pub const CANVAS_HEIGHT: usize = HEIGHT / 2;
+
+const TEXT_FOREGROUND_WHITE: u8 = 0b0011_1111;
+const TEXT_BACKGROUND_BLACK: u8 = 0;
+const TEXT_BACKGROUND_BLUE: u8 = 0b0001_0000;
 pub const CANVAS_BYTES: usize = WIDTH * CANVAS_HEIGHT;
 pub const CANVAS_TAIL_BYTES: usize = 46_848;
 pub const CANVAS_MAIN_BYTES: usize = CANVAS_BYTES - CANVAS_TAIL_BYTES;
@@ -499,8 +499,6 @@ pub fn show_usb_status(message: &[u8]) {
     use crate::font8x8::FONT8X8;
 
     let max_chars = canvas_width() / 8;
-    const FOREGROUND: u8 = 63;
-    const BACKGROUND: u8 = 0;
     const TEXT_ROWS: usize = CANVAS_HEIGHT / 8;
 
     let text_row = USB_STATUS_ROW.fetch_add(1, Ordering::Relaxed) as usize % TEXT_ROWS;
@@ -516,9 +514,9 @@ pub fn show_usb_status(message: &[u8]) {
             let bits = FONT8X8[glyph + row];
             for column in 0..8 {
                 let color = if bits & (0x80 >> column) != 0 {
-                    FOREGROUND
+                    TEXT_FOREGROUND_WHITE
                 } else {
-                    BACKGROUND
+                    TEXT_BACKGROUND_BLACK
                 };
                 set_pixel(
                     character_index * 8 + column,
@@ -539,10 +537,8 @@ pub fn show_file_browser_line(row: usize, message: &[u8], _selected: bool) {
     }
     let columns = canvas_width() / 8;
     // Palette indices use BBGGRR: all channels set gives white; blue-only is 00010000.
-    const FOREGROUND_WHITE: u8 = 0b00111111;
-    const BACKGROUND_BLUE: u8 = 0b00010000;
-    let foreground = FOREGROUND_WHITE;
-    let background = BACKGROUND_BLUE;
+    let foreground = TEXT_FOREGROUND_WHITE;
+    let background = TEXT_BACKGROUND_BLUE;
 
     for column in 0..columns {
         let raw = message.get(column).copied().unwrap_or(b' ');
@@ -607,8 +603,6 @@ pub fn show_keyboard_input(message: &[u8]) {
     use crate::font8x8::FONT8X8;
 
     let max_chars = canvas_width() / 8;
-    const FOREGROUND: u8 = 63;
-    const BACKGROUND: u8 = 0;
     const TEXT_ROW: usize = CANVAS_HEIGHT / 8 - 2;
 
     for &character in message {
@@ -619,7 +613,7 @@ pub fn show_keyboard_input(message: &[u8]) {
         for row in 0..8 {
             let bits = FONT8X8[glyph + row];
             for x in 0..8 {
-                let color = if bits & (0x80 >> x) != 0 { FOREGROUND } else { BACKGROUND };
+                let color = if bits & (0x80 >> x) != 0 { TEXT_FOREGROUND_WHITE } else { TEXT_BACKGROUND_BLACK };
                 set_pixel(column * 8 + x, TEXT_ROW * 8 + row, color);
             }
         }
