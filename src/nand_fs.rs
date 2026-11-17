@@ -1316,22 +1316,70 @@ pub(crate) fn configure_fsmc() {
         rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
         let _ = rcc.ahb3enr().read().bits();
         let pcr2 = fsmc_pcr2();
-        // Timing experiments: MEMSET 4 -> 2, MEMWAIT 8 -> 2, MEMHOLD 4 -> 1, MEMHIZ 2 -> 1.
-        // Keep all attribute-space timings unchanged.
+        // NAND timing reference for this board:
+        // - Samsung K9F1G08U0E, x8 NAND, 3.3 V.
+        // - HCLK = 168 MHz, so one HCLK = 5.952 ns.
+        // - Datasheet minima include tCLS/tALS=12 ns, tCS=20 ns,
+        //   tWP/tRP=12 ns, tWC/tRC=25 ns, tWH=10 ns, tDH/tALH=5 ns,
+        //   tAR/tCLR=10 ns, and tWB(max)=100 ns.
+        // The "minimum" values below are register-field lower bounds derived
+        // from those AC limits, not guarantees for PCB signal integrity or
+        // proof that a more aggressive combination works on this board.
+        //
+        // Common-space FSMC_PMEM2 fields (each SET/WAIT encoding is N+1 HCLK):
+        // MEMSET=2: address/control setup before NWE/NOE; 3 cycles = 17.9 ns.
+        //   Datasheet tCS=20 ns implies a theoretical minimum encoding of 3
+        //   (4 cycles = 23.8 ns); tCLS/tALS alone would need encoding 2.
+        //   Current value 2 is below tCS if this phase is the CE-setup phase.
+        // MEMWAIT=2: minimum NWE/NOE assertion phase; 3 cycles = 17.9 ns.
+        //   tWP/tRP=12 ns requires at least 3 HCLK cycles, so encoding 2 is
+        //   the theoretical minimum at 168 MHz (encoding 1 is only 11.9 ns).
+        // MEMHOLD=1: post-command address hold on reads / data hold on writes.
+        //   Encoding 0 is reserved; 1 is the minimum legal value. On reads
+        //   this is (HOLD+2) cycles = 17.9 ns; on writes it is HOLD cycles.
+        // MEMHIZ=1: write-cycle data-bus Hi-Z interval; encoding 0 is the
+        //   minimum legal value (1 HCLK). NAND AC tables give no separate
+        //   numeric minimum for this FSMC bus-turnaround field.
         let common_timing = 2 | (2 << 8) | (1 << 16) | (1 << 24);
-        // RM0090 §36.6.5: the final NAND address byte is written through
-        // attribute space with ATTHOLD long enough to cover tWB. At HCLK =
-        // 168 MHz, 18 cycles provide about 107 ns (> K9F1G08U0E tWB max 100 ns).
+        //
+        // Attribute-space FSMC_PATT2 is used for the final NAND address-byte
+        // write (see address_last()). Fields have the same SET/WAIT/HOLD
+        // meanings, but use the attribute timing register:
+        // ATTSET=4: address setup; 5 cycles = 29.8 ns. tCS=20 ns gives a
+        //   theoretical minimum encoding of 3 (4 cycles = 23.8 ns).
+        // ATTWAIT=8: NWE/NOE assertion; 9 cycles = 53.6 ns. Based on
+        //   tWP=12 ns alone, encoding 2 (3 cycles = 17.9 ns) is the minimum.
+        // ATTHOLD=18: post-command hold; 18 cycles = 107.1 ns. This is
+        //   intentionally longer than tWB(max)=100 ns. If this delay is
+        //   relied on to cover tWB, the theoretical minimum is 17 cycles
+        //   (encoding 17 = 101.2 ns); encoding 16 would be only 95.2 ns.
+        // ATTHIZ=2: write-cycle data-bus Hi-Z interval; encoding 0 is the
+        //   controller minimum. No separate NAND AC limit sets this value.
         let attribute_timing = 4 | (8 << 8) | (18 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
         write_volatile(fsmc_pmem2(), common_timing);
         write_volatile(fsmc_patt2(), attribute_timing);
-        // NAND bank 2, 8-bit bus, NWAIT enabled. ECC is enabled only around
-        // individual 512-byte data chunks; ECCEN remains clear while idle.
-        // TCLR controls CLE-to-RE delay (tCLR), not the NAND tWHR interval.
-        // Reduce TCLR from 6 to 0: with MEMSET=2, CLE-to-RE is
-        // (0 + 2 + 2) HCLK cycles = about 23.8 ns at 168 MHz (> tCLR min 10 ns).
-        // Reduce TAR from 2 to 1: ALE-to-RE is about 29.8 ns at 168 MHz.
+        //
+        // FSMC_PCR2 configuration:
+        // PWAITEN=1: enable the NAND-bank wait input; 0 is the disabled
+        //   alternative, not a timing optimization.
+        // PBKEN=1: enable NAND bank 2; it must remain 1 for accesses.
+        // PTYP=1: select NAND Flash (0 selects PC Card/CompactFlash).
+        // PWID=00: 8-bit data bus, matching this x8 NAND; 16-bit is invalid
+        //   for the fitted device.
+        // ECCPS=001: 512-byte ECC chunk, matching the four chunks per 2-KiB
+        //   page. This is a format/algorithm choice, not a speed parameter.
+        // ECCEN=0 while idle; ecc_begin_chunk() enables it only for each
+        // 512-byte chunk. Reserved bits remain zero.
+        //
+        // TCLR=0: CLE-low to RE-low delay:
+        //   (TCLR + SET + 2) HCLK. In common space (MEMSET=2), this is
+        //   4 cycles = 23.8 ns, above tCLR(min)=10 ns. Zero is the minimum
+        //   field encoding and is sufficient by the NAND AC specification.
+        // TAR=1: ALE-low to RE-low delay, same formula. With MEMSET=2 this
+        //   is 5 cycles = 29.8 ns, above tAR(min)=10 ns. TAR=0 would give
+        //   4 cycles = 23.8 ns and is the theoretical minimum.
+        // These TCLR/TAR delays are not the NAND tWHR parameter.
         let control = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 13) | (1 << 17);
         write_volatile(pcr2, control);
         let _ = read_volatile(pcr2);
