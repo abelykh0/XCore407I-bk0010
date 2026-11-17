@@ -49,6 +49,7 @@ pub struct State {
     receive_size: u32,
     receive_file_committed: bool,
     receive_started_rtc_ms: u32,
+    receive_elapsed_seconds: u32,
     wire: [u8; WIRE_CAPACITY],
     wire_len: usize,
     wire_pos: usize,
@@ -102,6 +103,7 @@ impl State {
             receive_size: 0,
             receive_file_committed: false,
             receive_started_rtc_ms: 0,
+            receive_elapsed_seconds: 0,
             wire: [0; WIRE_CAPACITY],
             wire_len: 0,
             wire_pos: 0,
@@ -177,11 +179,10 @@ impl State {
             return false;
         }
 
-        let elapsed_ms = rtc_now_millis().wrapping_sub(self.receive_started_rtc_ms);
         if !super::cdc_console::write_receive_complete(
             &self.receive_name[..self.receive_name_len],
             self.receive_size,
-            elapsed_ms / 1_000,
+            self.receive_elapsed_seconds,
         ) {
             return false;
         }
@@ -189,6 +190,7 @@ impl State {
         self.receive_name_len = 0;
         self.receive_size = 0;
         self.receive_file_committed = false;
+        self.receive_elapsed_seconds = 0;
         true
     }
 
@@ -455,6 +457,7 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.receive_size = 0;
     state.receive_file_committed = false;
     state.receive_started_rtc_ms = 0;
+    state.receive_elapsed_seconds = 0;
     state.wire_len = 0;
     state.wire_pos = 0;
     state.last_activity_ms = now_ms;
@@ -911,6 +914,8 @@ pub fn service(
                 // Defer the console message until the ZMODEM close response
                 // has been queued and the receiver is torn down. The CDC
                 // endpoint still carries protocol traffic at this point.
+                state.receive_elapsed_seconds =
+                    rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms) / 1_000;
                 state.receive_file_committed = true;
             }
             Action::Event(Event::SessionCompleted) => {
