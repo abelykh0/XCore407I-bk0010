@@ -1,4 +1,4 @@
-use std::{env, fs, path::Path};
+use std::{env, path::Path};
 
 use cc::Build;
 
@@ -135,20 +135,14 @@ fn main() {
         .use_core()
         .formatter(bindgen::Formatter::Rustfmt)
         .ctypes_prefix("core::ffi")
-        // TinyUSB's UVC probe/commit control contains nested packed anonymous
-        // bitfield structs. bindgen 0.68 emits an invalid Rust repr(C, packed,
-        // align) for one of those nested types. Keep the public named type as
-        // an opaque ABI-sized type (so API declarations remain valid), while
-        // preventing bindgen from generating the problematic nested layout.
-        // The application transfers UVC control payloads as raw bytes.
+        // The application transfers UVC probe/commit control payloads as raw
+        // bytes and does not inspect their individual fields.
         .opaque_type("video_probe_and_commit_control_t")
         // The nested helper is referenced by a generated union field, so it
         // must remain declared. Make it opaque rather than blocklisting it;
-        // this preserves the Rust type name while avoiding its invalid layout.
+        // this preserves the Rust type name while avoiding its nested layout.
         .opaque_type("video_probe_and_commit_control_t__bindgen_ty_1__bindgen_ty_1")
-        // CDC's telephone call-state descriptor has the same packed/align
-        // bindgen conflict through its anonymous 32-bit bitfield struct.
-        // The application does not inspect this descriptor type.
+        // The application does not inspect this CDC descriptor type.
         .opaque_type("cdc_desc_func_telephone_call_state_reporting_capabilities_t")
         .clang_args(&[
             "-target",
@@ -169,18 +163,7 @@ fn main() {
     let bindings_path = format!("{out_dir}/tusb_bindings.rs");
     bindings
         .write_to_file(&bindings_path)
-        .expect("Failed to write TinyUSB bindings");
-
-    // bindgen 0.68 emits plain extern blocks, which are rejected by this
-    // crate's Rust 2024 edition. Mark generated foreign blocks unsafe as
-    // required by Rust 2024. This is valid in Rust 2021 as well.
-    let generated = fs::read_to_string(&bindings_path)
-        .expect("Failed to read generated TinyUSB bindings");
-    let generated = generated
-        .replace("extern \"C\" {", "unsafe extern \"C\" {")
-        .replace("extern \"system\" {", "unsafe extern \"system\" {");
-    fs::write(&bindings_path, generated)
-        .expect("Failed to update generated TinyUSB bindings");
+        .expect("Failed to write generated TinyUSB bindings");
 
     // Track all config and source inputs so incremental builds re-run correctly.
     println!("cargo:rerun-if-changed={tinyusb_root}/src");
