@@ -580,6 +580,16 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
     if profile {
         crate::list_diag::set_directory_active(false);
     }
+    #[cfg(feature = "list-profile")]
+    let directory_stats = if profile {
+        crate::list_diag::snapshot()
+    } else {
+        crate::list_diag::Snapshot {
+            dhara_reads: 0, dhara_cycles: 0, nand_reads: 0, nand_bytes: 0,
+            nand_cycles: 0, cdc_calls: 0, cdc_bytes: 0, cdc_cycles: 0,
+            directory_cdc_cycles: 0,
+        }
+    };
 
     match &result {
         Ok(()) => write_status(b"LIST: directory read complete.\r\n"),
@@ -630,7 +640,8 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
         let stats = crate::list_diag::end();
         report_list_profile(
             show_sizes, file_count, directory_count, total_cycles,
-            total_space_cycles, directory_cycles, available_cycles, stats,
+            total_space_cycles, directory_cycles, available_cycles,
+            directory_stats, stats,
         );
     } else {
         write_status(b"> ");
@@ -643,6 +654,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
 fn report_list_profile(
     show_sizes: bool, files: u32, directories: u32, total_cycles: u32,
     total_space_cycles: u32, directory_cycles: u32, available_cycles: u32,
+    directory_stats: crate::list_diag::Snapshot,
     stats: crate::list_diag::Snapshot,
 ) {
     fn cycles_to_us(cycles: u32) -> usize {
@@ -697,6 +709,26 @@ fn report_list_profile(
     write_status(b" us total\r\n");
     line(b"  CDC during directory: ", stats.directory_cdc_cycles);
     line(b"Directory residual (LittleFS + formatting estimate): ", directory_residual);
+    let available_dhara_reads = stats.dhara_reads.saturating_sub(directory_stats.dhara_reads);
+    let available_nand_reads = stats.nand_reads.saturating_sub(directory_stats.nand_reads);
+    let available_nand_bytes = stats.nand_bytes.saturating_sub(directory_stats.nand_bytes);
+    let available_nand_cycles = stats.nand_cycles.saturating_sub(directory_stats.nand_cycles);
+    write_status(b"Directory I/O: Dhara ");
+    write_decimal(directory_stats.dhara_reads as usize);
+    write_status(b" calls, NAND ");
+    write_decimal(directory_stats.nand_reads as usize);
+    write_status(b" reads, ");
+    write_decimal(cycles_to_us(directory_stats.nand_cycles));
+    write_status(b" us\\r\\n");
+    write_status(b"available_space I/O: Dhara ");
+    write_decimal(available_dhara_reads as usize);
+    write_status(b" calls, NAND ");
+    write_decimal(available_nand_reads as usize);
+    write_status(b" reads, ");
+    write_decimal(cycles_to_us(available_nand_cycles));
+    write_status(b" us (");
+    write_decimal(available_nand_bytes as usize);
+    write_status(b" bytes)\\r\\n");
     write_status(b"Compare LIST PROFILE with LIST PROFILE SHORT; repeat both to reduce cache/order effects.\r\n> ");
 }
 
