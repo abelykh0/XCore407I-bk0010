@@ -14,8 +14,7 @@ pub extern "C" fn tusb_time_millis_api() -> u32 {
     TICKS.load(Ordering::Relaxed)
 }
 
-// DWC2 STM32 clock setup reads this CMSIS system-clock symbol.
-#[unsafe(no_mangle)]
+// Shared system-clock frequency used by the CMSIS symbol and diagnostics.
 pub(crate) const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;
 
 #[unsafe(no_mangle)]
