@@ -39,10 +39,22 @@ pub(crate) const SAVE_NAME_CAPACITY: usize = MAX_BROWSER_FILENAME - 4;
 pub(crate) const MAX_BROWSER_FILES: usize = 17;
 pub(crate) const MAX_BROWSER_PATH: usize = MAX_BROWSER_FILENAME + 2; // '/' + name + NUL
 
-// Keep the browser's path table in ordinary .bss, not on the limited stack.
-pub(crate) static mut BROWSER_PATHS: [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES] =
-    [[0; MAX_BROWSER_PATH]; MAX_BROWSER_FILES];
-pub(crate) static mut BROWSER_PATH_LENGTHS: [u16; MAX_BROWSER_FILES] = [0; MAX_BROWSER_FILES];
+// Keep the browser's file table in ordinary .bss, not on the limited stack.
+#[derive(Clone, Copy)]
+pub(crate) struct BrowserFile {
+    pub(crate) path: [u8; MAX_BROWSER_PATH],
+    pub(crate) len: u16,
+}
+
+impl BrowserFile {
+    const EMPTY: Self = Self {
+        path: [0; MAX_BROWSER_PATH],
+        len: 0,
+    };
+}
+
+pub(crate) static mut BROWSER_FILES: [BrowserFile; MAX_BROWSER_FILES] =
+    [BrowserFile::EMPTY; MAX_BROWSER_FILES];
 
 // Shared by normal and CDC modes; their filesystem operations are serialized.
 static mut FILE_BROWSER_FILE_ALLOCATION: core::mem::MaybeUninit<
@@ -95,41 +107,17 @@ fn compare_browser_names(
     left.len().cmp(&right.len())
 }
 
-/// Stable insertion sort; the browser is capped at MAX_BROWSER_FILES entries.
-fn sort_browser_files(
-    paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
-    path_lengths: &mut [u16; MAX_BROWSER_FILES],
-    count: usize,
-) {
-    for index in 1..count {
-        let mut path = [0u8; MAX_BROWSER_PATH];
-        path.copy_from_slice(&paths[index]);
-        let path_len = path_lengths[index];
-        let mut destination = index;
-
-        while destination > 0
-            && compare_browser_names(
-                &paths[destination - 1],
-                path_lengths[destination - 1],
-                &path,
-                path_len,
-            ) == core::cmp::Ordering::Greater
-        {
-            paths[destination] = paths[destination - 1];
-            path_lengths[destination] = path_lengths[destination - 1];
-            destination -= 1;
-        }
-
-        paths[destination] = path;
-        path_lengths[destination] = path_len;
-    }
+/// Sort complete entries in place; the comparator preserves ASCII case-insensitive order.
+fn sort_browser_files(files: &mut [BrowserFile], count: usize) {
+    files[..count].sort_unstable_by(|left, right| {
+        compare_browser_names(&left.path, left.len, &right.path, right.len)
+    });
 }
 
 /// Read up to MAX_BROWSER_FILES regular files from the LittleFS root directory.
 /// Paths are retained as NUL-terminated ASCII strings for the later load.
 pub(crate) fn list_root_files(
-    paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
-    path_lengths: &mut [u16; MAX_BROWSER_FILES],
+    files: &mut [BrowserFile; MAX_BROWSER_FILES],
     progress: impl FnMut(u32, u32),
 ) -> Result<usize, xcore407i_blinker::nand_fs::FsAccessError> {
     xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
@@ -156,19 +144,18 @@ pub(crate) fn list_root_files(
                 return Ok(());
             }
 
-            paths[count][..path_bytes.len()].copy_from_slice(path_bytes);
-            path_lengths[count] = path_bytes.len() as u16;
+            files[count].path[..path_bytes.len()].copy_from_slice(path_bytes);
+            files[count].len = path_bytes.len() as u16;
             count += 1;
             Ok(())
         })?;
-        sort_browser_files(paths, path_lengths, count);
+        sort_browser_files(files, count);
         Ok(count)
     }, progress)
 }
 
 pub(crate) fn draw_file_browser(
-    paths: &[[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
-    path_lengths: &[u16; MAX_BROWSER_FILES],
+    files: &[BrowserFile; MAX_BROWSER_FILES],
     count: usize,
     selected: usize,
 ) {
@@ -180,9 +167,9 @@ pub(crate) fn draw_file_browser(
         if row < count {
             line[0] = if row == selected { b'>' } else { b' ' };
             line[1] = b' ';
-            let path_len = path_lengths[row] as usize;
+            let path_len = files[row].len as usize;
             // Root paths have the form "/filename\\0".
-            let name = &paths[row][1..path_len - 1];
+            let name = &files[row].path[1..path_len - 1];
             let copy_len = name.len().min(line.len() - 2);
             line[2..2 + copy_len].copy_from_slice(&name[..copy_len]);
         } else if row == 0 && count == 0 {
