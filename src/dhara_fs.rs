@@ -625,7 +625,13 @@ impl Storage for DharaStorage {
         for (index, page) in data.chunks_exact(PAGE_SIZE).enumerate() {
             let sector = (off / PAGE_SIZE + index) as u32;
             let mut error = 0i32;
+            #[cfg(feature = "list-profile")]
+            let write_started = crate::write_diag::cycle_count();
             let result = unsafe { xcore_dhara_map_write(sector, page.as_ptr(), &mut error) };
+            #[cfg(feature = "list-profile")]
+            crate::write_diag::record_dhara_write(
+                crate::write_diag::cycle_count().wrapping_sub(write_started), 1,
+            );
             if result != 0 {
                 record_storage_io_error(2, sector, if error != 0 { error } else { result });
                 return Err(LfsError::IO);
