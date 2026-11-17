@@ -77,6 +77,54 @@ unsafe extern "C" {
     static mut RamBuffer: [u8; 0x4000];
 }
 
+/// Compare root-level filenames lexicographically without regard to ASCII case.
+fn compare_browser_names(
+    left: &[u8; MAX_BROWSER_PATH],
+    left_len: u16,
+    right: &[u8; MAX_BROWSER_PATH],
+    right_len: u16,
+) -> core::cmp::Ordering {
+    let left = &left[1..left_len as usize - 1];
+    let right = &right[1..right_len as usize - 1];
+    for (&a, &b) in left.iter().zip(right.iter()) {
+        match a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()) {
+            core::cmp::Ordering::Equal => {}
+            ordering => return ordering,
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+/// Stable insertion sort; the browser is capped at MAX_BROWSER_FILES entries.
+fn sort_browser_files(
+    paths: &mut [[u8; MAX_BROWSER_PATH]; MAX_BROWSER_FILES],
+    path_lengths: &mut [u16; MAX_BROWSER_FILES],
+    count: usize,
+) {
+    for index in 1..count {
+        let mut path = [0u8; MAX_BROWSER_PATH];
+        path.copy_from_slice(&paths[index]);
+        let path_len = path_lengths[index];
+        let mut destination = index;
+
+        while destination > 0
+            && compare_browser_names(
+                &paths[destination - 1],
+                path_lengths[destination - 1],
+                &path,
+                path_len,
+            ) == core::cmp::Ordering::Greater
+        {
+            paths[destination] = paths[destination - 1];
+            path_lengths[destination] = path_lengths[destination - 1];
+            destination -= 1;
+        }
+
+        paths[destination] = path;
+        path_lengths[destination] = path_len;
+    }
+}
+
 /// Read up to MAX_BROWSER_FILES regular files from the LittleFS root directory.
 /// Paths are retained as NUL-terminated ASCII strings for the later load.
 pub(crate) fn list_root_files(
@@ -113,6 +161,7 @@ pub(crate) fn list_root_files(
             count += 1;
             Ok(())
         })?;
+        sort_browser_files(paths, path_lengths, count);
         Ok(count)
     }, progress)
 }
