@@ -12,6 +12,10 @@ static ZMODEM_SUBMIT_CALLS: AtomicU32 = AtomicU32::new(0);
 static ZMODEM_SUBMIT_US: AtomicU32 = AtomicU32::new(0);
 static LFS_CREATE_US: AtomicU32 = AtomicU32::new(0);
 static LFS_APPEND_US: AtomicU32 = AtomicU32::new(0);
+static LFS_APPEND_CALLS: AtomicU32 = AtomicU32::new(0);
+static LFS_OPEN_US: AtomicU32 = AtomicU32::new(0);
+static LFS_CALLBACK_US: AtomicU32 = AtomicU32::new(0);
+static LFS_CLOSE_US: AtomicU32 = AtomicU32::new(0);
 static LFS_COMMIT_US: AtomicU32 = AtomicU32::new(0);
 static LFS_WRITE_CALLS: AtomicU32 = AtomicU32::new(0);
 static LFS_WRITE_BYTES: AtomicU32 = AtomicU32::new(0);
@@ -50,7 +54,8 @@ pub(crate) fn begin() {
         &TRANSFER_US,
         &ZMODEM_POLL_CALLS, &ZMODEM_POLL_US,
         &ZMODEM_SUBMIT_CALLS, &ZMODEM_SUBMIT_US,
-        &LFS_CREATE_US, &LFS_APPEND_US, &LFS_COMMIT_US,
+        &LFS_CREATE_US, &LFS_APPEND_US, &LFS_APPEND_CALLS,
+        &LFS_OPEN_US, &LFS_CALLBACK_US, &LFS_CLOSE_US, &LFS_COMMIT_US,
         &LFS_WRITE_CALLS, &LFS_WRITE_BYTES, &LFS_WRITE_US, &LFS_FLUSH_US,
         &DHARA_WRITE_CALLS, &DHARA_WRITE_PAGES, &DHARA_WRITE_US,
         &NAND_PROGRAM_CALLS, &NAND_PROGRAM_US, &NAND_FIFO_WAIT_US,
@@ -78,7 +83,13 @@ pub(crate) fn record_zmodem_submit(cycles: u32) {
 }
 
 pub(crate) fn record_lfs_create(cycles: u32) { add(&LFS_CREATE_US, cycles_to_us(cycles)); }
-pub(crate) fn record_lfs_append(cycles: u32) { add(&LFS_APPEND_US, cycles_to_us(cycles)); }
+pub(crate) fn record_lfs_append(total: u32, open: u32, callback: u32, close: u32) {
+    add(&LFS_APPEND_CALLS, 1);
+    add(&LFS_APPEND_US, cycles_to_us(total));
+    add(&LFS_OPEN_US, cycles_to_us(open));
+    add(&LFS_CALLBACK_US, cycles_to_us(callback));
+    add(&LFS_CLOSE_US, cycles_to_us(close));
+}
 pub(crate) fn record_lfs_commit(cycles: u32) { add(&LFS_COMMIT_US, cycles_to_us(cycles)); }
 
 pub(crate) fn record_lfs_write(cycles: u32, bytes: usize) {
@@ -116,6 +127,10 @@ pub(crate) struct Snapshot {
     pub zmodem_submit_us: u32,
     pub lfs_create_us: u32,
     pub lfs_append_us: u32,
+    pub lfs_append_calls: u32,
+    pub lfs_open_us: u32,
+    pub lfs_callback_us: u32,
+    pub lfs_close_us: u32,
     pub lfs_commit_us: u32,
     pub lfs_write_calls: u32,
     pub lfs_write_bytes: u32,
@@ -141,6 +156,10 @@ pub(crate) fn snapshot() -> Snapshot {
         zmodem_submit_us: ZMODEM_SUBMIT_US.load(Ordering::Relaxed),
         lfs_create_us: LFS_CREATE_US.load(Ordering::Relaxed),
         lfs_append_us: LFS_APPEND_US.load(Ordering::Relaxed),
+        lfs_append_calls: LFS_APPEND_CALLS.load(Ordering::Relaxed),
+        lfs_open_us: LFS_OPEN_US.load(Ordering::Relaxed),
+        lfs_callback_us: LFS_CALLBACK_US.load(Ordering::Relaxed),
+        lfs_close_us: LFS_CLOSE_US.load(Ordering::Relaxed),
         lfs_commit_us: LFS_COMMIT_US.load(Ordering::Relaxed),
         lfs_write_calls: LFS_WRITE_CALLS.load(Ordering::Relaxed),
         lfs_write_bytes: LFS_WRITE_BYTES.load(Ordering::Relaxed),
