@@ -1417,6 +1417,120 @@ static int lfs_dir_getname(lfs_t *lfs, lfs_mdir_t *dir,
     info->size = 0;
     return 0;
 }
+#ifndef LFS_READONLY
+// Build a compact index of the current NAME tags with one backwards pass.
+// The per-ID gdiff is kept temporarily in tag_cache[].tag, avoiding a
+// separate stack array. Unsupported layouts fall back to lfs_dir_getname().
+static int lfs_dir_build_tag_cache(lfs_t *lfs, lfs_dir_t *dir) {
+    if (dir->tag_cache_valid) {
+        return 0;
+    }
+
+    if (dir->tag_cache_disabled) {
+        return 1;
+    }
+
+    if (dir->m.split || dir->m.count > LFS_DIR_TAG_CACHE_SIZE ||
+            lfs_gstate_hasmovehere(&lfs->gdisk, dir->m.pair)) {
+        dir->tag_cache_disabled = true;
+        return 1;
+    }
+
+    for (uint16_t id = 0; id < dir->m.count; id++) {
+        dir->tag_cache[id].tag = 0;
+        dir->tag_cache[id].off = LFS_BLOCK_NULL;
+    }
+
+    lfs_off_t off = dir->m.off;
+    lfs_tag_t ntag = dir->m.etag;
+    const lfs_tag_t gmask = LFS_MKTAG(0x780, 0x3ff, 0);
+
+    while (off >= sizeof(lfs_tag_t) + lfs_tag_dsize(ntag)) {
+        off -= lfs_tag_dsize(ntag);
+        lfs_tag_t tag = ntag;
+        int err = lfs_bd_read(lfs, NULL, &lfs->rcache, sizeof(ntag),
+                dir->m.pair[0], off, &ntag, sizeof(ntag));
+        if (err) {
+            dir->tag_cache_count = 0;
+            dir->tag_cache_valid = false;
+            return err;
+        }
+
+        ntag = (lfs_frombe32(ntag) ^ tag) & 0x7fffffff;
+
+        for (uint16_t id = 0; id < dir->m.count; id++) {
+            lfs_dir_tag_cache_entry_t *entry = &dir->tag_cache[id];
+            if (entry->off != LFS_BLOCK_NULL) {
+                continue;
+            }
+
+            lfs_stag_t gdiff = (lfs_stag_t)entry->tag;
+            lfs_tag_t gtag = LFS_MKTAG(LFS_TYPE_NAME, id,
+                    lfs->name_max+1);
+
+            if (lfs_tag_id(gmask) != 0 &&
+                    lfs_tag_type1(tag) == LFS_TYPE_SPLICE &&
+                    lfs_tag_id(tag) <= lfs_tag_id(gtag - gdiff)) {
+                if (tag == (LFS_MKTAG(LFS_TYPE_CREATE, 0, 0) |
+                        (LFS_MKTAG(0, 0x3ff, 0) & (gtag - gdiff)))) {
+                    // This ID did not exist before its CREATE splice.
+                    entry->tag = 0;
+                    entry->off = 0;
+                    continue;
+                }
+
+                gdiff += LFS_MKTAG(0, lfs_tag_splice(tag), 0);
+                entry->tag = (lfs_tag_t)gdiff;
+            }
+
+            if ((gmask & tag) == (gmask & (gtag - gdiff))) {
+                if (lfs_tag_isdelete(tag)) {
+                    entry->tag = 0;
+                    entry->off = 0;
+                } else {
+                    entry->tag = tag + gdiff;
+                    entry->off = off;
+                }
+            }
+        }
+    }
+
+    // IDs without a matching NAME tag are absent, just as in get_slice().
+    for (uint16_t id = 0; id < dir->m.count; id++) {
+        if (dir->tag_cache[id].off == LFS_BLOCK_NULL) {
+            dir->tag_cache[id].tag = 0;
+            dir->tag_cache[id].off = 0;
+        }
+    }
+
+    dir->tag_cache_count = dir->m.count;
+    dir->tag_cache_valid = true;
+    return 0;
+}
+#endif
+
+static int lfs_dir_getname_cached(lfs_t *lfs, lfs_dir_t *dir,
+        uint16_t id, struct lfs_info *info) {
+    if (id >= dir->tag_cache_count ||
+            dir->tag_cache[id].off == 0) {
+        return LFS_ERR_NOENT;
+    }
+
+    const lfs_dir_tag_cache_entry_t *entry = &dir->tag_cache[id];
+    lfs_size_t size = lfs_tag_size(entry->tag);
+    int err = lfs_bd_read(lfs, NULL, &lfs->rcache, size,
+            dir->m.pair[0], entry->off + sizeof(lfs_tag_t),
+            info->name, size);
+    if (err) {
+        return err;
+    }
+
+    memset(info->name + size, 0, lfs->name_max + 1 - size);
+    info->type = lfs_tag_type3(entry->tag);
+    info->size = 0;
+    return 0;
+}
+
 
 static int lfs_dir_getinfo(lfs_t *lfs, lfs_mdir_t *dir,
         uint16_t id, struct lfs_info *info) {
@@ -2361,6 +2475,7 @@ fixmlist:;
                 lfs_dir_t *ddir = (lfs_dir_t*)d;
                 ddir->tag_cache_count = 0;
                 ddir->tag_cache_valid = false;
+                ddir->tag_cache_disabled = false;
                 ddir->short_id = 0;
                 ddir->short_started = false;
             }
@@ -2490,6 +2605,7 @@ static int lfs_dir_orphaningcommit(lfs_t *lfs, lfs_mdir_t *dir,
                     lfs_dir_t *ddir = (lfs_dir_t*)d;
                     ddir->tag_cache_count = 0;
                     ddir->tag_cache_valid = false;
+                    ddir->tag_cache_disabled = false;
                     ddir->short_id = 0;
                     ddir->short_started = false;
                 }
@@ -2502,6 +2618,7 @@ static int lfs_dir_orphaningcommit(lfs_t *lfs, lfs_mdir_t *dir,
                 ddir->head[1] = ldir.pair[1];
                 ddir->tag_cache_count = 0;
                 ddir->tag_cache_valid = false;
+                ddir->tag_cache_disabled = false;
                 ddir->short_id = 0;
                 ddir->short_started = false;
             }
@@ -2769,6 +2886,7 @@ static int lfs_dir_open_(lfs_t *lfs, lfs_dir_t *dir, const char *path) {
     dir->short_started = false;
     dir->tag_cache_count = 0;
     dir->tag_cache_valid = false;
+    dir->tag_cache_disabled = false;
 
     // add to list of mdirs
     dir->type = LFS_TYPE_DIR;
@@ -2806,6 +2924,11 @@ static int lfs_dir_read_internal(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *in
     // Split directories retain the original iterator until their pair
     // ordering is handled by the optimized path.
     if (!include_size && !dir->m.split) {
+        int cache_err = lfs_dir_build_tag_cache(lfs, dir);
+        if (cache_err < 0) {
+            return cache_err;
+        }
+
         if (!dir->short_started) {
             dir->short_id = dir->m.count;
             dir->short_started = true;
@@ -2813,7 +2936,9 @@ static int lfs_dir_read_internal(lfs_t *lfs, lfs_dir_t *dir, struct lfs_info *in
 
         while (dir->short_id > 0) {
             dir->short_id -= 1;
-            int err = lfs_dir_getname(lfs, &dir->m, dir->short_id, info);
+            int err = (cache_err == 0)
+                    ? lfs_dir_getname_cached(lfs, dir, dir->short_id, info)
+                    : lfs_dir_getname(lfs, &dir->m, dir->short_id, info);
             if (err && err != LFS_ERR_NOENT) {
                 return err;
             }
@@ -2921,6 +3046,7 @@ static int lfs_dir_rewind_(lfs_t *lfs, lfs_dir_t *dir) {
     dir->short_started = false;
     dir->tag_cache_count = 0;
     dir->tag_cache_valid = false;
+    dir->tag_cache_disabled = false;
     return 0;
 }
 
