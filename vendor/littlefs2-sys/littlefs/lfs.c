@@ -1417,7 +1417,6 @@ static int lfs_dir_getname(lfs_t *lfs, lfs_mdir_t *dir,
     info->size = 0;
     return 0;
 }
-#ifndef LFS_READONLY
 // Build a compact index of the current NAME tags with one backwards pass.
 // The per-ID gdiff is kept temporarily in tag_cache[].tag, avoiding a
 // separate stack array. Unsupported layouts fall back to lfs_dir_getname().
@@ -1507,7 +1506,6 @@ static int lfs_dir_build_tag_cache(lfs_t *lfs, lfs_dir_t *dir) {
     dir->tag_cache_valid = true;
     return 0;
 }
-#endif
 
 static int lfs_dir_getname_cached(lfs_t *lfs, lfs_dir_t *dir,
         uint16_t id, struct lfs_info *info) {
