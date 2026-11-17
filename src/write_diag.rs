@@ -20,7 +20,6 @@ static LFS_COMMIT_US: AtomicU32 = AtomicU32::new(0);
 static LFS_WRITE_CALLS: AtomicU32 = AtomicU32::new(0);
 static LFS_WRITE_BYTES: AtomicU32 = AtomicU32::new(0);
 static LFS_WRITE_US: AtomicU32 = AtomicU32::new(0);
-static LFS_FLUSH_US: AtomicU32 = AtomicU32::new(0);
 static DHARA_WRITE_CALLS: AtomicU32 = AtomicU32::new(0);
 static DHARA_WRITE_PAGES: AtomicU32 = AtomicU32::new(0);
 static DHARA_WRITE_US: AtomicU32 = AtomicU32::new(0);
@@ -56,7 +55,7 @@ pub(crate) fn begin() {
         &ZMODEM_SUBMIT_CALLS, &ZMODEM_SUBMIT_US,
         &LFS_CREATE_US, &LFS_APPEND_US, &LFS_APPEND_CALLS,
         &LFS_OPEN_US, &LFS_CALLBACK_US, &LFS_CLOSE_US, &LFS_COMMIT_US,
-        &LFS_WRITE_CALLS, &LFS_WRITE_BYTES, &LFS_WRITE_US, &LFS_FLUSH_US,
+        &LFS_WRITE_CALLS, &LFS_WRITE_BYTES, &LFS_WRITE_US,
         &DHARA_WRITE_CALLS, &DHARA_WRITE_PAGES, &DHARA_WRITE_US,
         &NAND_PROGRAM_CALLS, &NAND_PROGRAM_US, &NAND_FIFO_WAIT_US,
         &NAND_BUSY_WAIT_US, &NAND_ERASE_CALLS, &NAND_ERASE_US,
@@ -102,7 +101,6 @@ pub(crate) fn record_lfs_write(cycles: u32, bytes: usize) {
     add(&LFS_WRITE_US, cycles_to_us(cycles));
 }
 
-pub(crate) fn record_lfs_flush(cycles: u32) { add(&LFS_FLUSH_US, cycles_to_us(cycles)); }
 
 pub(crate) fn record_dhara_write(cycles: u32, pages: usize) {
     add(&DHARA_WRITE_CALLS, 1);
@@ -139,7 +137,6 @@ pub(crate) struct Snapshot {
     pub lfs_write_calls: u32,
     pub lfs_write_bytes: u32,
     pub lfs_write_us: u32,
-    pub lfs_flush_us: u32,
     pub dhara_write_calls: u32,
     pub dhara_write_pages: u32,
     pub dhara_write_us: u32,
@@ -168,7 +165,6 @@ pub(crate) fn snapshot() -> Snapshot {
         lfs_write_calls: LFS_WRITE_CALLS.load(Ordering::Relaxed),
         lfs_write_bytes: LFS_WRITE_BYTES.load(Ordering::Relaxed),
         lfs_write_us: LFS_WRITE_US.load(Ordering::Relaxed),
-        lfs_flush_us: LFS_FLUSH_US.load(Ordering::Relaxed),
         dhara_write_calls: DHARA_WRITE_CALLS.load(Ordering::Relaxed),
         dhara_write_pages: DHARA_WRITE_PAGES.load(Ordering::Relaxed),
         dhara_write_us: DHARA_WRITE_US.load(Ordering::Relaxed),
