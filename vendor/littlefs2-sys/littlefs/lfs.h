@@ -387,7 +387,8 @@ typedef struct lfs_mdir {
 
 // Cached metadata tag location used by the short directory iterator.
 typedef struct lfs_dir_tag_cache_entry {
-    lfs_tag_t tag;
+    // Stored as uint32_t because lfs_tag_t is private to lfs.c.
+    uint32_t tag;
     lfs_off_t off;
 } lfs_dir_tag_cache_entry_t;
 
