@@ -143,11 +143,18 @@ void bk_set_pc(uint16_t start)
 int32_t bk_load_bin_write(uint16_t load_addr, uint32_t offset,
                           const uint8_t *data, size_t length)
 {
+    const uint32_t memory_end = 0100000u;
+    const uint32_t start = (uint32_t)load_addr;
+
     if (data == NULL && length != 0) return -1;
+    if (start >= memory_end || offset > memory_end - start ||
+        length > memory_end - start - offset) {
+        return -1;
+    }
 
     for (size_t i = 0; i < length; ++i) {
-        uint16_t addr = (uint16_t)(load_addr + offset + i);
-        if (addr < 0100000 && sl_byte(&pdp, addr, data[i]) != OK) {
+        const c_addr addr = start + offset + (uint32_t)i;
+        if (sl_byte(&pdp, addr, data[i]) != OK) {
             return -1;
         }
     }
@@ -158,41 +165,40 @@ int32_t bk_load_bin_write(uint16_t load_addr, uint32_t offset,
 // and -1 on a memory access error.
 int32_t bk_load_bin_finish(uint16_t load_addr, uint16_t data_len)
 {
-    uint16_t start_pc = load_addr;
+    const uint32_t memory_end = 0100000u;
+    if ((uint32_t)load_addr + data_len > memory_end) {
+        return -1;
+    }
 
     if (sl_word(&pdp, 0000264, load_addr) != OK ||
         sl_word(&pdp, 0000266, data_len) != OK) {
         return -1;
     }
 
-    // A stack word belongs to the loaded image when both bytes fall within
-    // the streamed payload. Use address arithmetic instead of a touched-byte map.
-    for (uint16_t slot = 0000776; slot >= 0000720; slot -= 2) {
-        uint16_t offset = (uint16_t)(slot - load_addr);
-        if ((uint32_t)offset + 1u < data_len) {
-            d_word candidate;
-            if (ll_word(&pdp, slot, &candidate) == OK &&
-                candidate >= 0000400 &&
-                candidate < 0100000 &&
-                (candidate & 1u) == 0) {
-                start_pc = candidate;
-                break;
-            }
-        }
-    }
-
     // A complete screen dump updates video memory but leaves the monitor active.
-    if (load_addr == 0040000 &&
-        data_len == 0040000 &&
-        start_pc == 0040000) {
+    if (load_addr == 0040000 && data_len == 0040000) {
         return 0;
     }
 
-    pdp.regs[SP] = (load_addr < 0001000 && start_pc < 0001000)
-                       ? (uint16_t)(load_addr & (uint16_t)~1u)
-                       : 0001000;
-    pdp.regs[PC] = start_pc;
-    pdp.psw = 0000000;
+    // The BK-0010 monitor starts a program with CALL (R5) at 100376.
+    // Its return address is therefore 100400. The monitor enters this call
+    // with SP=1000; emulate the JSR PC,(R5) stack effect explicitly.
+    pdp.regs[SP] = 001000;
+    pdp.regs[SP] = (uint16_t)(pdp.regs[SP] - 2u);
+    if (sl_word(&pdp, pdp.regs[SP], 0100400) != OK) {
+        return -1;
+    }
+    pdp.regs[PC] = load_addr;
+
+    // MOV 264,R5 in the monitor sets N/Z and clears V; CALL (R5) preserves
+    // the condition codes. Preserve C as MOV does.
+    pdp.psw &= CC_C;
+    if (load_addr & 0100000u) {
+        pdp.psw |= CC_N;
+    }
+    if (load_addr == 0) {
+        pdp.psw |= CC_Z;
+    }
     return 1;
 }
 
