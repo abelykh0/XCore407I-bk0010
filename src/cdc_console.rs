@@ -825,7 +825,7 @@ fn report_list_profile(
     write_decimal(meta_hits as usize);
     write_status(b" hits, ");
     write_decimal(meta_misses as usize);
-    write_status(b" misses\\r\\n");
+    write_status(b" misses\r\n");
 
     write_status(b"CDC writes: ");
     write_decimal(stats.cdc_calls as usize);
