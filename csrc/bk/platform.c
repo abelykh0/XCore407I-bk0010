@@ -43,7 +43,115 @@ unsigned short last_branch = 0;
 uint8_t  port0177660 = 0x40;    // Keyboard Status Register
 uint8_t  port0177662 = 0;       // Keyboard Data / Code Register
 uint16_t port0177714 = 0;       // Parallel Port / Peripheral Device Register
-uint16_t port0177716 = 0x0040;  // System Port Register / Control Register (bit 6 - speaker)
+uint16_t port0177716 = 0x0040;  // SEL1 output register (bit 6 - speaker)
+static volatile uint8_t keyboard_key_pressed;
+static uint8_t sel1_write_flag;
+static uint8_t keyboard_irq_info;
+
+static void bk_schedule_keyboard_irq(void);
+static int bk_tty_finish(d_word info);
+
+/*
+ * BK-0010 system timer (177706/177710/177712).
+ * DWT CYCCNT is a 168 MHz wall-clock source. One base timer tick is
+ * 42.9 us (7207.2 core clocks); the timer is independent of PDP execution.
+ */
+#define BK_TIMER_DWT_CYCCNT ((volatile uint32_t *)0xE0001004u)
+#define BK_TIMER_BASE_TICK_SCALED 72072u
+
+static uint16_t bk_timer_preset;
+static uint16_t bk_timer_counter;
+static uint8_t bk_timer_control;
+static uint8_t bk_timer_expiry;
+static uint8_t bk_timer_expiry_warmup = 1u;
+static uint32_t bk_timer_last_dwt;
+static uint64_t bk_timer_phase;
+
+static void bk_timer_reset(void)
+{
+    bk_timer_preset = 0;
+    bk_timer_counter = 0;
+    bk_timer_control = 0;
+    bk_timer_expiry = 0;
+    bk_timer_expiry_warmup = 1u;
+    bk_timer_phase = 0;
+    bk_timer_last_dwt = *BK_TIMER_DWT_CYCCNT;
+}
+
+void bk_timer_update(void)
+{
+    if ((bk_timer_control & 0x10u) == 0u ||
+        (bk_timer_control & 0x01u) != 0u) {
+        bk_timer_phase = 0;
+        return;
+    }
+
+    uint32_t now = *BK_TIMER_DWT_CYCCNT;
+    uint32_t elapsed_cycles = now - bk_timer_last_dwt;
+    bk_timer_last_dwt = now;
+
+    uint32_t prescaler = 1u;
+    if (bk_timer_control & 0x20u) prescaler *= 4u;
+    if (bk_timer_control & 0x40u) prescaler *= 16u;
+
+    const uint64_t tick_period = (uint64_t)BK_TIMER_BASE_TICK_SCALED * prescaler;
+    uint64_t elapsed_scaled = (uint64_t)elapsed_cycles * 10u;
+    if (elapsed_scaled < tick_period - bk_timer_phase) {
+        bk_timer_phase += elapsed_scaled;
+        return;
+    }
+
+    bk_timer_phase += elapsed_scaled;
+    uint64_t ticks = bk_timer_phase / tick_period;
+    bk_timer_phase %= tick_period;
+
+    if (bk_timer_control & 0x02u) {
+        /* Continuous mode: wrap through 177777 without reload or expiry. */
+        bk_timer_counter = (uint16_t)(bk_timer_counter - (uint16_t)ticks);
+        return;
+    }
+
+    uint32_t until_zero = bk_timer_counter ? bk_timer_counter : 65536u;
+    if (ticks < until_zero) {
+        bk_timer_counter = (uint16_t)(bk_timer_counter - (uint16_t)ticks);
+        return;
+    }
+
+    ticks -= until_zero;
+    uint64_t rollovers = 1u;
+    if (bk_timer_control & 0x08u) {
+        /* One-shot: stop at zero after the first completed interval. */
+        bk_timer_counter = 0;
+        bk_timer_control &= (uint8_t)~0x10u;
+        bk_timer_phase = 0;
+    } else {
+        uint32_t interval = bk_timer_preset ? bk_timer_preset : 65536u;
+        rollovers += ticks / interval;
+        ticks %= interval;
+        bk_timer_counter = (uint16_t)(bk_timer_preset - (uint16_t)ticks);
+    }
+
+    /* The first expiry transition after power-on is not reported by BK-0010. */
+    if ((bk_timer_control & 0x04u) && !(bk_timer_control & 0x02u)) {
+        if (bk_timer_expiry_warmup) {
+            if (rollovers >= 2u) bk_timer_expiry = 1u;
+            bk_timer_expiry_warmup = 0u;
+        } else {
+            bk_timer_expiry = 1u;
+        }
+    }
+}
+
+static void bk_timer_write_control(uint8_t value)
+{
+    bk_timer_update();
+    bk_timer_control = value & 0x7Fu;
+    if ((value & 0x80u) == 0u) bk_timer_expiry = 0u;
+    /* A control write loads the preset; bit 4 then enables countdown. */
+    bk_timer_counter = bk_timer_preset;
+    bk_timer_phase = 0;
+    bk_timer_last_dwt = *BK_TIMER_DWT_CYCCNT;
+}
 uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 
 // Audio output transition queue. The emulator is the single producer
@@ -121,7 +229,7 @@ static uint32_t basic_rom_size;
 extern int bk_video_read_byte(uint32_t addr, uint8_t mode, uint8_t *value);
 extern int bk_video_write_byte(uint32_t addr, uint8_t mode, uint8_t value);
 extern void bk_video_mode_changed(uint8_t mode);
-extern void bk_video_shift_changed(uint8_t shift);
+extern void bk_video_shift_changed(uint16_t shift);
 extern int ev_init(void);
 
 void bk_platform_init(const uint8_t *monitor, const uint8_t *basic,
@@ -240,7 +348,12 @@ void bk_reset(void)
 
     port0177660 = 0x40;
     port0177662 = 0;
+    port0177664 = 01330;
     port0177716 = 0x0040;
+    keyboard_key_pressed = 0;
+    sel1_write_flag = 0;
+    keyboard_irq_info = 0;
+    bk_timer_reset();
     port0177714 = 0;
     bk_rtc_latched_millis = 0;
     bk_audio_enabled = 0;
@@ -250,9 +363,10 @@ void bk_reset(void)
     stop_irq_pending = 0;
     io_stop_happened = 0;
     last_branch = 0;
+    in_wait_instr = 0;
     ev_init();
     bk_video_mode_changed(RamBuffer[0x0020]);
-    bk_video_shift_changed((uint8_t)port0177664);
+    bk_video_shift_changed(port0177664);
 }
 
 int ll_byte(pdp_regs *p, c_addr addr, d_byte *byte)
@@ -268,11 +382,28 @@ int ll_byte(pdp_regs *p, c_addr addr, d_byte *byte)
             port0177660 &= (uint8_t)~0x80u;
             break;
         case 0177664: *byte = (uint8_t)port0177664; break;
+        case 0177706: bk_timer_update(); *byte = (uint8_t)bk_timer_preset; break;
+        case 0177707: bk_timer_update(); *byte = (uint8_t)(bk_timer_preset >> 8); break;
+        case 0177710: bk_timer_update(); *byte = (uint8_t)bk_timer_counter; break;
+        case 0177711: bk_timer_update(); *byte = (uint8_t)(bk_timer_counter >> 8); break;
+        case 0177712:
+            bk_timer_update();
+            *byte = (uint8_t)(bk_timer_control | (bk_timer_expiry ? 0x80u : 0u));
+            break;
+        case 0177713: *byte = 0xFFu; break;
         case 0177665: *byte = (uint8_t)(port0177664 >> 8); break;
         case 0177714: *byte = (uint8_t)port0177714; break;
         case 0177715: *byte = (uint8_t)(port0177714 >> 8); break;
-        case 0177716: *byte = (uint8_t)port0177716; break;
-        case 0177717: *byte = (uint8_t)(port0177716 >> 8); break;
+        case 0177716:
+            *byte = (uint8_t)((port0177716 & (uint16_t)~0x0044u) |
+                (keyboard_key_pressed ? 0u : 0x0040u) |
+                (sel1_write_flag ? 0x0004u : 0u));
+            sel1_write_flag = 0;
+            break;
+        case 0177717:
+            *byte = (uint8_t)(port0177716 >> 8);
+            sel1_write_flag = 0;
+            break;
         case 0177720: *byte = (uint8_t)bk_rtc_read_time_low(); break;
         case 0177721: *byte = (uint8_t)(bk_rtc_latched_millis >> 8); break;
         case 0177722: *byte = (uint8_t)bk_rtc_read_time_high(); break;
@@ -314,8 +445,19 @@ int ll_word(pdp_regs *p, c_addr addr, d_word *word)
             port0177660 &= (uint8_t)~0x80u;
             break;
         case 0177664: *word = port0177664; break;
+        case 0177706: bk_timer_update(); *word = bk_timer_preset; break;
+        case 0177710: bk_timer_update(); *word = bk_timer_counter; break;
+        case 0177712:
+            bk_timer_update();
+            *word = (uint16_t)(0xFF00u | bk_timer_control | (bk_timer_expiry ? 0x80u : 0u));
+            break;
         case 0177714: *word = port0177714; break;
-        case 0177716: *word = port0177716; break;
+        case 0177716:
+            *word = (uint16_t)((port0177716 & (uint16_t)~0x0044u) |
+                (keyboard_key_pressed ? 0u : 0x0040u) |
+                (sel1_write_flag ? 0x0004u : 0u));
+            sel1_write_flag = 0;
+            break;
         case 0177720: *word = bk_rtc_read_time_low(); break;
         case 0177722: *word = bk_rtc_read_time_high(); break;
         default: *word = 0; break;
@@ -361,16 +503,35 @@ int sl_byte(pdp_regs *p, c_addr addr, d_byte value)
         switch (addr) {
         case 0177660:
             port0177660 = (uint8_t)((port0177660 & (uint8_t)~0x40u) | (value & 0x40u));
+            if ((port0177660 & 0x40u) == 0u) bk_schedule_keyboard_irq();
             break;
         case 0177662: port0177662 = value; break;
         case 0177663: port0177662 = (uint8_t)((port0177662 & 0x00FFu) | ((uint16_t)value << 8)); break;
+        case 0177706:
+            bk_timer_update();
+            bk_timer_preset = (uint16_t)((bk_timer_preset & 0xFF00u) | value);
+            break;
+        case 0177707:
+            bk_timer_update();
+            bk_timer_preset = (uint16_t)((bk_timer_preset & 0x00FFu) | ((uint16_t)value << 8));
+            break;
+        case 0177710:
+        case 0177711:
+            /* Countdown register is read-only. */
+            break;
+        case 0177712:
+            bk_timer_write_control(value);
+            break;
+        case 0177713:
+            /* Only the low byte of control/status is implemented. */
+            break;
         case 0177664:
             port0177664 = (uint16_t)((port0177664 & 0xFF00u) | value);
-            bk_video_shift_changed((uint8_t)port0177664);
+            bk_video_shift_changed(port0177664);
             break;
         case 0177665:
-            port0177664 = (uint16_t)((port0177664 & 0x00FFu) | ((uint16_t)value << 8));
-            bk_video_shift_changed((uint8_t)port0177664);
+            port0177664 = (uint16_t)((port0177664 & 0x00FFu) | ((uint16_t)(value & 0x02u) << 8));
+            bk_video_shift_changed(port0177664);
             break;
         case 0177714:
             port0177714 = (uint16_t)((port0177714 & 0xFF00u) | value);
@@ -380,12 +541,14 @@ int sl_byte(pdp_regs *p, c_addr addr, d_byte value)
             break;
         case 0177716:
             port0177716 = (uint16_t)((port0177716 & 0xFF00u) | value);
+            sel1_write_flag = 1;
             if (bk_audio_enabled) {
                 bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
             }
             break;
         case 0177717:
             port0177716 = (uint16_t)((port0177716 & 0x00FFu) | ((uint16_t)value << 8));
+            sel1_write_flag = 1;
             break;
         default: break;
         }
@@ -414,16 +577,28 @@ int sl_word(pdp_regs *p, c_addr addr, d_word value)
         switch (addr) {
         case 0177660:
             port0177660 = (uint8_t)((port0177660 & (uint8_t)~0x40u) | (value & 0x40u));
+            if ((port0177660 & 0x40u) == 0u) bk_schedule_keyboard_irq();
+            break;
+        case 0177706:
+            bk_timer_update();
+            bk_timer_preset = value;
+            break;
+        case 0177710:
+            /* Countdown register is read-only. */
+            break;
+        case 0177712:
+            bk_timer_write_control((uint8_t)value);
             break;
         case 0177664:
             port0177664 = value & 01377;
-            bk_video_shift_changed((uint8_t)port0177664);
+            bk_video_shift_changed(port0177664);
             break;
         case 0177714:
             port0177714 = value;
             break;
         case 0177716:
             port0177716 = value;
+            sel1_write_flag = 1;
             if (bk_audio_enabled) {
                 bk_audio_record_level((uint8_t)(port0177716 & 0x0040u));
             }
@@ -450,16 +625,32 @@ void q_reset(void)
 
 // Called by the host-keyboard adapter for PC Pause/F12. This is not a
 // character input: set the BK STOP status bit and latch the independent IRQ1.
+void bk_set_keyboard_pressed(uint8_t pressed)
+{
+    keyboard_key_pressed = pressed ? 1u : 0u;
+}
+
 void bk_request_stop_irq(void)
 {
-    port0177716 |= 0x0004u;
     stop_irq_pending = 1;
+}
+
+/* Schedule a keyboard interrupt only when the peripheral interrupt mask
+ * is clear. Data-ready remains set while masked, allowing polling; clearing
+ * the mask later makes the still-pending character interrupt eligible. */
+static void bk_schedule_keyboard_irq(void)
+{
+    if ((port0177660 & 0xC0u) == 0x80u) {
+        (void)ev_register(TTY_PRI, bk_tty_finish, 0, keyboard_irq_info);
+    }
 }
 
 /* Original BK keyboard input path: wait for the previous character's
  * interrupt to be acknowledged, then schedule the next TTY interrupt. */
 static int bk_tty_finish(d_word info)
 {
+    // The event may have been queued before software masked keyboard IRQs.
+    if ((port0177660 & 0xC0u) != 0x80u) return OK;
     // Bit 7 is an adapter-side АР2 marker, not part of 177662.
     return service((info & 0x80u) ? 0274 : 060);
 }
@@ -471,7 +662,8 @@ uint8_t bk_try_send_input_byte(uint8_t symbol)
     port0177660 |= 0x80u;
     port0177662 = symbol & 0x7Fu;
     // Preserve the modifier marker until the queued interrupt is serviced.
-    (void)ev_register(TTY_PRI, bk_tty_finish, 0, symbol);
+    keyboard_irq_info = symbol;
+    bk_schedule_keyboard_irq();
     return 1u;
 }
 

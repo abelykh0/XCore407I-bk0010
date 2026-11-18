@@ -3,10 +3,13 @@
 //! It writes directly to the existing camera canvas; no second framebuffer
 //! or shadow video-memory buffer is allocated.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const BK_UNSCROLLED_VALUE: u8 = 216;
 static BK_VERTICAL_SHIFT: AtomicU8 = AtomicU8::new(0);
+static BK_EXTENDED_MEMORY: AtomicBool = AtomicBool::new(false);
+
+// Extended-mode program RAM is backed by the hidden portion of the camera canvas.
 
 fn shifted_row(vram_y: usize) -> usize {
     (vram_y + 256 - BK_VERTICAL_SHIFT.load(Ordering::Acquire) as usize) & 0xff
@@ -22,9 +25,18 @@ pub struct BkScreen;
 impl BkScreen {
     /// Read one packed video byte. mode_register is RAM[0x0020].
     pub fn ll_byte(&self, addr: u32, mode_register: u8) -> Option<u8> {
-        if !(VIDEO_START..=VIDEO_END).contains(&addr) { return None; }
-        let offset = (addr - VIDEO_START) as usize;
-        let y = shifted_row(offset / BYTES_PER_ROW);
+        if BK_EXTENDED_MEMORY.load(Ordering::Acquire) && (0x4000..0x7000).contains(&addr) {
+            let offset = (addr - 0x4000) as usize;
+            return Some(crate::camera::bk_extended_ram_read(offset));
+        }
+        let video_start = if BK_EXTENDED_MEMORY.load(Ordering::Acquire) { 0x7000 } else { VIDEO_START };
+        if !(video_start..=VIDEO_END).contains(&addr) { return None; }
+        let offset = (addr - video_start) as usize;
+        let y = if BK_EXTENDED_MEMORY.load(Ordering::Acquire) {
+            offset / BYTES_PER_ROW
+        } else {
+            shifted_row(offset / BYTES_PER_ROW)
+        };
         let byte_x = offset % BYTES_PER_ROW;
         let mut result = 0u8;
         if mode_register == 0 {
@@ -55,9 +67,19 @@ impl BkScreen {
     /// Write one packed video byte directly to the camera canvas.
     /// mode_register is zero for monochrome and nonzero for color.
     pub fn sl_byte(&self, addr: u32, byte: u8, mode_register: u8) -> bool {
-        if !(VIDEO_START..=VIDEO_END).contains(&addr) { return false; }
-        let offset = (addr - VIDEO_START) as usize;
-        let y = shifted_row(offset / BYTES_PER_ROW);
+        if BK_EXTENDED_MEMORY.load(Ordering::Acquire) && (0x4000..0x7000).contains(&addr) {
+            let offset = (addr - 0x4000) as usize;
+            crate::camera::bk_extended_ram_write(offset, byte);
+            return true;
+        }
+        let video_start = if BK_EXTENDED_MEMORY.load(Ordering::Acquire) { 0x7000 } else { VIDEO_START };
+        if !(video_start..=VIDEO_END).contains(&addr) { return false; }
+        let offset = (addr - video_start) as usize;
+        let y = if BK_EXTENDED_MEMORY.load(Ordering::Acquire) {
+            offset / BYTES_PER_ROW
+        } else {
+            shifted_row(offset / BYTES_PER_ROW)
+        };
         let byte_x = offset % BYTES_PER_ROW;
         crate::camera::set_bk_video_byte(byte_x, y, byte, mode_register == 0);
         true
@@ -93,12 +115,26 @@ pub extern "C" fn bk_video_write_byte(addr: u32, mode: u8, value: u8) -> i32 {
 
 /// Apply the BK hardware vertical-roll register (port 0177664).
 #[unsafe(no_mangle)]
-pub extern "C" fn bk_video_shift_changed(shift: u8) {
-    // The hardware register's neutral (unscrolled) value is 216, not zero.
-    // Store a normalized offset so the canvas is unchanged at the reset value.
-    let normalized = shift.wrapping_sub(BK_UNSCROLLED_VALUE);
-    let previous = BK_VERTICAL_SHIFT.swap(normalized, Ordering::AcqRel);
-    crate::camera::rotate_bk_canvas_rows(normalized.wrapping_sub(previous) as usize);
+pub extern "C" fn bk_video_shift_changed(register: u16) {
+    // Bit 9 selects the BK extended-memory layout: 1 = normal, 0 = extended.
+    let extended = (register & 0x0200) == 0;
+    let previous_mode = BK_EXTENDED_MEMORY.swap(extended, Ordering::AcqRel);
+    crate::camera::set_bk_extended_mode(extended);
+    if previous_mode != extended {
+        // The old canvas contents no longer describe the active video mapping.
+        // In extended mode the unused lower output area is solid blue.
+        crate::camera::clear_demo_canvas(0);
+    }
+
+    if extended {
+        // Extended mode exposes only 070000-077777 (64 rows); scrolling is fixed.
+        BK_VERTICAL_SHIFT.store(0, Ordering::Release);
+    } else {
+        // Normal mode's neutral hardware value is 216 (decimal).
+        let normalized = (register as u8).wrapping_sub(BK_UNSCROLLED_VALUE);
+        let previous = BK_VERTICAL_SHIFT.swap(normalized, Ordering::AcqRel);
+        crate::camera::rotate_bk_canvas_rows(normalized.wrapping_sub(previous) as usize);
+    }
 }
 
 /// Keep the camera canvas interpretation aligned with BK RAM[0x0020].

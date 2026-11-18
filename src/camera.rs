@@ -170,6 +170,28 @@ pub(crate) fn release_cdc_receiver_storage() {
 }
 
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);
+static BK_EXTENDED_MODE: AtomicBool = AtomicBool::new(false);
+const BK_EXTENDED_RAM_OFFSET: usize = 64 * WIDTH;
+const BK_EXTENDED_RAM_BYTES: usize = 0x3000;
+
+/// Enable the 64-row BK layout. The canvas backing bytes after row 63 then
+/// serve as the reclaimed 12 KiB BK program-RAM window.
+pub(crate) fn set_bk_extended_mode(enabled: bool) {
+    BK_EXTENDED_MODE.store(enabled, Ordering::Release);
+}
+
+pub(crate) fn bk_extended_ram_read(offset: usize) -> u8 {
+    debug_assert!(offset < BK_EXTENDED_RAM_BYTES);
+    unsafe { canvas_read_chunk(BK_EXTENDED_RAM_OFFSET + offset).0.read() }
+}
+
+pub(crate) fn bk_extended_ram_write(offset: usize, value: u8) {
+    debug_assert!(offset < BK_EXTENDED_RAM_BYTES);
+    unsafe {
+        let (destination, _) = canvas_write_chunk(BK_EXTENDED_RAM_OFFSET + offset);
+        destination.write(value);
+    }
+}
 
 fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
     unsafe {
@@ -190,6 +212,24 @@ fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
     }
 }
 
+
+fn canvas_write_chunk(offset: usize) -> (*mut u8, usize) {
+    unsafe {
+        if offset < CANVAS_MAIN_BYTES {
+            (
+                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset),
+                CANVAS_MAIN_BYTES - offset,
+            )
+        } else {
+            let tail_offset = offset - CANVAS_MAIN_BYTES;
+            (
+                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(tail_offset),
+                CANVAS_TAIL_BYTES - tail_offset,
+            )
+        }
+    }
+}
+
 /// Fill the entire canvas with one uniform palette color.
 ///
 /// `color` is a palette index (0..63), matching `set_pixel()`.
@@ -198,6 +238,25 @@ fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
 pub fn clear_demo_canvas(color: u8) {
     let mode = camera_mode();
     let value = color & 0x3f;
+    if BK_EXTENDED_MODE.load(Ordering::Acquire) {
+        // Only the visible 64 rows may be cleared; the following 12 KiB
+        // are live BK program RAM in extended mode.
+        let visible_bytes = 64 * WIDTH;
+        unsafe {
+            let main = core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>();
+            if mode == CameraMode::Monochrome {
+                main.write_bytes(GRAYSCALE[value as usize], visible_bytes);
+            } else {
+                let [u, v] = UV_PALETTE[value as usize];
+                for i in 0..(visible_bytes / 2) {
+                    main.add(i * 2).write(u);
+                    main.add(i * 2 + 1).write(v);
+                }
+            }
+        }
+        return;
+    }
+
     if mode == CameraMode::Monochrome {
         let luma = GRAYSCALE[value as usize];
         unsafe {
@@ -347,7 +406,7 @@ pub(crate) fn rotate_bk_canvas_rows(rows: usize) {
 pub fn set_pixel(x: usize, y: usize, color: u8) {
     let mode = camera_mode();
     let width = if mode == CameraMode::Monochrome { WIDTH } else { WIDTH / 2 };
-    if x >= width || y >= CANVAS_HEIGHT {
+    if x >= width || y >= CANVAS_HEIGHT || (BK_EXTENDED_MODE.load(Ordering::Acquire) && y >= 64) {
         return;
     }
 
@@ -385,7 +444,7 @@ pub fn set_pixel(x: usize, y: usize, color: u8) {
 #[inline]
 pub(crate) fn set_bk_video_byte(byte_x: usize, y: usize, byte: u8, monochrome: bool) -> bool {
     let mode = camera_mode();
-    if y >= CANVAS_HEIGHT {
+    if y >= CANVAS_HEIGHT || (BK_EXTENDED_MODE.load(Ordering::Acquire) && y >= 64) {
         return false;
     }
 
@@ -501,6 +560,14 @@ static USB_STATUS_ROW: AtomicU32 = AtomicU32::new(0);
 // Keyboard input is appended on a dedicated line; ordinary status messages
 // continue to consume their own rows.
 static KEYBOARD_TEXT_COLUMN: AtomicU32 = AtomicU32::new(0);
+
+/// Reset text-overlay cursors after a BK machine reset without changing the
+/// selected USB camera format or its transport state.
+pub fn reset_demo_canvas_state() {
+    USB_STATUS_ROW.store(0, Ordering::Release);
+    KEYBOARD_TEXT_COLUMN.store(0, Ordering::Release);
+    CLOCK_VERSION.fetch_add(1, Ordering::Relaxed);
+}
 
 pub fn show_usb_status(message: &[u8]) {
     use crate::font8x8::FONT8X8;
@@ -847,14 +914,23 @@ impl Nv12DemoImage {
                 let output_row = pos / WIDTH;
                 let x = pos % WIDTH;
                 let source_row = (output_row / 2) as u16;
-                self.prepare_y_row(source_row);
                 let run = (WIDTH - x)
                     .min(Y_PLANE_BYTES - pos)
                     .min(out.len() - written);
-                unsafe {
-                    crate::copy_words::copy_words(
-                        y_row_ptr().add(x), out.as_mut_ptr().add(written), run,
-                    );
+                if BK_EXTENDED_MODE.load(Ordering::Acquire) && source_row >= 64 {
+                    let blue = if mode == CameraMode::Monochrome {
+                        GRAYSCALE[0x10]
+                    } else {
+                        Y_HASH_TABLE[(UV_PALETTE[0x10][0] ^ UV_PALETTE[0x10][1]) as usize]
+                    };
+                    out[written..written + run].fill(blue);
+                } else {
+                    self.prepare_y_row(source_row);
+                    unsafe {
+                        crate::copy_words::copy_words(
+                            y_row_ptr().add(x), out.as_mut_ptr().add(written), run,
+                        );
+                    }
                 }
                 pos += run;
                 written += run;
@@ -865,16 +941,15 @@ impl Nv12DemoImage {
                 // source canvas. Let the copy cross source-row boundaries;
                 // copy_canvas_range() already handles the SRAM/CCM split.
                 // Monochrome still needs row-sized chunks to prepare neutral UV.
-                let run = if mode == CameraMode::Monochrome {
-                    (WIDTH - x).min(FRAME_BYTES - pos).min(out.len() - written)
-                } else {
-                    (FRAME_BYTES - pos).min(out.len() - written)
-                };
+                let source_row = chroma_pos / WIDTH;
+                let run = (WIDTH - x).min(FRAME_BYTES - pos).min(out.len() - written);
                 if mode == CameraMode::Monochrome {
-                    let source_row = (chroma_pos / WIDTH) as u16;
-                    self.prepare_uv_row(source_row);
-                    unsafe {
-                        crate::copy_words::copy_words(uv_row_ptr().add(x), out.as_mut_ptr().add(written), run);
+                    self.prepare_uv_row(source_row as u16);
+                    out[written..written + run].fill(128);
+                } else if BK_EXTENDED_MODE.load(Ordering::Acquire) && source_row >= 64 {
+                    let [u, v] = UV_PALETTE[0x10];
+                    for (i, byte) in out[written..written + run].iter_mut().enumerate() {
+                        *byte = if (x + i) & 1 == 0 { u } else { v };
                     }
                 } else {
                     unsafe {

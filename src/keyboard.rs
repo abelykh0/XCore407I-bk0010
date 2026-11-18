@@ -103,6 +103,7 @@ unsafe extern "C" {
     safe fn bk_timing_cycles() -> u32;
     safe fn bk_try_send_input_byte(value: u8) -> u8;
     safe fn bk_request_stop_irq();
+    safe fn bk_set_keyboard_pressed(pressed: u8);
     static mut RamBuffer: [u8; 0x4000];
 }
 
@@ -160,6 +161,7 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
         Ordering::Release,
     );
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
+    bk_set_keyboard_pressed(0);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
     KEY_REPEAT_KEY.store(0, Ordering::Release);
@@ -196,6 +198,7 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
     {
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
+        bk_set_keyboard_pressed(0);
         KEYBOARD_LOCKS.store(0, Ordering::Release);
         KEY_REPEAT_KEY.store(0, Ordering::Release);
         KEY_REPEAT_DEADLINE.store(0, Ordering::Relaxed);
@@ -248,6 +251,12 @@ pub extern "C" fn tuh_hid_report_received_cb(
     if len >= 8 && !report.is_null() {
         let bytes = unsafe { core::slice::from_raw_parts(report, len as usize) };
 
+        // SEL1 bit 6 is an active-low physical keyboard state input.
+        // Any held key or modifier pulls it low; it is independent of the
+        // character queue and remains visible while modal UI captures input.
+        let key_pressed = bytes[0] != 0 || bytes[2..8].iter().any(|&key| key != 0);
+        bk_set_keyboard_pressed(key_pressed as u8);
+
         let selection = BOOT_SELECTION.load(Ordering::Acquire);
         if selection == BOOT_SELECTION_WAITING {
             // F10 selects CDC during the 100 ms window after keyboard mount.
@@ -284,6 +293,7 @@ pub extern "C" fn tuh_hid_report_received_cb(
     }
     // CDC mode ends host-side keyboard use at the first F10 report.
     if BOOT_SELECTION.load(Ordering::Acquire) == BOOT_SELECTION_CDC {
+        bk_set_keyboard_pressed(0);
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
         return;
@@ -317,7 +327,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
     // Right Alt may be reported as Ctrl+Alt by AltGr keyboard layouts.
     // Treat either Alt key as АР2, not as Ctrl.
     let previous_modifiers = unsafe { PREVIOUS_MODIFIERS };
-    let control_pressed = control && previous_modifiers & 0x11 == 0;
     let gui_pressed = gui && previous_modifiers & 0x88 == 0;
     let locks_before = KEYBOARD_LOCKS.load(Ordering::Acquire);
     let mut locks = locks_before;
@@ -328,6 +337,24 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
 
     let previous = unsafe { PREVIOUS_KEYS };
     let mut current = [0u8; 6];
+    current.copy_from_slice(&report[2..8]);
+
+    // F4 is a machine-wide reset command. Recognize a fresh press before
+    // modal dialogs and every other keyboard action can consume the report.
+    // Suppress all other keys in this report so no new work starts alongside reset.
+    if current.contains(&0x3d) && !previous.contains(&0x3d) {
+        RESET_REQUESTED.store(true, Ordering::Release);
+        KEY_REPEAT_KEY.store(0, Ordering::Release);
+        KEY_REPEAT_DEADLINE.store(0, Ordering::Relaxed);
+        keyboard_queue_discard();
+        if !allow_repeat {
+            unsafe {
+                PREVIOUS_KEYS = current;
+                PREVIOUS_MODIFIERS = modifiers;
+            }
+        }
+        return;
+    }
 
     // AZBK modifier keys are only forwarded while the emulator owns input.
     let keyboard_captured = SAVE_DIALOG_STATE.load(Ordering::Acquire) != SAVE_DIALOG_IDLE
@@ -335,9 +362,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
         || INIT_STATE.load(Ordering::Acquire) != 0
         || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
 ;
-    if !keyboard_captured && control_pressed && modifiers & 0x44 == 0 {
-        append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x1c); // СУ
-    }
     // АР2 is a modifier (Alt/AltGr), not a standalone BK key code.
     if !keyboard_captured && gui_pressed {
         // A single Win key toggles the language. Read the live BK flag so
@@ -351,8 +375,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
         };
         append_keyboard_char(&mut emulator_input, &mut emulator_used, language_key);
     }
-    current.copy_from_slice(&report[2..8]);
-
     // USB boot reports normally repeat held keys without changing the report.
     // Generate Windows-like typematic repeats in firmware instead of relying
     // on the BK keyboard interface, which has no matching repeat behavior.
@@ -505,13 +527,6 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
             continue;
         }
 
-        // F4 requests a full BK machine reset. Defer it to the main loop:
-        // bk_reset clears emulated RAM and must not run in the HID callback.
-        if key == 0x3d {
-            RESET_REQUESTED.store(true, Ordering::Release);
-            continue;
-        }
-
         // F1 requests a camera mode change. The camera applies it at the
         // next UVC frame boundary and clears the canvas in the new format.
         if key == 0x3a {
@@ -572,13 +587,24 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
         }
 
         let caps = locks & 0x02 != 0;
-        let translated = key_to_ascii(
-            key,
-            shift,
-            caps,
-            locks & 0x01 != 0,
-            control && !alt,
-        );
+        // СУ is a held modifier, not a character of its own. For
+        // alphabetic HID usages, generate the corresponding C0 control
+        // code (A=0x01 .. Z=0x1A). Keep key_to_ascii() for non-letter
+        // special keys such as arrows, even while СУ is held.
+        let control_letter = if control && !alt && (0x04..=0x1d).contains(&key) {
+            Some(key - 0x03)
+        } else {
+            None
+        };
+        let translated = control_letter.or_else(|| {
+            key_to_ascii(
+                key,
+                shift,
+                caps,
+                locks & 0x01 != 0,
+                control && !alt,
+            )
+        });
         // The BK language flag is authoritative: bit 7 set means РУС.
         // АР2 (host Alt) always uses the Russian conversion, independent
         // of the current BK language. СУ2 is a separate, not-yet-implemented

@@ -53,7 +53,6 @@ pub(crate) fn read_dwt_cycle_count() -> u32 {
     cortex_m::peripheral::DWT::cycle_count()
 }
 
-#[cfg(any(feature = "cpu-cycle-diag", feature = "list-profile"))]
 pub(crate) fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
     // DWT access is provided by cortex-m; global trace must be enabled first.
     core.DCB.enable_trace();

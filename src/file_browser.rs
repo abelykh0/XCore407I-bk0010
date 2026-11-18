@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 
 use xcore407i_blinker::camera::{clear_demo_canvas, show_file_browser_line};
 
@@ -83,6 +83,24 @@ pub(crate) static SAVE_DIALOG_RESULT: AtomicU8 = AtomicU8::new(0);
 pub(crate) static SAVE_OVERWRITE: AtomicBool = AtomicBool::new(false);
 pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CAPACITY];
 pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
+
+/// Cancel every host-side modal operation associated with the BK emulator.
+/// This deliberately leaves the NAND filesystem and USB transports intact.
+pub(crate) fn reset_emulator_ui() {
+    FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
+    FILE_BROWSER_ACTION.store(0, Ordering::Release);
+    SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
+    SAVE_DIALOG_DIRTY.store(false, Ordering::Release);
+    SAVE_DIALOG_RESULT.store(0, Ordering::Release);
+    SAVE_OVERWRITE.store(false, Ordering::Release);
+    unsafe {
+        core::ptr::addr_of_mut!(SAVE_FILENAME).cast::<u8>().write_bytes(0, SAVE_NAME_CAPACITY);
+        SAVE_FILENAME_LEN = 0;
+    }
+    FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
+    FORMAT_ERROR.store(0, Ordering::Release);
+    INIT_STATE.store(INIT_IDLE, Ordering::Release);
+}
  
 unsafe extern "C" {
     safe fn bk_load_bin_prepare(load_addr: u16, data_len: u16) -> i32;

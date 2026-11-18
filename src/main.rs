@@ -24,7 +24,6 @@ use xcore407i_blinker::rtc;
 use board::{
     configure_board_pins, configure_exception_priorities, system_clock_168mhz, TICKS,
 };
-#[cfg(any(feature = "cpu-cycle-diag", feature = "list-profile"))]
 use board::enable_cycle_counter;
 #[cfg(feature = "cpu-cycle-diag")]
 use board::{read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
@@ -37,7 +36,7 @@ use file_browser::{
     MAX_BROWSER_PATH,
     SAVE_DIALOG_IDLE, SAVE_DIALOG_INPUT, SAVE_DIALOG_STATE, SAVE_DIALOG_CHECK, SAVE_DIALOG_CONFIRM, SAVE_DIALOG_WRITE,
     SAVE_DIALOG_DIRTY, SAVE_DIALOG_RESULT, SAVE_OVERWRITE,
-    SAVE_RESULT_CANCELLED, SAVE_RESULT_OK, SAVE_RESULT_ERROR,
+    SAVE_RESULT_CANCELLED, SAVE_RESULT_OK, SAVE_RESULT_ERROR, reset_emulator_ui,
     FORMAT_STATE, FORMAT_ERROR, FORMAT_IDLE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL,
     FORMAT_REQUEST, FORMAT_CANCELLED, FORMAT_DONE, FORMAT_FAILED,
     draw_format_confirmation,
@@ -107,6 +106,7 @@ unsafe extern "C" {
     fn bk_loop() -> i32;
     fn bk_reset();
     safe fn bk_timing_cycles() -> u32;
+    safe fn bk_timer_update();
 }
 
 
@@ -200,7 +200,7 @@ fn main() -> ! {
 
     rtc::initialize(&device.RCC, &device.PWR, &device.RTC);
 
-    #[cfg(any(feature = "cpu-cycle-diag", feature = "list-profile"))]
+    // DWT CYCCNT provides the independent wall-clock source for the BK timer.
     enable_cycle_counter(&mut core);
 
     // Emulator initialization is deferred until the boot-keyboard startup
@@ -532,6 +532,9 @@ fn main() -> ! {
     let mut diagnostic_last_pdp = pacing_start_cycles;
 
     loop {
+        // Advance the autonomous BK timer even while PDP execution is paused.
+        bk_timer_update();
+
         // Typematic repeat is timer-driven and independent of HID report delivery.
         service_keyboard_repeat();
 
@@ -605,12 +608,20 @@ fn main() -> ! {
             show_file_browser_line(3, b"USB KEYBOARD CONNECTED", false);
         }
 
-        let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
-
         if keyboard::take_reset_request() && emulator_enabled {
+            // Reset the BK machine and every host-side state machine that can
+            // outlive it. USB, camera transport, NAND contents and host HID
+            // connectivity are intentionally left running.
             unsafe { bk_reset(); }
             xcore407i_blinker::audio_uac2::reset_emulator_capture();
             keyboard::reset_frame_pacing();
+            keyboard_queue_discard();
+            reset_emulator_ui();
+            browser_open = false;
+            browser_count = 0;
+            browser_selected = 0;
+            format_screen_state = FORMAT_IDLE;
+            init_screen_state = INIT_IDLE;
             let now_ms = TICKS.load(Ordering::Relaxed);
             pacing_start_ms = now_ms;
             pacing_start_cycles = bk_timing_cycles();
@@ -620,8 +631,13 @@ fn main() -> ! {
                 diagnostic_last_dwt = read_dwt_cycle_count();
                 diagnostic_last_pdp = pacing_start_cycles;
             }
+            xcore407i_blinker::camera::reset_demo_canvas_state();
             clear_demo_canvas(0x10);
         }
+
+        // Read after reset handling so a queued browser action cannot survive
+        // an F4 reset and reopen the browser on the following loop iteration.
+        let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
         match INIT_STATE.load(Ordering::Acquire) {
             INIT_CONFIRM | INIT_CONFIRM_FINAL => {}
