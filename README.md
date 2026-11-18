@@ -40,19 +40,13 @@ Dhara is the only raw-NAND backend. It manages physical blocks, bad blocks,
 and wear levelling; STM32 FSMC Hamming ECC protects page data. LittleFS uses
 700 logical erase blocks (87.5 MiB).
 
-If no valid Dhara journal is found, the file browser offers a two-step
-confirmation to initialize NAND. This erases all usable NAND blocks, creates
-a new Dhara volume, and formats an empty LittleFS filesystem. Factory bad
-blocks are preserved; all existing NAND data is lost.
-
-If Dhara is valid but LittleFS cannot mount, the file browser offers a
-separate two-step confirmation to format LittleFS. This deletes its files but
-preserves the Dhara journal.
+Use CDC console to format NAND and upload files.
 
 ### CDC console and ZMODEM
 
 The USB CDC interface provides a serial console for firmware commands and
-ZMODEM file transfers. In Tera Term, enable these settings in `teraterm.ini`:
+ZMODEM file transfers. To enter CDC console mode hold F10 on the keyboad at startup. 
+In Tera Term, enable these settings in `teraterm.ini`:
 
 ```ini
 ; Clear serial port buffer when port opening
