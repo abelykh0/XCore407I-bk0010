@@ -12,7 +12,7 @@ use crate::file_browser::{
     INIT_STATE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST, INIT_CANCELLED,
 };
 use crate::usb_host::{note_usb_host_activity, USB_FS_STATUS};
-use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, special_key_label};
+use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, map_russian_layout, special_key_label};
 use xcore407i_blinker::camera::request_camera_mode_toggle;
 use xcore407i_blinker::tusb;
 
@@ -571,13 +571,26 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
             _ => {}
         }
 
+        let caps = locks & 0x02 != 0;
         let translated = key_to_ascii(
             key,
             shift,
-            locks & 0x02 != 0,
+            caps,
             locks & 0x01 != 0,
             control && !alt,
         );
+        // The BK language flag is authoritative: bit 7 set means РУС.
+        // АР2 (host Alt) always uses the Russian conversion, independent
+        // of the current BK language. СУ2 is a separate, not-yet-implemented
+        // modifier and is intentionally not handled here.
+        let russian_layout = alt || unsafe { RamBuffer[0x23] } & 0x80 != 0;
+        let translated = translated.map(|ch| {
+            if russian_layout {
+                map_russian_layout(ch, caps)
+            } else {
+                ch
+            }
+        });
         if is_new && translated.is_some() {
             KEY_REPEAT_KEY.store(key, Ordering::Release);
             KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INITIAL_DELAY_MS), Ordering::Release);

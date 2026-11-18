@@ -79,6 +79,59 @@ pub(crate) fn key_to_ascii(key: u8, shift: bool, caps: bool, num: bool, control_
     }
 }
 
+/// Translate a host-layout ASCII symbol using the BK Russian key map
+/// from esp32-bkEmu's convertSymbol().
+pub(crate) fn map_russian_layout(mut ch: u8, caps: bool) -> u8 {
+    if ch.is_ascii_uppercase() {
+        const MAP: &[u8; 26] = b"fiswuapr{oldxt}zjkyegmc~nq";
+        return MAP[(ch - b'A') as usize];
+    }
+    if ch.is_ascii_lowercase() {
+        const MAP: &[u8; 26] = b"FISWUAPR[OLDXT]ZJKYEGMC^NQ";
+        return MAP[(ch - b'a') as usize];
+    }
+
+    // The reference implementation applies these Caps Lock substitutions
+    // before its punctuation conversion.
+    if caps {
+        ch = match ch {
+            b'"' => b'\'',
+            b'\'' => b'"',
+            b'>' => b'.',
+            b'.' => b'>',
+            b'{' => b'[',
+            b'[' => b'{',
+            b':' => b';',
+            b';' => b':',
+            b'<' => b',',
+            b',' => b'<',
+            b'}' => b']',
+            b']' => b'}',
+            _ => ch,
+        };
+    }
+
+    match ch {
+        b'@' => b'"',
+        b'^' => b':',
+        b'?' => b',',
+        b'/' => b'.',
+        b'"' => b'|',
+        b'\'' => b'\\',
+        b'>' => b'`',
+        b'.' => b'@',
+        b'{' => b'h',
+        b'[' => b'H',
+        b':' => b'v',
+        b';' => b'V',
+        b'<' => b'b',
+        b',' => b'B',
+        b'}' => 0x7f,
+        b']' => b'_',
+        _ => ch,
+    }
+}
+
 pub(crate) fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     match key {
         0x28 => Some(b"[ENTER]"),
