@@ -36,9 +36,9 @@ void bk_platform_init(const uint8_t *monitor_rom,
                       uint32_t basic_size_bytes);
 void bk_reset(void);
 void bk_set_pc(uint16_t start);
-void bk_load_bin_begin(uint16_t load_addr);
-int32_t bk_load_bin_write(const uint8_t *data, size_t length);
-int32_t bk_load_bin_finish(uint16_t data_len);
+int32_t bk_load_bin_write(uint16_t load_addr, uint32_t offset,
+                          const uint8_t *data, size_t length);
+int32_t bk_load_bin_finish(uint16_t load_addr, uint16_t data_len);
 void bk_request_stop_irq(void);
 int32_t bk_loop(void);
 uint8_t bk_try_send_input_byte(uint8_t value);
