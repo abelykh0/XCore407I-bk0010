@@ -325,28 +325,24 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
                     }
 
                     let load_addr = u16::from_le_bytes([header[0], header[1]]);
-                    let mut data_len = u16::from_le_bytes([header[2], header[3]]) as usize;
-                    let offset = if file_size == data_len + 20 || file_size == data_len + 22 {
-                        20
-                    } else {
-                        4
-                    };
+                    let data_len = u16::from_le_bytes([header[2], header[3]]) as usize;
 
-                    if offset + data_len > file_size {
-                        data_len = file_size - offset;
+                    // This browser targets BK-0010 short-format images: a
+                    // four-byte address/length header followed by the payload.
+                    // Some short images carry a two-byte trailing checksum.
+                    // Do not guess a long-header offset or silently truncate a
+                    // payload when the declared length disagrees with the file.
+                    let payload_end = 4usize.checked_add(data_len)
+                        .ok_or(littlefs2::io::Error::IO)?;
+                    if file_size != payload_end && file_size != payload_end + 2 {
+                        return Err(littlefs2::io::Error::IO);
                     }
 
-                    // Skip the remainder of the tape header (or no bytes for
-                    // the four-byte format). This avoids allocating a file-sized buffer.
-                    // Reuse the four-byte header as the only scratch buffer.
-                    let mut skip = offset - header.len();
-                    while skip != 0 {
-                        let skip_len = skip.min(header.len());
-                        let count = file.read(&mut header[..skip_len])?;
-                        if count == 0 {
-                            return Err(littlefs2::io::Error::IO);
-                        }
-                        skip -= count;
+                    // Validate the complete destination range before writing
+                    // any payload bytes. BK-0010 writable RAM + video memory
+                    // occupies 000000..0100000 (octal).
+                    if (load_addr as usize) + data_len > 0o100000 {
+                        return Err(littlefs2::io::Error::IO);
                     }
 
                     let mut remaining = data_len;
