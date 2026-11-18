@@ -118,13 +118,8 @@ pub extern "C" fn bk_video_write_byte(addr: u32, mode: u8, value: u8) -> i32 {
 pub extern "C" fn bk_video_shift_changed(register: u16) {
     // Bit 9 selects the BK extended-memory layout: 1 = normal, 0 = extended.
     let extended = (register & 0x0200) == 0;
-    let previous_mode = BK_EXTENDED_MEMORY.swap(extended, Ordering::AcqRel);
+    BK_EXTENDED_MEMORY.store(extended, Ordering::Release);
     crate::camera::set_bk_extended_mode(extended);
-    if previous_mode != extended {
-        // The old canvas contents no longer describe the active video mapping.
-        // In extended mode the unused lower output area is solid blue.
-        crate::camera::clear_demo_canvas(0);
-    }
 
     if extended {
         // Extended mode exposes only 070000-077777 (64 rows); scrolling is fixed.

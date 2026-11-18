@@ -42,9 +42,51 @@ const fn make_duplicated_y_table() -> [u16; 256] {
         table[i] = y | (y << 8);
         i += 1;
     }
+    // Palette color 0x15 is neutral gray [128, 127]. Force its luma
+    // to match the extended-area monochrome background exactly.
+    let gray_hash = (UV_PALETTE[0x15][0] ^ UV_PALETTE[0x15][1]) as usize;
+    table[gray_hash] = 0xAAAA;
     table
 }
 const DUPLICATED_Y_TABLE: [u16; 256] = make_duplicated_y_table();
+const fn make_color_to_bw_code_table() -> [u8; 256] {
+    let mut table = [0; 256];
+    table[(UV_PALETTE[48][0] ^ UV_PALETTE[48][1]) as usize] = 1;
+    table[(UV_PALETTE[12][0] ^ UV_PALETTE[12][1]) as usize] = 2;
+    table[(UV_PALETTE[3][0] ^ UV_PALETTE[3][1]) as usize] = 3;
+    table
+}
+const COLOR_TO_BW_CODE: [u8; 256] = make_color_to_bw_code_table();
+
+#[inline(always)]
+unsafe fn convert_color_pair_to_bw(source: *const u8, destination: *mut u8) {
+    let pair = unsafe { source.cast::<u16>().read() };
+    let hash = (pair as u8 ^ (pair >> 8) as u8) as usize;
+    let code = COLOR_TO_BW_CODE[hash];
+    unsafe {
+        destination.write(if code & 2 != 0 { GRAYSCALE[0x3f] } else { GRAYSCALE[0] });
+        destination.add(1).write(if code & 1 != 0 { GRAYSCALE[0x3f] } else { GRAYSCALE[0] });
+    }
+}
+
+#[inline(always)]
+unsafe fn convert_bw_pair_to_color(source: *const u8, destination: *mut u8) {
+    let first = unsafe { source.read() };
+    let second = unsafe { source.add(1).read() };
+    let code = (u8::from(first != 0) << 1) | u8::from(second != 0);
+    let palette_index = match code {
+        0 => 0,
+        1 => 48,
+        2 => 12,
+        _ => 3,
+    };
+    let [u, v] = UV_PALETTE[palette_index];
+    unsafe {
+        destination.write(u);
+        destination.add(1).write(v);
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -91,11 +133,80 @@ fn apply_pending_camera_mode() -> bool {
     if requested == u32::MAX || requested == ACTIVE_CAMERA_MODE.load(Ordering::Acquire) {
         return false;
     }
+
+    let old_mode = camera_mode();
+    let new_mode = if requested == CameraMode::Monochrome as u32 {
+        CameraMode::Monochrome
+    } else {
+        CameraMode::Color
+    };
+    convert_bk_canvas_mode(old_mode, new_mode);
+
     ACTIVE_CAMERA_MODE.store(requested, Ordering::Release);
     USB_STATUS_ROW.store(0, Ordering::Relaxed);
     KEYBOARD_TEXT_COLUMN.store(0, Ordering::Relaxed);
     CLOCK_VERSION.fetch_add(1, Ordering::Relaxed);
     true
+}
+
+/// Re-encode the existing BK image when switching between packed color
+/// (four 2-bit pixels per byte) and monochrome (eight 1-bit pixels per byte).
+/// Both representations occupy the same 512 bytes per 256-pixel source row,
+/// so conversion is in-place. In extended-memory mode only the first 64 rows
+/// are video; the following 12 KiB must remain untouched as BK program RAM.
+fn convert_bk_canvas_mode(old_mode: CameraMode, new_mode: CameraMode) {
+    if old_mode == new_mode {
+        return;
+    }
+
+    let rows = if BK_EXTENDED_MODE.load(Ordering::Acquire) {
+        64
+    } else {
+        CANVAS_HEIGHT
+    };
+
+    for row in 0..rows {
+        let mut offset = row * WIDTH;
+        let mut remaining = WIDTH;
+
+        while remaining != 0 {
+            let (source, available) = canvas_read_chunk(offset);
+            let (destination, writable) = canvas_write_chunk(offset);
+            let count = remaining.min(available).min(writable) & !1;
+
+            unsafe {
+                let mut i = 0;
+                // Four pixel pairs per iteration. Each pair is read before
+                // its in-place writes, and adjacent pairs do not overlap.
+                while i + 8 <= count {
+                    if old_mode == CameraMode::Color {
+                        convert_color_pair_to_bw(source.add(i), destination.add(i));
+                        convert_color_pair_to_bw(source.add(i + 2), destination.add(i + 2));
+                        convert_color_pair_to_bw(source.add(i + 4), destination.add(i + 4));
+                        convert_color_pair_to_bw(source.add(i + 6), destination.add(i + 6));
+                    } else {
+                        convert_bw_pair_to_color(source.add(i), destination.add(i));
+                        convert_bw_pair_to_color(source.add(i + 2), destination.add(i + 2));
+                        convert_bw_pair_to_color(source.add(i + 4), destination.add(i + 4));
+                        convert_bw_pair_to_color(source.add(i + 6), destination.add(i + 6));
+                    }
+                    i += 8;
+                }
+
+                while i < count {
+                    if old_mode == CameraMode::Color {
+                        convert_color_pair_to_bw(source.add(i), destination.add(i));
+                    } else {
+                        convert_bw_pair_to_color(source.add(i), destination.add(i));
+                    }
+                    i += 2;
+                }
+            }
+
+            offset += count;
+            remaining -= count;
+        }
+    }
 }
 
 #[inline]
@@ -918,12 +1029,10 @@ impl Nv12DemoImage {
                     .min(Y_PLANE_BYTES - pos)
                     .min(out.len() - written);
                 if BK_EXTENDED_MODE.load(Ordering::Acquire) && source_row >= 64 {
-                    let blue = if mode == CameraMode::Monochrome {
-                        GRAYSCALE[0x10]
-                    } else {
-                        Y_HASH_TABLE[(UV_PALETTE[0x10][0] ^ UV_PALETTE[0x10][1]) as usize]
-                    };
-                    out[written..written + run].fill(blue);
+                    // Keep the extended-memory area neutral light gray in
+                    // both display modes; it is not part of the BK video RAM.
+                    let background = GRAYSCALE[0x2a];
+                    out[written..written + run].fill(background);
                 } else {
                     self.prepare_y_row(source_row);
                     unsafe {
@@ -947,7 +1056,7 @@ impl Nv12DemoImage {
                     self.prepare_uv_row(source_row as u16);
                     out[written..written + run].fill(128);
                 } else if BK_EXTENDED_MODE.load(Ordering::Acquire) && source_row >= 64 {
-                    let [u, v] = UV_PALETTE[0x10];
+                    let [u, v] = UV_PALETTE[0x15];
                     for (i, byte) in out[written..written + run].iter_mut().enumerate() {
                         *byte = if (x + i) & 1 == 0 { u } else { v };
                     }
