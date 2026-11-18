@@ -139,6 +139,23 @@ void bk_set_pc(uint16_t start)
     pdp.regs[PC] = start;
 }
 
+// Apply the short BIN header exactly as the BK monitor does: the header
+// is received into system cells 264/266 before the payload is transferred.
+// A payload that overlaps those cells must therefore overwrite them.
+int32_t bk_load_bin_prepare(uint16_t load_addr, uint16_t data_len)
+{
+    const uint32_t memory_end = 0100000u;
+    if ((uint32_t)load_addr + data_len > memory_end) {
+        return -1;
+    }
+
+    if (sl_word(&pdp, 0000264, load_addr) != OK ||
+        sl_word(&pdp, 0000266, data_len) != OK) {
+        return -1;
+    }
+    return 0;
+}
+
 // Stream a .bin payload into emulated memory without persistent loader state.
 int32_t bk_load_bin_write(uint16_t load_addr, uint32_t offset,
                           const uint8_t *data, size_t length)
@@ -170,10 +187,8 @@ int32_t bk_load_bin_finish(uint16_t load_addr, uint16_t data_len)
         return -1;
     }
 
-    if (sl_word(&pdp, 0000264, load_addr) != OK ||
-        sl_word(&pdp, 0000266, data_len) != OK) {
-        return -1;
-    }
+    // Header system cells were populated by bk_load_bin_prepare() before
+    // payload transfer, matching the monitor's receive order.
 
     // A complete screen dump updates video memory but leaves the monitor active.
     if (load_addr == 0040000 && data_len == 0040000) {
