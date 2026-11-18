@@ -19,6 +19,10 @@ use xcore407i_blinker::tusb;
 // Keyboard input is paced at most once per PDP frame.
 static LAST_KEYBOARD_CYCLE: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_CYCLE_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static KEY_REPEAT_KEY: AtomicU8 = AtomicU8::new(0);
+static KEY_REPEAT_DEADLINE: AtomicU32 = AtomicU32::new(0);
+const KEY_REPEAT_INITIAL_DELAY_MS: u32 = 500;
+const KEY_REPEAT_INTERVAL_MS: u32 = 150;
 static RESET_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 static mut PREVIOUS_KEYS: [u8; 6] = [0; 6];
@@ -133,6 +137,8 @@ pub(crate) fn take_reset_request() -> bool {
 
 pub(crate) fn reset_frame_pacing() {
     KEYBOARD_CYCLE_INITIALIZED.store(false, Ordering::Release);
+    KEY_REPEAT_KEY.store(0, Ordering::Release);
+    KEY_REPEAT_DEADLINE.store(0, Ordering::Relaxed);
     LAST_KEYBOARD_CYCLE.store(0, Ordering::Relaxed);
     keyboard_queue_discard();
 }
@@ -156,6 +162,8 @@ pub extern "C" fn tuh_hid_mount_cb(dev_addr: u8, instance: u8, _desc: *const u8,
     KEYBOARD_DEVICE.store(dev_addr, Ordering::Release);
     KEYBOARD_INSTANCE.store(instance, Ordering::Release);
     KEYBOARD_LOCKS.store(0, Ordering::Release);
+    KEY_REPEAT_KEY.store(0, Ordering::Release);
+    KEY_REPEAT_DEADLINE.store(0, Ordering::Relaxed);
     keyboard_queue_discard();
     unsafe {
         PREVIOUS_KEYS = [0; 6];
@@ -189,6 +197,8 @@ pub extern "C" fn tuh_hid_umount_cb(dev_addr: u8, instance: u8) {
         KEYBOARD_DEVICE.store(0, Ordering::Release);
         KEYBOARD_INSTANCE.store(0, Ordering::Release);
         KEYBOARD_LOCKS.store(0, Ordering::Release);
+        KEY_REPEAT_KEY.store(0, Ordering::Release);
+        KEY_REPEAT_DEADLINE.store(0, Ordering::Relaxed);
         keyboard_queue_discard();
         unsafe {
             PREVIOUS_KEYS = [0; 6];
@@ -260,7 +270,7 @@ pub extern "C" fn tuh_hid_report_received_cb(
         } else if selection == BOOT_SELECTION_NORMAL
             && EMULATOR_INPUT_ENABLED.load(Ordering::Acquire)
         {
-            process_boot_keyboard_report(dev_addr, instance, bytes);
+            process_boot_keyboard_report(dev_addr, instance, bytes, false);
         } else {
             // Ignore keyboard input in CDC mode and while the emulator is
             // being initialized.
@@ -291,7 +301,7 @@ pub extern "C" fn tuh_hid_report_received_cb(
 
 /// Process an 8-byte USB HID boot-keyboard report:
 /// [modifier, reserved, key1..key6].
-fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
+fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow_repeat: bool) {
     if KEYBOARD_DEVICE.load(Ordering::Acquire) != dev_addr
         || KEYBOARD_INSTANCE.load(Ordering::Acquire) != instance
     {
@@ -343,10 +353,31 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     }
     current.copy_from_slice(&report[2..8]);
 
+    // USB boot reports normally repeat held keys without changing the report.
+    // Generate Windows-like typematic repeats in firmware instead of relying
+    // on the BK keyboard interface, which has no matching repeat behavior.
+    let now = crate::board::TICKS.load(Ordering::Acquire);
+    let repeat_key = KEY_REPEAT_KEY.load(Ordering::Acquire);
+    if repeat_key != 0 && !current.contains(&repeat_key) {
+        KEY_REPEAT_KEY.store(0, Ordering::Release);
+    }
+    let repeat_key = KEY_REPEAT_KEY.load(Ordering::Acquire);
+    let repeat_due = if allow_repeat
+        && repeat_key != 0
+        && current.contains(&repeat_key)
+        && now.wrapping_sub(KEY_REPEAT_DEADLINE.load(Ordering::Acquire)) < 0x8000_0000
+    {
+        KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INTERVAL_MS), Ordering::Release);
+        repeat_key
+    } else {
+        0
+    };
+
     for &key in current.iter() {
-        if key == 0 || previous.contains(&key) {
-            continue;
-        }
+        if key == 0 { continue; }
+        let is_new = !previous.contains(&key);
+        let is_repeat = key == repeat_due;
+        if !is_new && !is_repeat { continue; }
 
         // While the save dialog is active, capture filename editing and
         // confirmation keys instead of forwarding them to the BK emulator.
@@ -362,7 +393,12 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
                     SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
                     SAVE_DIALOG_RESULT.store(SAVE_RESULT_CANCELLED, Ordering::Release);
                 }
-                0x2a => unsafe {
+                0x2a => {
+                    if is_new {
+                        KEY_REPEAT_KEY.store(key, Ordering::Release);
+                        KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INITIAL_DELAY_MS), Ordering::Release);
+                    }
+                    unsafe {
                     if SAVE_FILENAME_LEN != 0 {
                         SAVE_FILENAME_LEN -= 1;
                         core::ptr::addr_of_mut!(SAVE_FILENAME)
@@ -371,10 +407,15 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
                             .write(0);
                         SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
                     }
+                    }
                 },
                 _ => {
                     if let Some(ch) = key_to_ascii(key, shift, false, false, control_or_alt) {
                         if ch.is_ascii_alphanumeric() || ch == b'_' || ch == b'-' || ch == b' ' {
+                            if is_new {
+                                KEY_REPEAT_KEY.store(key, Ordering::Release);
+                                KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INITIAL_DELAY_MS), Ordering::Release);
+                            }
                             unsafe {
                                 if SAVE_FILENAME_LEN < SAVE_NAME_CAPACITY {
                                     core::ptr::addr_of_mut!(SAVE_FILENAME)
@@ -496,6 +537,10 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
                 _ => 0,
             };
             if action != 0 {
+                if is_new && (key == 0x52 || key == 0x51) {
+                    KEY_REPEAT_KEY.store(key, Ordering::Release);
+                    KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INITIAL_DELAY_MS), Ordering::Release);
+                }
                 FILE_BROWSER_ACTION.store(action, Ordering::Release);
             }
             continue;
@@ -526,13 +571,18 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             _ => {}
         }
 
-        if let Some(ch) = key_to_ascii(
+        let translated = key_to_ascii(
             key,
             shift,
             locks & 0x02 != 0,
             locks & 0x01 != 0,
             control && !alt,
-        ) {
+        );
+        if is_new && translated.is_some() {
+            KEY_REPEAT_KEY.store(key, Ordering::Release);
+            KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INITIAL_DELAY_MS), Ordering::Release);
+        }
+        if let Some(ch) = translated {
             append_keyboard_char(&mut text, &mut used, ch);
             // The queue uses bit 7 as an internal marker for the АР2
             // interrupt vector. The BK data register itself remains 7-bit.
@@ -544,9 +594,11 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
         }
     }
 
-    unsafe {
-        PREVIOUS_KEYS = current;
-        PREVIOUS_MODIFIERS = modifiers;
+    if !allow_repeat {
+        unsafe {
+            PREVIOUS_KEYS = current;
+            PREVIOUS_MODIFIERS = modifiers;
+        }
     }
 
     if locks != locks_before {
@@ -581,6 +633,33 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     if emulator_used != 0 {
         keyboard_queue_push(&emulator_input[..emulator_used]);
     }
+}
+
+/// Generate typematic events from the last known HID state. This runs in
+/// the main loop because some keyboards NAK unchanged interrupt-IN polls,
+/// so a held key does not necessarily produce another report callback.
+pub(crate) fn service_keyboard_repeat() {
+    if KEYBOARD_DEVICE.load(Ordering::Acquire) == 0
+        || BOOT_SELECTION.load(Ordering::Acquire) != BOOT_SELECTION_NORMAL
+        || !EMULATOR_INPUT_ENABLED.load(Ordering::Acquire)
+    {
+        return;
+    }
+
+    // PREVIOUS_KEYS and PREVIOUS_MODIFIERS are updated by the USB host
+    // callback. Take a consistent snapshot while briefly masking interrupts.
+    let (modifiers, keys) = cortex_m::interrupt::free(|_| unsafe {
+        (PREVIOUS_MODIFIERS, PREVIOUS_KEYS)
+    });
+    let mut report = [0u8; 8];
+    report[0] = modifiers;
+    report[2..8].copy_from_slice(&keys);
+    process_boot_keyboard_report(
+        KEYBOARD_DEVICE.load(Ordering::Acquire),
+        KEYBOARD_INSTANCE.load(Ordering::Acquire),
+        &report,
+        true,
+    );
 }
 
 pub(crate) fn service_keyboard_frame_pacing() {

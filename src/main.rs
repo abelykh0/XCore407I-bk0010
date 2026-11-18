@@ -44,7 +44,7 @@ use file_browser::{
     INIT_STATE, INIT_IDLE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST,
     INIT_CANCELLED, INIT_DONE, INIT_FAILED, draw_init_confirmation,
 };
-use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing};
+use keyboard::{keyboard_queue_discard, service_keyboard_frame_pacing, service_keyboard_repeat};
 use usb_host::{
     configure_usb_host_task_timer, restart_usb_fs_host, try_init_usb_fs_host, USB_FS_READY,
     USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
@@ -532,6 +532,9 @@ fn main() -> ! {
     let mut diagnostic_last_pdp = pacing_start_cycles;
 
     loop {
+        // Typematic repeat is timer-driven and independent of HID report delivery.
+        service_keyboard_repeat();
+
         // Keyboard recovery is limited to one restart during boot selection.
         // Once the diagnostic screen is shown, do not repeatedly reset the host;
         // leave it running so late enumeration can still be observed.
