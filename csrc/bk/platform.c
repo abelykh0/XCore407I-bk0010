@@ -141,7 +141,8 @@ void bk_set_pc(uint16_t start)
 
 // Track which bytes of the monitor's autostart stack frame were overwritten
 // while streaming a tape image into emulated memory.
-static uint8_t bk_load_bin_touched_stack[01000];
+static uint8_t bk_load_bin_touched_stack[01000]
+    __attribute__((section(".ccmram"), aligned(4)));
 static uint16_t bk_load_bin_load_addr;
 static uint32_t bk_load_bin_written;
 
