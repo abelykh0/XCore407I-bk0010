@@ -19,6 +19,7 @@ use xcore407i_blinker::tusb;
 // Keyboard input is paced at most once per PDP frame.
 static LAST_KEYBOARD_CYCLE: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_CYCLE_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static RESET_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 static mut PREVIOUS_KEYS: [u8; 6] = [0; 6];
 static mut PREVIOUS_MODIFIERS: u8 = 0;
@@ -124,6 +125,16 @@ fn keyboard_queue_pop() {
 pub(crate) fn keyboard_queue_discard() {
     let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire);
     KEYBOARD_QUEUE_TAIL.store(head, Ordering::Release);
+}
+
+pub(crate) fn take_reset_request() -> bool {
+    RESET_REQUESTED.swap(false, Ordering::AcqRel)
+}
+
+pub(crate) fn reset_frame_pacing() {
+    KEYBOARD_CYCLE_INITIALIZED.store(false, Ordering::Release);
+    LAST_KEYBOARD_CYCLE.store(0, Ordering::Relaxed);
+    keyboard_queue_discard();
 }
 
 #[unsafe(no_mangle)]
@@ -447,6 +458,13 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
         // F12 is not assigned to destructive NAND maintenance.
         if key == 0x48 || key == 0x45 {
             bk_request_stop_irq();
+            continue;
+        }
+
+        // F4 requests a full BK machine reset. Defer it to the main loop:
+        // bk_reset clears emulated RAM and must not run in the HID callback.
+        if key == 0x3d {
+            RESET_REQUESTED.store(true, Ordering::Release);
             continue;
         }
 
