@@ -6,6 +6,9 @@
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
+const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
+const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 2 / 1_000;
+
 const PDP_CLOCK_HZ: u32 = 3_000_000;
 const PHASE_UNITS_PER_CYCLE: u32 = 4;
 const USB_MICROFRAMES_PER_SECOND: u32 = 8_000;
@@ -15,8 +18,6 @@ const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
 // Quarter-cycle phase units represent 125 PDP cycles/sample exactly at 24 kHz.
 const AUDIO_SAMPLE_PERIOD_PHASE: u32 =
     PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / crate::AUDIO_SAMPLE_RATE_HZ;
-const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
-const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 6 / 1_000;
 const _: () = assert!(crate::AUDIO_SAMPLE_RATE_HZ % USB_MICROFRAMES_PER_SECOND == 0);
 const _: () = assert!(PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE % crate::AUDIO_SAMPLE_RATE_HZ == 0);
 const AUDIO_AMPLITUDE: i16 = 12_000;
@@ -79,6 +80,15 @@ impl BkEmulatorAudio {
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
+        }
+    }
+
+    /// Reinitialize the emulator-side capture after BK reset without changing
+    /// whether the USB audio alternate setting is active.
+    pub fn reset_emulator_capture(&mut self) {
+        if self.active {
+            self.tinyusb_set_active(false);
+            self.tinyusb_set_active(true);
         }
     }
 

@@ -74,3 +74,13 @@ pub extern "C" fn xcore_tud_audio_stop() {
         }
     })
 }
+
+/// Reinitialize BK speaker capture after an emulator reset. Preserve the
+/// current USB streaming state; do not wait for another SET_INTERFACE request.
+pub fn reset_emulator_capture() {
+    cortex_m::interrupt::free(|_| {
+        if let Some(state) = audio_state_ptr() {
+            unsafe { (&mut *state).reset_emulator_capture(); }
+        }
+    })
+}

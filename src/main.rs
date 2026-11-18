@@ -620,6 +620,7 @@ fn main() -> ! {
 
         if keyboard::take_reset_request() && emulator_enabled {
             unsafe { bk_reset(); }
+            xcore407i_blinker::audio_uac2::reset_emulator_capture();
             keyboard::reset_frame_pacing();
             let now_ms = TICKS.load(Ordering::Relaxed);
             pacing_start_ms = now_ms;
