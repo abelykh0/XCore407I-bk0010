@@ -71,17 +71,21 @@ const DHARA_META_CACHE_ENTRIES: usize = 7;
 struct DharaMetaCacheEntry {
     page: u32,
     offset: u16,
+    age: u16,
     data: [u8; DHARA_META_SIZE],
 }
 
 static mut DHARA_META_CACHE: [DharaMetaCacheEntry; DHARA_META_CACHE_ENTRIES] =
-    [DharaMetaCacheEntry { page: u32::MAX, offset: 0, data: [0; DHARA_META_SIZE] };
+    [DharaMetaCacheEntry { page: u32::MAX, offset: 0, age: 0, data: [0; DHARA_META_SIZE] };
         DHARA_META_CACHE_ENTRIES];
-static mut DHARA_META_CACHE_NEXT: usize = 0;
+static mut DHARA_META_CACHE_CLOCK: u16 = 0;
 
+#[cfg(feature = "list-profile")]
 static DHARA_META_CACHE_HITS: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "list-profile")]
 static DHARA_META_CACHE_MISSES: AtomicU32 = AtomicU32::new(0);
 
+#[cfg(feature = "list-profile")]
 pub(crate) fn metadata_cache_diagnostic() -> (u32, u32) {
     (
         DHARA_META_CACHE_HITS.load(Ordering::Relaxed),
@@ -89,6 +93,7 @@ pub(crate) fn metadata_cache_diagnostic() -> (u32, u32) {
     )
 }
 
+#[cfg(feature = "list-profile")]
 pub(crate) fn reset_metadata_cache_diagnostic() {
     DHARA_META_CACHE_HITS.store(0, Ordering::Relaxed);
     DHARA_META_CACHE_MISSES.store(0, Ordering::Relaxed);
@@ -380,18 +385,29 @@ pub extern "C" fn dhara_nand_read(
         && offset <= u16::MAX as usize
         && nand_fs::ecc_check_enabled();
 
-    if cacheable {
+    let cache_age = if cacheable {
+        let clock = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE_CLOCK) };
+        *clock = clock.wrapping_add(1);
+        Some(*clock)
+    } else {
+        None
+    };
+
+    if let Some(age) = cache_age {
         let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
-        if let Some(entry) = cache.iter().find(|entry| {
-            entry.page == page && entry.offset as usize == offset
-        }) {
-            DHARA_META_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-            unsafe {
-                core::ptr::copy_nonoverlapping(entry.data.as_ptr(), data, DHARA_META_SIZE);
-                set_error(error, 0);
+        for entry in cache.iter_mut() {
+            if entry.page == page && entry.offset as usize == offset {
+                entry.age = age;
+                #[cfg(feature = "list-profile")]
+                DHARA_META_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(entry.data.as_ptr(), data, DHARA_META_SIZE);
+                    set_error(error, 0);
+                }
+                return 0;
             }
-            return 0;
         }
+        #[cfg(feature = "list-profile")]
         DHARA_META_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -401,14 +417,27 @@ pub extern "C" fn dhara_nand_read(
         return -1;
     }
 
-    if cacheable {
+    if let Some(age) = cache_age {
         let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
-        let next = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE_NEXT) };
-        let entry = &mut cache[*next];
+        let mut victim = 0usize;
+        let mut oldest_age = 0u16;
+        for (index, entry) in cache.iter().enumerate() {
+            if entry.page == u32::MAX {
+                victim = index;
+                break;
+            }
+            let elapsed = age.wrapping_sub(entry.age);
+            if elapsed > oldest_age {
+                oldest_age = elapsed;
+                victim = index;
+            }
+        }
+
+        let entry = &mut cache[victim];
         entry.page = page;
         entry.offset = offset as u16;
+        entry.age = age;
         entry.data.copy_from_slice(&scratch[offset..offset + DHARA_META_SIZE]);
-        *next = (*next + 1) % DHARA_META_CACHE_ENTRIES;
     }
 
     if length != 0 {
