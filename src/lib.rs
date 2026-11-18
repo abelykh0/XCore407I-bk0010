@@ -5,6 +5,7 @@ pub mod bk_screen;
 pub mod cdc_console;
 pub mod cdc_zmodem;
 pub mod camera;
+pub mod format;
 pub mod nand_fs;
 mod nand_ecc;
 #[cfg(feature = "list-profile")]

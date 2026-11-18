@@ -408,24 +408,16 @@ pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
         let mut line = [b' '; 64];
         let prefix = b"LFS ERROR CODE: ";
         line[..prefix.len()].copy_from_slice(prefix);
-        let mut value = if error < 0 { error.wrapping_neg() as u32 } else { error as u32 };
-        let mut digits = [b'0'; 10];
-        let mut count = 0usize;
-        loop {
-            digits[count] = b'0' + (value % 10) as u8;
-            count += 1;
-            value /= 10;
-            if value == 0 { break; }
-        }
+        let value = if error < 0 { error.wrapping_neg() as u32 } else { error as u32 };
+        let mut number = [0u8; 10];
+        let digits = xcore407i_blinker::format::u32_to_decimal(value, &mut number);
         let mut len = prefix.len();
         if error < 0 {
             line[len] = b'-';
             len += 1;
         }
-        for index in (0..count).rev() {
-            line[len] = digits[index];
-            len += 1;
-        }
+        line[len..len + digits.len()].copy_from_slice(digits);
+        len += digits.len();
         show_file_browser_line(4, &line[..len], false);
     }
     if final_confirmation {

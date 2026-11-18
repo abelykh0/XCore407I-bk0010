@@ -587,20 +587,10 @@ fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
 }
 
 #[cfg(feature = "cpu-cycle-diag")]
-fn append_decimal(out: &mut [u8; 32], pos: &mut usize, mut value: u32) {
+fn append_decimal(out: &mut [u8; 32], pos: &mut usize, value: u32) {
     let mut digits = [0u8; 10];
-    let mut count = 0usize;
-    loop {
-        digits[count] = b'0' + (value % 10) as u8;
-        count += 1;
-        value /= 10;
-        if value == 0 { break; }
-    }
-    while count != 0 && *pos < out.len() {
-        count -= 1;
-        out[*pos] = digits[count];
-        *pos += 1;
-    }
+    let digits = crate::format::u32_to_decimal(value, &mut digits);
+    append_bytes(out, pos, digits);
 }
 
 /// Append keyboard input to one persistent canvas row instead of allocating a

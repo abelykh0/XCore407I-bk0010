@@ -111,20 +111,6 @@ unsafe extern "C" {
 
 
 fn draw_keyboard_unavailable_screen() {
-    fn decimal(mut value: u32, out: &mut [u8; 10]) -> &[u8] {
-        let mut pos = out.len();
-        if value == 0 {
-            out[9] = b'0';
-            return &out[9..];
-        }
-        while value != 0 && pos != 0 {
-            pos -= 1;
-            out[pos] = b'0' + (value % 10) as u8;
-            value /= 10;
-        }
-        &out[pos..]
-    }
-
     clear_demo_canvas(0x10); // blue background
     show_file_browser_line(3, b"KEYBOARD NOT AVAILABLE", false);
     show_file_browser_line(5, b"USB HOST DIAGNOSTICS", false);
@@ -140,37 +126,37 @@ fn draw_keyboard_unavailable_screen() {
     let mut line = [b' '; 32];
     let mut number = [0u8; 10];
     line[..10].copy_from_slice(b"HOST EVENT");
-    let digits = decimal(USB_FS_STATUS.load(Ordering::Acquire), &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(USB_FS_STATUS.load(Ordering::Acquire), &mut number);
     line[11..11 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(9, &line, false);
 
     line.fill(b' ');
     line[..10].copy_from_slice(b"HID MOUNTS");
-    let digits = decimal(hid, &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(hid, &mut number);
     line[11..11 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(10, &line, false);
 
     line.fill(b' ');
     line[..14].copy_from_slice(b"BOOT KEYBOARDS");
-    let digits = decimal(boot, &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(boot, &mut number);
     line[16..16 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(11, &line, false);
 
     line.fill(b' ');
     line[..7].copy_from_slice(b"REPORTS");
-    let digits = decimal(reports, &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(reports, &mut number);
     line[8..8 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(12, &line, false);
 
     line.fill(b' ');
     line[..15].copy_from_slice(b"LAST REPORT LEN");
-    let digits = decimal(last_len, &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(last_len, &mut number);
     line[16..16 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(13, &line, false);
 
     line.fill(b' ');
     line[..11].copy_from_slice(b"REARM FAILS");
-    let digits = decimal(rearm, &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(rearm, &mut number);
     line[12..12 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(14, &line, false);
 
@@ -181,20 +167,20 @@ fn draw_keyboard_unavailable_screen() {
     } else if protocol == 0xfe {
         line[13..27].copy_from_slice(b"SET PROTO FAIL");
     } else {
-        let digits = decimal(protocol as u32, &mut number);
+        let digits = xcore407i_blinker::format::u32_to_decimal(protocol as u32, &mut number);
         line[13..13 + digits.len()].copy_from_slice(digits);
     }
     show_file_browser_line(15, &line, false);
 
     line.fill(b' ');
     line[..8].copy_from_slice(b"UNMOUNTS");
-    let digits = decimal(unmounts, &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(unmounts, &mut number);
     line[9..9 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(16, &line, false);
 
     line.fill(b' ');
     line[..13].copy_from_slice(b"HOST RESTARTS");
-    let digits = decimal(usb_host::USB_FS_RESTART_COUNT.load(Ordering::Acquire), &mut number);
+    let digits = xcore407i_blinker::format::u32_to_decimal(usb_host::USB_FS_RESTART_COUNT.load(Ordering::Acquire), &mut number);
     line[14..14 + digits.len()].copy_from_slice(digits);
     show_file_browser_line(17, &line, false);
 
