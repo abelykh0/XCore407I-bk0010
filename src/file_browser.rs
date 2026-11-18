@@ -85,6 +85,7 @@ pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CA
 pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
  
 unsafe extern "C" {
+    safe fn bk_load_bin_prepare(load_addr: u16, data_len: u16) -> i32;
     safe fn bk_load_bin_write(load_addr: u16, offset: u32, data: *const u8, length: usize) -> i32;
     safe fn bk_load_bin_finish(load_addr: u16, data_len: u16) -> i32;
     static mut RamBuffer: [u8; 0x4000];
@@ -342,6 +343,13 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
                     // any payload bytes. BK-0010 writable RAM + video memory
                     // occupies 000000..0100000 (octal).
                     if (load_addr as usize) + data_len > 0o100000 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+
+                    // The BK monitor stores the received header in system
+                    // cells 264/266 before receiving the payload. Keep that
+                    // ordering so payload bytes targeting those cells win.
+                    if bk_load_bin_prepare(load_addr, data_len as u16) != 0 {
                         return Err(littlefs2::io::Error::IO);
                     }
 
