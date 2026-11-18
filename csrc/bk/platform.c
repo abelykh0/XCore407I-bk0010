@@ -139,31 +139,16 @@ void bk_set_pc(uint16_t start)
     pdp.regs[PC] = start;
 }
 
-// Track which bytes of the monitor's autostart stack frame were overwritten
-// while streaming a tape image into emulated memory.
-static uint8_t bk_load_bin_touched_stack[01000]
-    __attribute__((section(".ccmram"), aligned(4)));
-static uint16_t bk_load_bin_load_addr;
-static uint32_t bk_load_bin_written;
-
-void bk_load_bin_begin(uint16_t load_addr)
-{
-    memset(bk_load_bin_touched_stack, 0, sizeof(bk_load_bin_touched_stack));
-    bk_load_bin_load_addr = load_addr;
-    bk_load_bin_written = 0;
-}
-
-int32_t bk_load_bin_write(const uint8_t *data, size_t length)
+// Stream a .bin payload into emulated memory without persistent loader state.
+int32_t bk_load_bin_write(uint16_t load_addr, uint32_t offset,
+                          const uint8_t *data, size_t length)
 {
     if (data == NULL && length != 0) return -1;
 
     for (size_t i = 0; i < length; ++i) {
-        uint16_t addr = (uint16_t)(bk_load_bin_load_addr + bk_load_bin_written);
-        bk_load_bin_written++;
-
-        if (addr < 0100000) {
-            if (sl_byte(&pdp, addr, data[i]) != OK) return -1;
-            if (addr < 01000) bk_load_bin_touched_stack[addr] = 1;
+        uint16_t addr = (uint16_t)(load_addr + offset + i);
+        if (addr < 0100000 && sl_byte(&pdp, addr, data[i]) != OK) {
+            return -1;
         }
     }
     return 0;
@@ -171,19 +156,20 @@ int32_t bk_load_bin_write(const uint8_t *data, size_t length)
 
 // Returns 1 when execution is started, 0 for a full-screen image dump,
 // and -1 on a memory access error.
-int32_t bk_load_bin_finish(uint16_t data_len)
+int32_t bk_load_bin_finish(uint16_t load_addr, uint16_t data_len)
 {
-    uint16_t start_pc = bk_load_bin_load_addr;
+    uint16_t start_pc = load_addr;
 
-    if (sl_word(&pdp, 0000264, bk_load_bin_load_addr) != OK ||
+    if (sl_word(&pdp, 0000264, load_addr) != OK ||
         sl_word(&pdp, 0000266, data_len) != OK) {
         return -1;
     }
 
-    // The monitor stores an autostart return frame in this stack area.
+    // A stack word belongs to the loaded image when both bytes fall within
+    // the streamed payload. Use address arithmetic instead of a touched-byte map.
     for (uint16_t slot = 0000776; slot >= 0000720; slot -= 2) {
-        if (bk_load_bin_touched_stack[slot] &&
-            bk_load_bin_touched_stack[slot + 1]) {
+        uint16_t offset = (uint16_t)(slot - load_addr);
+        if ((uint32_t)offset + 1u < data_len) {
             d_word candidate;
             if (ll_word(&pdp, slot, &candidate) == OK &&
                 candidate >= 0000400 &&
@@ -196,15 +182,14 @@ int32_t bk_load_bin_finish(uint16_t data_len)
     }
 
     // A complete screen dump updates video memory but leaves the monitor active.
-    if (bk_load_bin_load_addr == 0040000 &&
+    if (load_addr == 0040000 &&
         data_len == 0040000 &&
         start_pc == 0040000) {
         return 0;
     }
 
-    pdp.regs[SP] = (bk_load_bin_load_addr < 0001000 &&
-                    start_pc < 0001000)
-                       ? (uint16_t)(bk_load_bin_load_addr & (uint16_t)~1u)
+    pdp.regs[SP] = (load_addr < 0001000 && start_pc < 0001000)
+                       ? (uint16_t)(load_addr & (uint16_t)~1u)
                        : 0001000;
     pdp.regs[PC] = start_pc;
     pdp.psw = 0000000;
