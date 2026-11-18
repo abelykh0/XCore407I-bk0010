@@ -342,7 +342,8 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
                     let mut skip = offset - header.len();
                     let mut discard = [0u8; 16];
                     while skip != 0 {
-                        let count = file.read(&mut discard[..skip.min(discard.len())])?;
+                        let discard_len = skip.min(discard.len());
+                        let count = file.read(&mut discard[..discard_len])?;
                         if count == 0 {
                             return Err(littlefs2::io::Error::IO);
                         }
