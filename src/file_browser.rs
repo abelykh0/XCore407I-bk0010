@@ -85,7 +85,7 @@ pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CA
 pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
  
 unsafe extern "C" {
-    safe fn bk_set_pc(start: u16);
+    safe fn bk_set_load_registers(start: u16, stack: u16, set_pc: bool);
     static mut RamBuffer: [u8; 0x4000];
 }
 
@@ -298,53 +298,72 @@ pub(crate) unsafe fn draw_save_dialog(state: u8) {
     }
 }
 
-/// Load a selected file containing the 4-byte Start/Size header and payload.
+/// Load a selected .bin file using its little-endian load-address/length header.
 pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
-    let (start, _size) = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    let (load_addr, stack, set_pc) = xcore407i_blinker::nand_fs::with_mounted(|fs| {
         with_file_browser_file_allocation(|allocation| {
             fs.open_file_with_options_and_then_with_allocation(
-            |options| options.read(true),
-            path,
-            allocation,
-            |file| {
-            let mut header = [0u8; 4];
-            let mut header_read = 0usize;
-            while header_read < header.len() {
-                let count = file.read(&mut header[header_read..])?;
-                if count == 0 {
-                    return Err(littlefs2::io::Error::IO);
-                }
-                header_read += count;
-            }
+                |options| options.read(true),
+                path,
+                allocation,
+                |file| {
+                    let file_size = file.len()?;
+                    let mut header = [0u8; 4];
+                    let mut header_read = 0usize;
+                    while header_read < header.len() {
+                        let count = file.read(&mut header[header_read..])?;
+                        if count == 0 {
+                            return Err(littlefs2::io::Error::IO);
+                        }
+                        header_read += count;
+                    }
 
-            let start = u16::from_le_bytes([header[0], header[1]]);
-            let size = u16::from_le_bytes([header[2], header[3]]);
-            if size == 0 || start as u32 + size as u32 > 0x4000 {
-                return Err(littlefs2::io::Error::IO);
-            }
+                    let load_addr = u16::from_le_bytes([header[0], header[1]]);
+                    let length = u16::from_le_bytes([header[2], header[3]]) as usize;
+                    let data_offset = if file_size == length + 20 { 20 } else { 4 };
+                    let end = load_addr as usize + length;
 
-            let destination = unsafe {
-                core::slice::from_raw_parts_mut(
-                    core::ptr::addr_of_mut!(RamBuffer).cast::<u8>().add(start as usize),
-                    size as usize,
-                )
-            };
-            let mut total = 0usize;
-            while total < size as usize {
-                let count = file.read(&mut destination[total..])?;
-                if count == 0 {
-                    return Err(littlefs2::io::Error::IO);
-                }
-                total += count;
-            }
-            Ok((start, size))
-            },
-        )
+                    if length == 0
+                        || end > 0x4000
+                        || file_size < data_offset + length
+                    {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+
+                    file.seek(littlefs2::io::SeekFrom::Start(data_offset as u32))?;
+                    let destination = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            core::ptr::addr_of_mut!(RamBuffer)
+                                .cast::<u8>()
+                                .add(load_addr as usize),
+                            length,
+                        )
+                    };
+                    let mut total = 0usize;
+                    while total < length {
+                        let count = file.read(&mut destination[total..])?;
+                        if count == 0 {
+                            return Err(littlefs2::io::Error::IO);
+                        }
+                        total += count;
+                    }
+
+                    // A payload touching low memory overwrites the BK autostart
+                    // stack area; in that case retain the existing PC.
+                    let overwrites_autostart_stack = load_addr as usize < 0o1000 && end > 0;
+                    let stack = if (load_addr as usize) < 0o1000 {
+                        load_addr
+                    } else {
+                        0o1000
+                    };
+                    Ok((load_addr, stack, !overwrites_autostart_stack))
+                },
+            )
         })
     }).map_err(|_| ())?;
 
-    bk_set_pc(start);
+    bk_set_load_registers(load_addr, stack, set_pc);
     Ok(())
 }
 
