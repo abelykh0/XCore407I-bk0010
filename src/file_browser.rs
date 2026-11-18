@@ -341,7 +341,8 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
                     // Reuse the four-byte header as the only scratch buffer.
                     let mut skip = offset - header.len();
                     while skip != 0 {
-                        let count = file.read(&mut header[..skip.min(header.len())])?;
+                        let skip_len = skip.min(header.len());
+                        let count = file.read(&mut header[..skip_len])?;
                         if count == 0 {
                             return Err(littlefs2::io::Error::IO);
                         }
