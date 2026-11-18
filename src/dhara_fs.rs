@@ -99,6 +99,14 @@ pub(crate) fn reset_metadata_cache_diagnostic() {
     DHARA_META_CACHE_MISSES.store(0, Ordering::Relaxed);
 }
 
+fn clear_metadata_cache() {
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
+    for entry in cache.iter_mut() {
+        entry.page = u32::MAX;
+    }
+    unsafe { *core::ptr::addr_of_mut!(DHARA_META_CACHE_CLOCK) = 0; }
+}
+
 fn invalidate_metadata_cache_page(page: u32) {
     let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
     for entry in cache.iter_mut() {
@@ -298,6 +306,7 @@ pub extern "C" fn dhara_nand_is_bad(nand: *const DharaNand, block: u32) -> c_int
 #[unsafe(no_mangle)]
 pub extern "C" fn dhara_nand_mark_bad(nand: *const DharaNand, block: u32) {
     if valid_nand(nand) {
+        invalidate_metadata_cache_block(block);
         let _ = mark_block_bad(block);
     }
 }
@@ -492,6 +501,7 @@ impl DharaStorage {
     pub fn initialize_new_volume_with_progress(
         mut progress: impl FnMut(u32, u32),
     ) -> Result<Self, crate::nand_fs::InitError> {
+        clear_metadata_cache();
         nand_fs::configure_fsmc();
         FORMAT_FAILURE_STAGE.store(0, Ordering::Release);
         FORMAT_FAILURE_LOCATION.store(0, Ordering::Release);
@@ -596,6 +606,7 @@ impl DharaStorage {
     pub fn new_with_progress(
         mut progress: impl FnMut(u32, u32),
     ) -> Result<Self, crate::nand_fs::InitError> {
+        clear_metadata_cache();
         nand_fs::configure_fsmc();
         nand_fs::command(0xFF);
         if !nand_fs::wait_ready_status() {
