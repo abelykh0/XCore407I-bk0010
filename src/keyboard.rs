@@ -301,8 +301,11 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
     let modifiers = report[0];
     let shift = modifiers & 0x22 != 0;
     let control = modifiers & 0x11 != 0;
+    let alt = modifiers & 0x44 != 0;
     let gui = modifiers & 0x88 != 0;
     let control_or_alt = modifiers & 0xdd != 0;
+    // Right Alt may be reported as Ctrl+Alt by AltGr keyboard layouts.
+    // Treat either Alt key as АР2, not as Ctrl.
     let previous_modifiers = unsafe { PREVIOUS_MODIFIERS };
     let control_pressed = control && previous_modifiers & 0x11 == 0;
     let gui_pressed = gui && previous_modifiers & 0x88 == 0;
@@ -523,9 +526,18 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8]) {
             _ => {}
         }
 
-        if let Some(ch) = key_to_ascii(key, shift, locks & 0x02 != 0, locks & 0x01 != 0, control_or_alt) {
+        if let Some(ch) = key_to_ascii(
+            key,
+            shift,
+            locks & 0x02 != 0,
+            locks & 0x01 != 0,
+            control && !alt,
+        ) {
             append_keyboard_char(&mut text, &mut used, ch);
-            append_keyboard_char(&mut emulator_input, &mut emulator_used, ch);
+            // The queue uses bit 7 as an internal marker for the АР2
+            // interrupt vector. The BK data register itself remains 7-bit.
+            let queued = if alt && ch.is_ascii_graphic() { ch | 0x80 } else { ch };
+            append_keyboard_char(&mut emulator_input, &mut emulator_used, queued);
         } else if let Some(label) = special_key_label(key, locks & 0x01 != 0) {
             if used != 0 { append_keyboard_char(&mut text, &mut used, b' '); }
             append_keyboard_text(&mut text, &mut used, label);

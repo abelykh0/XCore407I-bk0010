@@ -460,16 +460,17 @@ void bk_request_stop_irq(void)
  * interrupt to be acknowledged, then schedule the next TTY interrupt. */
 static int bk_tty_finish(d_word info)
 {
-    (void)info;
-    return service(060);
+    // Bit 7 is an adapter-side АР2 marker, not part of 177662.
+    return service((info & 0x80u) ? 0274 : 060);
 }
 
 uint8_t bk_try_send_input_byte(uint8_t symbol)
 {
     if (port0177660 & 0x80u) return 0u;
-    if (symbol == 0x0Du) symbol = 0x0Au;
+    if ((symbol & 0x7Fu) == 0x0Du) symbol = (uint8_t)((symbol & 0x80u) | 0x0Au);
     port0177660 |= 0x80u;
     port0177662 = symbol & 0x7Fu;
+    // Preserve the modifier marker until the queued interrupt is serviced.
     (void)ev_register(TTY_PRI, bk_tty_finish, 0, symbol);
     return 1u;
 }

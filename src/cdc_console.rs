@@ -413,14 +413,14 @@ pub(crate) fn write_send_complete(name: &[u8], size: u32, elapsed_seconds: u32) 
     write_status(b".\r\n> ");
 }
 
-fn append_receive_bytes(buffer: &mut [u8; 160], len: &mut usize, bytes: &[u8]) {
+fn append_receive_bytes(buffer: &mut [u8], len: &mut usize, bytes: &[u8]) {
     let end = (*len + bytes.len()).min(buffer.len());
     let count = end - *len;
     buffer[*len..end].copy_from_slice(&bytes[..count]);
     *len = end;
 }
 
-fn append_receive_decimal(buffer: &mut [u8; 160], len: &mut usize, mut value: usize) {
+fn append_receive_decimal(buffer: &mut [u8], len: &mut usize, mut value: usize) {
     let mut digits = [0u8; 10];
     let mut start = digits.len();
     loop {
@@ -432,7 +432,7 @@ fn append_receive_decimal(buffer: &mut [u8; 160], len: &mut usize, mut value: us
     append_receive_bytes(buffer, len, &digits[start..]);
 }
 
-fn append_receive_grouped(buffer: &mut [u8; 160], len: &mut usize, mut value: usize) {
+fn append_receive_grouped(buffer: &mut [u8], len: &mut usize, mut value: usize) {
     let mut digits = [0u8; 13];
     let mut start = digits.len();
     let mut group_digits = 0usize;
