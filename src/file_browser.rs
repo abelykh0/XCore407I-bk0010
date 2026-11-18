@@ -85,9 +85,8 @@ pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CA
 pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
  
 unsafe extern "C" {
-    safe fn bk_load_bin_begin(load_addr: u16);
-    safe fn bk_load_bin_write(data: *const u8, length: usize) -> i32;
-    safe fn bk_load_bin_finish(data_len: u16) -> i32;
+    safe fn bk_load_bin_write(load_addr: u16, offset: u32, data: *const u8, length: usize) -> i32;
+    safe fn bk_load_bin_finish(load_addr: u16, data_len: u16) -> i32;
     static mut RamBuffer: [u8; 0x4000];
 }
 
@@ -339,33 +338,32 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
 
                     // Skip the remainder of the tape header (or no bytes for
                     // the four-byte format). This avoids allocating a file-sized buffer.
+                    // Reuse the four-byte header as the only scratch buffer.
                     let mut skip = offset - header.len();
-                    let mut discard = [0u8; 16];
                     while skip != 0 {
-                        let discard_len = skip.min(discard.len());
-                        let count = file.read(&mut discard[..discard_len])?;
+                        let count = file.read(&mut header[..skip.min(header.len())])?;
                         if count == 0 {
                             return Err(littlefs2::io::Error::IO);
                         }
                         skip -= count;
                     }
 
-                    bk_load_bin_begin(load_addr);
                     let mut remaining = data_len;
-                    let mut chunk = [0u8; 128];
+                    let mut written = 0u32;
                     while remaining != 0 {
-                        let wanted = remaining.min(chunk.len());
-                        let count = file.read(&mut chunk[..wanted])?;
+                        let wanted = remaining.min(header.len());
+                        let count = file.read(&mut header[..wanted])?;
                         if count == 0 {
                             return Err(littlefs2::io::Error::IO);
                         }
-                        if bk_load_bin_write(chunk.as_ptr(), count) != 0 {
+                        if bk_load_bin_write(load_addr, written, header.as_ptr(), count) != 0 {
                             return Err(littlefs2::io::Error::IO);
                         }
+                        written += count as u32;
                         remaining -= count;
                     }
 
-                    if bk_load_bin_finish(data_len as u16) < 0 {
+                    if bk_load_bin_finish(load_addr, data_len as u16) < 0 {
                         return Err(littlefs2::io::Error::IO);
                     }
                     Ok(())
