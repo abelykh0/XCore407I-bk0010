@@ -68,6 +68,13 @@ pub fn request_camera_mode(mode: CameraMode) {
     PENDING_CAMERA_MODE.store(mode as u32, Ordering::Release);
 }
 
+/// True while the renderer still needs to apply a requested BK display mode.
+#[inline]
+pub fn camera_mode_change_pending() -> bool {
+    let requested = PENDING_CAMERA_MODE.load(Ordering::Acquire);
+    requested != u32::MAX && requested != ACTIVE_CAMERA_MODE.load(Ordering::Acquire)
+}
+
 pub fn request_camera_mode_toggle() {
     let current = PENDING_CAMERA_MODE.load(Ordering::Acquire);
     let base = if current != u32::MAX { current } else { ACTIVE_CAMERA_MODE.load(Ordering::Acquire) };

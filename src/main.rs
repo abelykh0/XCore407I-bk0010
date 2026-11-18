@@ -105,6 +105,7 @@ fn service_file_browser_io() {
 unsafe extern "C" {
     fn bk_platform_init(monitor_rom: *const u8, basic_rom: *const u8, basic_size_bytes: u32);
     fn bk_loop() -> i32;
+    fn bk_reset();
     safe fn bk_timing_cycles() -> u32;
 }
 
@@ -617,6 +618,21 @@ fn main() -> ! {
 
         let browser_action = FILE_BROWSER_ACTION.swap(0, Ordering::AcqRel);
 
+        if keyboard::take_reset_request() && emulator_enabled {
+            unsafe { bk_reset(); }
+            keyboard::reset_frame_pacing();
+            let now_ms = TICKS.load(Ordering::Relaxed);
+            pacing_start_ms = now_ms;
+            pacing_start_cycles = bk_timing_cycles();
+            emulator_was_paused = false;
+            #[cfg(feature = "cpu-cycle-diag")]
+            {
+                diagnostic_last_dwt = read_dwt_cycle_count();
+                diagnostic_last_pdp = pacing_start_cycles;
+            }
+            clear_demo_canvas(0x10);
+        }
+
         match INIT_STATE.load(Ordering::Acquire) {
             INIT_CONFIRM | INIT_CONFIRM_FINAL => {}
             INIT_CANCELLED => {
@@ -977,6 +993,26 @@ fn main() -> ! {
                         unsafe { bk_loop(); }
 
                         // Refill buffers while the emulator runs, outside USB IRQs.
+                        while prepare_next_video_batch(&mut video_renderer) {}
+
+                        // A BK mode-register write requests a camera-mode change.
+                        // Stop executing the emulator until the renderer reaches
+                        // its next frame boundary and applies that mode. This
+                        // prevents further video writes from using the old canvas
+                        // layout while the requested mode is waiting.
+                        if xcore407i_blinker::camera::camera_mode_change_pending()
+                            && xcore407i_blinker::uvc::streaming_active()
+                        {
+                            break;
+                        }
+                    }
+
+                    // While streaming, keep the renderer fed but hold BK execution
+                    // until it consumes the pending mode at a frame boundary.
+                    // USB completion IRQs continue freeing DMA buffers meanwhile.
+                    while xcore407i_blinker::camera::camera_mode_change_pending()
+                        && xcore407i_blinker::uvc::streaming_active()
+                    {
                         while prepare_next_video_batch(&mut video_renderer) {}
                     }
 

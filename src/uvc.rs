@@ -29,6 +29,12 @@ pub const MAX_PAYLOAD_TRANSFER_SIZE: u32 = ISO_BATCH_BYTES as u32;
 pub const FRAME_RATE_FPS: u32 = 25;
 pub const FRAME_INTERVAL_100NS: u32 = 10_000_000 / FRAME_RATE_FPS;
 static CDC_MODE: AtomicBool = AtomicBool::new(false);
+static STREAMING_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[inline]
+pub fn streaming_active() -> bool {
+    STREAMING_ACTIVE.load(Ordering::Acquire)
+}
 
 pub fn set_cdc_mode(enabled: bool) {
     CDC_MODE.store(enabled, Ordering::Release);
@@ -209,6 +215,7 @@ impl UvcClass {
                 self.alternate_setting = 0;
                 self.state = StreamState::Stopped;
                 self.start_marker_pending = false;
+                STREAMING_ACTIVE.store(false, Ordering::Release);
                 // Do not release an in-flight DMA buffer here: SET_INTERFACE
                 // may be processed before the controller has fully quiesced it.
                 // A later stream batch will replace it and release it safely.
@@ -218,6 +225,7 @@ impl UvcClass {
                 self.alternate_setting = 1;
                 self.state = StreamState::Ready;
                 self.start_marker_pending = true;
+                STREAMING_ACTIVE.store(true, Ordering::Release);
                 // Frame progression belongs to the main-loop producer.
                 // Keep the current DMA buffer owned until a replacement batch
                 // is submitted or the device is reset.

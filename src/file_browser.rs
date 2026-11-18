@@ -85,7 +85,9 @@ pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CA
 pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
  
 unsafe extern "C" {
-    safe fn bk_set_pc(start: u16);
+    safe fn bk_load_bin_prepare(load_addr: u16, data_len: u16) -> i32;
+    safe fn bk_load_bin_write(load_addr: u16, offset: u32, data: *const u8, length: usize) -> i32;
+    safe fn bk_load_bin_finish(load_addr: u16, data_len: u16) -> i32;
     static mut RamBuffer: [u8; 0x4000];
 }
 
@@ -298,56 +300,84 @@ pub(crate) unsafe fn draw_save_dialog(state: u8) {
     }
 }
 
-/// Load a selected file containing the 4-byte Start/Size header and payload.
+/// Load a selected .bin file using the BK monitor's tape-image conventions.
 pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
-    let (start, _size) = xcore407i_blinker::nand_fs::with_mounted(|fs| {
+    xcore407i_blinker::nand_fs::with_mounted(|fs| {
         with_file_browser_file_allocation(|allocation| {
             fs.open_file_with_options_and_then_with_allocation(
-            |options| options.read(true),
-            path,
-            allocation,
-            |file| {
-            let mut header = [0u8; 4];
-            let mut header_read = 0usize;
-            while header_read < header.len() {
-                let count = file.read(&mut header[header_read..])?;
-                if count == 0 {
-                    return Err(littlefs2::io::Error::IO);
-                }
-                header_read += count;
-            }
+                |options| options.read(true),
+                path,
+                allocation,
+                |file| {
+                    let file_size = file.len()?;
+                    if file_size < 5 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
 
-            let start = u16::from_le_bytes([header[0], header[1]]);
-            let size = u16::from_le_bytes([header[2], header[3]]);
-            if size == 0 || start as u32 + size as u32 > 0x4000 {
-                return Err(littlefs2::io::Error::IO);
-            }
+                    let mut header = [0u8; 4];
+                    let mut header_read = 0usize;
+                    while header_read < header.len() {
+                        let count = file.read(&mut header[header_read..])?;
+                        if count == 0 {
+                            return Err(littlefs2::io::Error::IO);
+                        }
+                        header_read += count;
+                    }
 
-            let destination = unsafe {
-                core::slice::from_raw_parts_mut(
-                    core::ptr::addr_of_mut!(RamBuffer).cast::<u8>().add(start as usize),
-                    size as usize,
-                )
-            };
-            let mut total = 0usize;
-            while total < size as usize {
-                let count = file.read(&mut destination[total..])?;
-                if count == 0 {
-                    return Err(littlefs2::io::Error::IO);
-                }
-                total += count;
-            }
-            Ok((start, size))
-            },
-        )
+                    let load_addr = u16::from_le_bytes([header[0], header[1]]);
+                    let data_len = u16::from_le_bytes([header[2], header[3]]) as usize;
+
+                    // This browser targets BK-0010 short-format images: a
+                    // four-byte address/length header followed by the payload.
+                    // Some short images carry a two-byte trailing checksum.
+                    // Do not guess a long-header offset or silently truncate a
+                    // payload when the declared length disagrees with the file.
+                    let payload_end = 4usize.checked_add(data_len)
+                        .ok_or(littlefs2::io::Error::IO)?;
+                    if file_size != payload_end && file_size != payload_end + 2 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+
+                    // Validate the complete destination range before writing
+                    // any payload bytes. BK-0010 writable RAM + video memory
+                    // occupies 000000..0100000 (octal).
+                    if (load_addr as usize) + data_len > 0o100000 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+
+                    // The BK monitor stores the received header in system
+                    // cells 264/266 before receiving the payload. Keep that
+                    // ordering so payload bytes targeting those cells win.
+                    if bk_load_bin_prepare(load_addr, data_len as u16) != 0 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+
+                    let mut remaining = data_len;
+                    let mut written = 0u32;
+                    while remaining != 0 {
+                        let wanted = remaining.min(header.len());
+                        let count = file.read(&mut header[..wanted])?;
+                        if count == 0 {
+                            return Err(littlefs2::io::Error::IO);
+                        }
+                        if bk_load_bin_write(load_addr, written, header.as_ptr(), count) != 0 {
+                            return Err(littlefs2::io::Error::IO);
+                        }
+                        written += count as u32;
+                        remaining -= count;
+                    }
+
+                    if bk_load_bin_finish(load_addr, data_len as u16) < 0 {
+                        return Err(littlefs2::io::Error::IO);
+                    }
+                    Ok(())
+                },
+            )
         })
-    }).map_err(|_| ())?;
-
-    bk_set_pc(start);
-    Ok(())
+    })
+    .map_err(|_| ())
 }
-
 
 
 /// Display the exact LittleFS mount failure and the two-step destructive confirmation.

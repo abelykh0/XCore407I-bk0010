@@ -139,6 +139,84 @@ void bk_set_pc(uint16_t start)
     pdp.regs[PC] = start;
 }
 
+// Apply the short BIN header exactly as the BK monitor does: the header
+// is received into system cells 264/266 before the payload is transferred.
+// A payload that overlaps those cells must therefore overwrite them.
+int32_t bk_load_bin_prepare(uint16_t load_addr, uint16_t data_len)
+{
+    const uint32_t memory_end = 0100000u;
+    if ((uint32_t)load_addr + data_len > memory_end) {
+        return -1;
+    }
+
+    if (sl_word(&pdp, 0000264, load_addr) != OK ||
+        sl_word(&pdp, 0000266, data_len) != OK) {
+        return -1;
+    }
+    return 0;
+}
+
+// Stream a .bin payload into emulated memory without persistent loader state.
+int32_t bk_load_bin_write(uint16_t load_addr, uint32_t offset,
+                          const uint8_t *data, size_t length)
+{
+    const uint32_t memory_end = 0100000u;
+    const uint32_t start = (uint32_t)load_addr;
+
+    if (data == NULL && length != 0) return -1;
+    if (start >= memory_end || offset > memory_end - start ||
+        length > memory_end - start - offset) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < length; ++i) {
+        const c_addr addr = start + offset + (uint32_t)i;
+        if (sl_byte(&pdp, addr, data[i]) != OK) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+// Returns 1 when execution is started, 0 for a full-screen image dump,
+// and -1 on a memory access error.
+int32_t bk_load_bin_finish(uint16_t load_addr, uint16_t data_len)
+{
+    const uint32_t memory_end = 0100000u;
+    if ((uint32_t)load_addr + data_len > memory_end) {
+        return -1;
+    }
+
+    // Header system cells were populated by bk_load_bin_prepare() before
+    // payload transfer, matching the monitor's receive order.
+
+    // A complete screen dump updates video memory but leaves the monitor active.
+    if (load_addr == 0040000 && data_len == 0040000) {
+        return 0;
+    }
+
+    // The BK-0010 monitor starts a program with CALL (R5) at 100376.
+    // Its return address is therefore 100400. The monitor enters this call
+    // with SP=1000; emulate the JSR PC,(R5) stack effect explicitly.
+    pdp.regs[SP] = 001000;
+    pdp.regs[SP] = (uint16_t)(pdp.regs[SP] - 2u);
+    if (sl_word(&pdp, pdp.regs[SP], 0100400) != OK) {
+        return -1;
+    }
+    pdp.regs[PC] = load_addr;
+
+    // MOV 264,R5 in the monitor sets N/Z and clears V; CALL (R5) preserves
+    // the condition codes. Preserve C as MOV does.
+    pdp.psw &= CC_C;
+    if (load_addr & 0100000u) {
+        pdp.psw |= CC_N;
+    }
+    if (load_addr == 0) {
+        pdp.psw |= CC_Z;
+    }
+    return 1;
+}
+
 void bk_reset(void)
 {
     unsigned i;
