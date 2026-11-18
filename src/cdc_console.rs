@@ -472,6 +472,18 @@ pub(crate) fn write_receive_complete(name: &[u8], size: u32, elapsed_seconds: u3
     write_status_counted(&buffer[..len]) == len
 }
 
+/// Queue one summary for a multi-file ZMODEM receive session.
+pub(crate) fn write_receive_summary(file_count: u32, total_size: u32) -> bool {
+    let mut buffer = [0u8; 96];
+    let mut len = 0usize;
+    append_receive_bytes(&mut buffer, &mut len, b"\r\nReceived ");
+    append_receive_grouped(&mut buffer, &mut len, file_count as usize);
+    append_receive_bytes(&mut buffer, &mut len, b" files, total size ");
+    append_receive_grouped(&mut buffer, &mut len, total_size as usize);
+    append_receive_bytes(&mut buffer, &mut len, b" bytes.\r\n> ");
+    write_status_counted(&buffer[..len]) == len
+}
+
 fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
     // DELETE accepts one root-level filename only. Keep the same conservative
     // character policy as ZMODEM uploads; never accept paths or separators.

@@ -46,7 +46,12 @@ pub struct State {
     final_path_len: usize,
     receive_name: [u8; NAME_CAPACITY],
     receive_name_len: usize,
+    receive_pending_name: [u8; NAME_CAPACITY],
+    receive_pending_name_len: usize,
     receive_size: u32,
+    receive_last_file_size: u32,
+    receive_file_count: u32,
+    receive_total_size: u32,
     receive_file_committed: bool,
     receive_started_rtc_ms: u32,
     receive_elapsed_seconds: u32,
@@ -100,7 +105,12 @@ impl State {
             final_path_len: 0,
             receive_name: [0; NAME_CAPACITY],
             receive_name_len: 0,
+            receive_pending_name: [0; NAME_CAPACITY],
+            receive_pending_name_len: 0,
             receive_size: 0,
+            receive_last_file_size: 0,
+            receive_file_count: 0,
+            receive_total_size: 0,
             receive_file_committed: false,
             receive_started_rtc_ms: 0,
             receive_elapsed_seconds: 0,
@@ -178,20 +188,32 @@ impl State {
     /// Deliver a committed receive notification from the normal console path.
     /// Keep the record until the complete message has entered the CDC TX FIFO.
     pub fn report_receive_complete(&mut self) -> bool {
-        if !self.receive_file_committed || self.receive_name_len == 0 {
+        if !self.receive_file_committed || self.receive_file_count == 0 {
             return false;
         }
 
-        if !super::cdc_console::write_receive_complete(
-            &self.receive_name[..self.receive_name_len],
-            self.receive_size,
-            self.receive_elapsed_seconds,
-        ) {
+        let written = if self.receive_file_count == 1 && self.receive_name_len != 0 {
+            super::cdc_console::write_receive_complete(
+                &self.receive_name[..self.receive_name_len],
+                self.receive_last_file_size,
+                self.receive_elapsed_seconds,
+            )
+        } else {
+            super::cdc_console::write_receive_summary(
+                self.receive_file_count,
+                self.receive_total_size,
+            )
+        };
+        if !written {
             return false;
         }
 
         self.receive_name_len = 0;
+        self.receive_pending_name_len = 0;
         self.receive_size = 0;
+        self.receive_last_file_size = 0;
+        self.receive_file_count = 0;
+        self.receive_total_size = 0;
         self.receive_file_committed = false;
         self.receive_elapsed_seconds = 0;
         true
@@ -247,7 +269,11 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     // normal console path will deliver it after the host reconnects.
     if !state.receive_file_committed {
         state.receive_name_len = 0;
+        state.receive_pending_name_len = 0;
         state.receive_size = 0;
+        state.receive_last_file_size = 0;
+        state.receive_file_count = 0;
+        state.receive_total_size = 0;
     }
     state.wire_len = 0;
     state.wire_pos = 0;
@@ -505,7 +531,11 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     let receiver = NonNull::from(receiver);
     state.final_path_len = 0;
     state.receive_name_len = 0;
+    state.receive_pending_name_len = 0;
     state.receive_size = 0;
+    state.receive_last_file_size = 0;
+    state.receive_file_count = 0;
+    state.receive_total_size = 0;
     state.receive_file_committed = false;
     state.receive_started_rtc_ms = 0;
     state.receive_elapsed_seconds = 0;
@@ -934,13 +964,14 @@ pub fn service(
                     // Copy the borrowed filename before calling another
                     // mutable Receiver method; Event::FileStarted borrows
                     // its name from receiver.poll().
-                    state.receive_name_len = info.name.len();
-                    state.receive_name[..state.receive_name_len].copy_from_slice(info.name);
+                    state.receive_pending_name_len = info.name.len();
+                    state.receive_pending_name[..state.receive_pending_name_len]
+                        .copy_from_slice(info.name);
                     state.receive_size = 0;
                     state.receive_started_rtc_ms = rtc_now_millis();
                     if receiver.accept_file_at(0).is_err() {
                         state.last_error = 4;
-                        state.receive_name_len = 0;
+                        state.receive_pending_name_len = 0;
                         super::cdc_console::write_status(
                             b"\r\nZMODEM protocol error: accept_file_at failed\r\n",
                         );
@@ -997,6 +1028,13 @@ pub fn service(
                 let receive_elapsed_ms =
                     rtc_now_millis().wrapping_sub(state.receive_started_rtc_ms);
                 state.receive_elapsed_seconds = receive_elapsed_ms / 1_000;
+                state.receive_name_len = state.receive_pending_name_len;
+                state.receive_name[..state.receive_name_len]
+                    .copy_from_slice(&state.receive_pending_name[..state.receive_name_len]);
+                state.receive_last_file_size = state.receive_size;
+                state.receive_file_count = state.receive_file_count.saturating_add(1);
+                state.receive_total_size = state.receive_total_size.saturating_add(state.receive_size);
+                state.receive_pending_name_len = 0;
                 state.receive_file_committed = true;
                 #[cfg(feature = "list-profile")]
                 crate::write_diag::finish(receive_elapsed_ms);
@@ -1162,7 +1200,11 @@ pub fn service(
         state.final_path_len = 0;
         if !file_committed {
             state.receive_name_len = 0;
+            state.receive_pending_name_len = 0;
             state.receive_size = 0;
+            state.receive_last_file_size = 0;
+            state.receive_file_count = 0;
+            state.receive_total_size = 0;
         }
         state.transfer_failed = false;
         state.transfer_started = false;
