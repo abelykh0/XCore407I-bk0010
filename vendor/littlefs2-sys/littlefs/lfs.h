@@ -392,9 +392,10 @@ typedef struct lfs_dir_tag_cache_entry {
     lfs_off_t off;
 } lfs_dir_tag_cache_entry_t;
 
-// Maximum number of metadata tags cached for one short directory listing.
-// Each entry stores only the decoded tag and its offset, not tag payload.
-#define LFS_DIR_TAG_CACHE_SIZE 128
+// Keep the custom directory tag cache effectively disabled to reclaim
+// RAM for the Dhara metadata cache. Directories with more than one entry use
+// the existing uncached short-iterator fallback.
+#define LFS_DIR_TAG_CACHE_SIZE 1
 
 // littlefs directory type
 typedef struct lfs_dir {
