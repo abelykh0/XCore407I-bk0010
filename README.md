@@ -45,7 +45,7 @@ Use CDC console to format NAND and upload files.
 ### CDC console and ZMODEM
 
 The USB CDC interface provides a serial console for firmware commands and
-ZMODEM file transfers. To enter CDC console mode hold F10 on the keyboad at startup. 
+ZMODEM file transfers. To enter CDC console mode hold F10 on the keyboard at startup. 
 In Tera Term, enable these settings in `teraterm.ini`:
 
 ```ini
