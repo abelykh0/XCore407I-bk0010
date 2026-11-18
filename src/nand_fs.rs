@@ -52,77 +52,81 @@ where
 }
 
 pub(crate) fn configure_fsmc() {
+    let rcc = unsafe { &*pac::RCC::ptr() };
+    rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
+    let _ = rcc.ahb3enr().read().bits();
+
+    let fsmc = unsafe { &*pac::FSMC::ptr() };
+    let pcr2 = fsmc_pcr2();
+
     unsafe {
-        let rcc = &*pac::RCC::ptr();
-        rcc.ahb3enr().modify(|_, w| w.fsmcen().set_bit());
-        let _ = rcc.ahb3enr().read().bits();
-        let pcr2 = fsmc_pcr2();
-        // NAND timing reference for this board:
-        // - Samsung K9F1G08U0E, x8 NAND, 3.3 V.
-        // - HCLK = 168 MHz, so one HCLK = 5.952 ns.
-        // - Datasheet minima include tCLS/tALS=12 ns, tCS=20 ns,
-        //   tWP/tRP=12 ns, tWC/tRC=25 ns, tWH=10 ns, tDH/tALH=5 ns,
-        //   tAR/tCLR=10 ns, and tWB(max)=100 ns.
-        // The "minimum" values below are register-field lower bounds derived
-        // from those AC limits, not guarantees for PCB signal integrity or
-        // proof that a more aggressive combination works on this board.
-        //
-        // Common-space FSMC_PMEM2 fields (each SET/WAIT encoding is N+1 HCLK):
-        // MEMSET=2: address/control setup before NWE/NOE; 3 cycles = 17.9 ns.
-        //   Datasheet tCS=20 ns implies a theoretical minimum encoding of 3
-        //   (4 cycles = 23.8 ns); tCLS/tALS alone would need encoding 2.
-        //   Current value 2 is below tCS if this phase is the CE-setup phase.
-        // MEMWAIT=2: minimum NWE/NOE assertion phase; 3 cycles = 17.9 ns.
-        //   tWP/tRP=12 ns requires at least 3 HCLK cycles, so encoding 2 is
-        //   the theoretical minimum at 168 MHz (encoding 1 is only 11.9 ns).
-        // MEMHOLD=1: post-command address hold on reads / data hold on writes.
-        //   Encoding 0 is reserved; 1 is the minimum legal value. On reads
-        //   this is (HOLD+2) cycles = 17.9 ns; on writes it is HOLD cycles.
-        // MEMHIZ=1: write-cycle data-bus Hi-Z interval; encoding 0 is the
-        //   minimum legal value (1 HCLK). NAND AC tables give no separate
-        //   numeric minimum for this FSMC bus-turnaround field.
-        let common_timing = 2 | (2 << 8) | (1 << 16) | (1 << 24);
-        //
-        // Attribute-space FSMC_PATT2 is used for the final NAND address-byte
-        // write (see address_last()). Fields have the same SET/WAIT/HOLD
-        // meanings, but use the attribute timing register:
-        // ATTSET=3: address setup; 4 cycles = 23.8 ns. This is the
-        //   minimum selected from tCS=20 ns.
-        // ATTWAIT=2: NWE/NOE assertion; 3 cycles = 17.9 ns. This is the
-        //   minimum selected from tWP=12 ns (3 HCLK cycles required).
-        // ATTHOLD=18: post-command hold; 18 cycles = 107.1 ns. This is
-        //   intentionally longer than tWB(max)=100 ns. If this delay is
-        //   relied on to cover tWB, the theoretical minimum is 17 cycles
-        //   (encoding 17 = 101.2 ns); encoding 16 would be only 95.2 ns.
-        // ATTHIZ=2: write-cycle data-bus Hi-Z interval; encoding 0 is the
-        //   controller minimum. No separate NAND AC limit sets this value.
-        let attribute_timing = 3 | (2 << 8) | (18 << 16) | (2 << 24);
         write_volatile(pcr2, 0);
-        write_volatile(fsmc_pmem2(), common_timing);
-        write_volatile(fsmc_patt2(), attribute_timing);
-        //
-        // FSMC_PCR2 configuration:
-        // PWAITEN=1: enable the NAND-bank wait input; 0 is the disabled
-        //   alternative, not a timing optimization.
-        // PBKEN=1: enable NAND bank 2; it must remain 1 for accesses.
-        // PTYP=1: select NAND Flash (0 selects PC Card/CompactFlash).
-        // PWID=00: 8-bit data bus, matching this x8 NAND; 16-bit is invalid
-        //   for the fitted device.
-        // ECCPS=001: 512-byte ECC chunk, matching the four chunks per 2-KiB
-        //   page. This is a format/algorithm choice, not a speed parameter.
-        // ECCEN=0 while idle; ecc_begin_chunk() enables it only for each
-        // 512-byte chunk. Reserved bits remain zero.
-        //
-        // TCLR=0: CLE-low to RE-low delay:
-        //   (TCLR + SET + 2) HCLK. In common space (MEMSET=2), this is
-        //   4 cycles = 23.8 ns, above tCLR(min)=10 ns. Zero is the minimum
-        //   field encoding and is sufficient by the NAND AC specification.
-        // TAR=1: ALE-low to RE-low delay, same formula. With MEMSET=2 this
-        //   is 5 cycles = 29.8 ns, above tAR(min)=10 ns. TAR=0 would give
-        //   4 cycles = 23.8 ns and is the theoretical minimum.
-        // These TCLR/TAR delays are not the NAND tWHR parameter.
-        let control = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 13) | (1 << 17);
-        write_volatile(pcr2, control);
+    }
+
+    // Board-validated last-known-good timings for the Samsung K9F1G08U0E
+    // at HCLK=168 MHz (tHCLK=5.952 ns). Keep this tuple as the baseline;
+    // reduce one field at a time and validate on hardware.
+    fsmc.pmem2().write(|w| unsafe {
+        // MEMSET=2: 3 HCLK = 17.86 ns. This is below tCS=20 ns if this
+        // phase is the full CE-setup interval; do not reduce. The board's
+        // last-known-good setting is retained pending waveform verification.
+        w.memset().bits(2);
+
+        // MEMWAIT=2: 3 HCLK = 17.86 ns. This exceeds NAND tWP/tRP=12 ns
+        // by 5.86 ns. No reduction candidate yet: also check the STM32F407
+        // minimum NOE/NWE pulse-width requirement before changing this.
+        w.memwait().bits(2);
+
+        // MEMHOLD=1: minimum legal encoding. Write hold is 1 HCLK=5.95 ns,
+        // just above the 5 ns NAND hold minima; read hold is (1+2) HCLK.
+        // Encoding 0 is reserved, so there is no reduction candidate.
+        w.memhold().bits(1);
+
+        // MEMHIZ=1: minimum legal common-space encoding (1 HCLK=5.95 ns).
+        // No separate NAND AC minimum specifies this bus-turnaround field;
+        // already at the controller minimum, so do not reduce.
+        w.memhiz().bits(1)
+    });
+
+    fsmc.patt2().write(|w| unsafe {
+        // ATTSET=3: 4 HCLK = 23.81 ns, 3.81 ns above NAND tCS=20 ns.
+        // This is the minimum integer encoding that reaches tCS; do not reduce.
+        w.attset().bits(3);
+
+        // ATTWAIT=2: 3 HCLK = 17.86 ns, 5.86 ns above NAND tWP=12 ns.
+        // Encoding 1 gives only 2 HCLK=11.90 ns, below tWP; do not reduce.
+        w.attwait().bits(2);
+
+        // ATTHOLD=18: last-known-good value, documented as 18 HCLK=107.14 ns,
+        // 7.14 ns above tWB(max)=100 ns / tADL=100 ns. This has some
+        // reduction headroom, but verify the exact FSMC hold-field formula
+        // and NCE waveform before reducing it.
+        w.atthold().bits(18);
+
+        // ATTHIZ=2: 2 HCLK=11.90 ns. No separate NAND AC minimum sets this
+        // bus-turnaround interval; possible reduction candidate (test alone).
+        w.atthiz().bits(2)
+    });
+
+    fsmc.pcr2().write(|w| {
+        w.pwaiten().set_bit();
+        w.pbken().set_bit();
+        w.ptyp().set_bit();
+        unsafe {
+            w.pwid().bits(0); // 8-bit NAND bus
+
+            // TAR=0: no additional FSMC turnaround cycles; the required
+            // NAND address-to-read timing is already met by MEMSET=1.
+            w.tar().bits(1);
+
+            // ECCPS=1: select the FSMC ECC engine's 512-byte page size.
+            // A 2 KiB NAND page is therefore captured as four independent
+            // 512-byte ECC chunks, matching the four ECC values in the OOB.
+            w.eccps().bits(1)
+        }
+    });
+
+    unsafe {
         let _ = read_volatile(pcr2);
     }
 }
@@ -172,16 +176,6 @@ fn fsmc_pcr2() -> *mut u32 {
 #[inline(always)]
 fn fsmc_sr2() -> *const u32 {
     unsafe { (*pac::FSMC::ptr()).sr2().as_ptr() }
-}
-
-#[inline(always)]
-fn fsmc_pmem2() -> *mut u32 {
-    unsafe { (*pac::FSMC::ptr()).pmem2().as_ptr() }
-}
-
-#[inline(always)]
-fn fsmc_patt2() -> *mut u32 {
-    unsafe { (*pac::FSMC::ptr()).patt2().as_ptr() }
 }
 
 #[inline(always)]
