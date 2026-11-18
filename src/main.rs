@@ -994,6 +994,26 @@ fn main() -> ! {
 
                         // Refill buffers while the emulator runs, outside USB IRQs.
                         while prepare_next_video_batch(&mut video_renderer) {}
+
+                        // A BK mode-register write requests a camera-mode change.
+                        // Stop executing the emulator until the renderer reaches
+                        // its next frame boundary and applies that mode. This
+                        // prevents further video writes from using the old canvas
+                        // layout while the requested mode is waiting.
+                        if xcore407i_blinker::camera::camera_mode_change_pending()
+                            && xcore407i_blinker::uvc::streaming_active()
+                        {
+                            break;
+                        }
+                    }
+
+                    // While streaming, keep the renderer fed but hold BK execution
+                    // until it consumes the pending mode at a frame boundary.
+                    // USB completion IRQs continue freeing DMA buffers meanwhile.
+                    while xcore407i_blinker::camera::camera_mode_change_pending()
+                        && xcore407i_blinker::uvc::streaming_active()
+                    {
+                        while prepare_next_video_batch(&mut video_renderer) {}
                     }
 
                     // Convert queued BK speaker transitions into PCM in thread
