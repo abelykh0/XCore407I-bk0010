@@ -644,6 +644,7 @@ fn list_files(fs: &Filesystem<'_, ActiveStorage>, show_sizes: bool, profile: boo
     #[cfg(feature = "list-profile")]
     if profile {
         crate::list_diag::begin();
+        crate::dhara_fs::reset_metadata_cache_diagnostic();
     }
 
     #[cfg(feature = "list-profile")]
@@ -818,6 +819,13 @@ fn report_list_profile(
     write_status(b" bytes, ");
     write_decimal(cycles_to_us(stats.nand_cycles));
     write_status(b" us total\r\n");
+
+    let (meta_hits, meta_misses) = crate::dhara_fs::metadata_cache_diagnostic();
+    write_status(b"Dhara metadata cache: ");
+    write_decimal(meta_hits as usize);
+    write_status(b" hits, ");
+    write_decimal(meta_misses as usize);
+    write_status(b" misses\\r\\n");
 
     write_status(b"CDC writes: ");
     write_decimal(stats.cdc_calls as usize);
