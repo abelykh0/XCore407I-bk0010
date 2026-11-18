@@ -761,21 +761,24 @@ fn main() -> ! {
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
             keyboard_queue_discard();
 
-            // Enter the browser visibly before any NAND/Dhara/LittleFS work.
-            // If mounting stalls or faults, the user can distinguish that
-            // from a failure to receive F2.
-            clear_demo_canvas(0);
+            // Show the blue loading screen before starting any NAND or
+            // LittleFS work. Prime the UVC buffers and allow one video frame
+            // to reach the host so the screen is visible even if LIST blocks.
+            clear_demo_canvas(0x10);
             show_file_browser_line(0, b"NAND FILES - SELECT PROGRAM", false);
-            show_file_browser_line(3, b"OPENING NAND STORAGE...", true);
-            show_file_browser_line(5, b"MOUNTING LITTLEFS", false);
-            show_file_browser_line(27, b"PLEASE WAIT", false);
+            show_file_browser_line(3, b"LOADING...", true);
 
-
-            // NAND/LittleFS operations are synchronous. Install a narrowly
-            // scoped hook so USB and the UVC producer continue running even
-            // inside NAND ready/FSMC wait loops and ECC page processing.
+            // Keep USB/UVC servicing active while the loading screen is sent.
             FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
             xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+            let loading_started = TICKS.load(Ordering::Acquire);
+            while TICKS.load(Ordering::Acquire).wrapping_sub(loading_started) < 40 {
+                service_file_browser_io();
+                while prepare_next_video_batch(&mut video_renderer) {}
+            }
+
+            // Only after the loading screen has had a frame interval to
+            // display do we enter the synchronous LittleFS directory listing.
             let listing_result = list_root_files(
                 &mut *browser_files,
                 |done, total| {
