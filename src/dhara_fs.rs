@@ -60,6 +60,59 @@ pub(crate) fn map_sync_diagnostic() -> (u32, u32, u32, u32) {
 
 static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
     [0; PAGE_SIZE + SPARE_SIZE];
+
+// Dhara stores one 132-byte metadata record per journal user page.
+// Cache only these small metadata reads; full sector reads still use the
+// normal NAND path. Seven entries consume about 980 bytes including padding.
+const DHARA_META_SIZE: usize = 132;
+const DHARA_META_CACHE_ENTRIES: usize = 7;
+
+#[derive(Clone, Copy)]
+struct DharaMetaCacheEntry {
+    page: u32,
+    offset: u16,
+    data: [u8; DHARA_META_SIZE],
+}
+
+static mut DHARA_META_CACHE: [DharaMetaCacheEntry; DHARA_META_CACHE_ENTRIES] =
+    [DharaMetaCacheEntry { page: u32::MAX, offset: 0, data: [0; DHARA_META_SIZE] };
+        DHARA_META_CACHE_ENTRIES];
+static mut DHARA_META_CACHE_NEXT: usize = 0;
+
+static DHARA_META_CACHE_HITS: AtomicU32 = AtomicU32::new(0);
+static DHARA_META_CACHE_MISSES: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn metadata_cache_diagnostic() -> (u32, u32) {
+    (
+        DHARA_META_CACHE_HITS.load(Ordering::Relaxed),
+        DHARA_META_CACHE_MISSES.load(Ordering::Relaxed),
+    )
+}
+
+pub(crate) fn reset_metadata_cache_diagnostic() {
+    DHARA_META_CACHE_HITS.store(0, Ordering::Relaxed);
+    DHARA_META_CACHE_MISSES.store(0, Ordering::Relaxed);
+}
+
+fn invalidate_metadata_cache_page(page: u32) {
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
+    for entry in cache.iter_mut() {
+        if entry.page == page {
+            entry.page = u32::MAX;
+        }
+    }
+}
+
+fn invalidate_metadata_cache_block(block: u32) {
+    let first_page = block * PAGES_PER_BLOCK;
+    let end_page = first_page + PAGES_PER_BLOCK;
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
+    for entry in cache.iter_mut() {
+        if entry.page >= first_page && entry.page < end_page {
+            entry.page = u32::MAX;
+        }
+    }
+}
 #[unsafe(link_section = ".ccmram.nand")]
 static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
 
@@ -254,6 +307,7 @@ pub extern "C" fn dhara_nand_erase(
         unsafe { set_error(error, DHARA_E_BAD_BLOCK); }
         return -1;
     }
+    invalidate_metadata_cache_block(block);
     if nand_fs::erase_physical_block(block as u16) {
         unsafe { set_error(error, 0); }
         0
@@ -278,6 +332,7 @@ pub extern "C" fn dhara_nand_prog(
         return -1;
     }
     let input = unsafe { slice::from_raw_parts(data, PAGE_SIZE) };
+    invalidate_metadata_cache_page(page);
     if nand_fs::program_physical_page(page, input) {
         unsafe { set_error(error, 0); }
         0
@@ -318,11 +373,44 @@ pub extern "C" fn dhara_nand_read(
         return -1;
     }
 
+    // Dhara's map traversal repeatedly requests fixed-size metadata records.
+    // Cache only ECC-validated records; ordinary sector reads bypass this cache.
+    let cacheable = length == DHARA_META_SIZE
+        && offset <= PAGE_SIZE - DHARA_META_SIZE
+        && offset <= u16::MAX as usize
+        && nand_fs::ecc_check_enabled();
+
+    if cacheable {
+        let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
+        if let Some(entry) = cache.iter().find(|entry| {
+            entry.page == page && entry.offset as usize == offset
+        }) {
+            DHARA_META_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+            unsafe {
+                core::ptr::copy_nonoverlapping(entry.data.as_ptr(), data, DHARA_META_SIZE);
+                set_error(error, 0);
+            }
+            return 0;
+        }
+        DHARA_META_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+    }
+
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
     if !nand_fs::read_data_page(page, &mut scratch[..PAGE_SIZE]) {
         unsafe { set_error(error, DHARA_E_ECC); }
         return -1;
     }
+
+    if cacheable {
+        let cache = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE) };
+        let next = unsafe { &mut *core::ptr::addr_of_mut!(DHARA_META_CACHE_NEXT) };
+        let entry = &mut cache[*next];
+        entry.page = page;
+        entry.offset = offset as u16;
+        entry.data.copy_from_slice(&scratch[offset..offset + DHARA_META_SIZE]);
+        *next = (*next + 1) % DHARA_META_CACHE_ENTRIES;
+    }
+
     if length != 0 {
         unsafe {
             core::ptr::copy_nonoverlapping(scratch.as_ptr().add(offset), data, length);
@@ -352,6 +440,7 @@ pub extern "C" fn dhara_nand_copy(
         unsafe { set_error(error, DHARA_E_ECC); }
         return -1;
     }
+    invalidate_metadata_cache_page(destination);
     if !nand_fs::program_physical_page(destination, &scratch[..PAGE_SIZE]) {
         unsafe { set_error(error, DHARA_E_BAD_BLOCK); }
         return -1;
