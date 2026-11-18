@@ -761,17 +761,116 @@ fn main() -> ! {
         if browser_action == FILE_BROWSER_OPEN && !browser_open {
             keyboard_queue_discard();
 
-            // Temporary isolation test: show the browser loading screen but
-            // do not touch NAND, Dhara, or LittleFS. If F2 still freezes
-            // before this screen appears, the regression is before LIST.
+            // Show the blue loading screen before starting any NAND or
+            // LittleFS work. Prime the UVC buffers and allow one video frame
+            // to reach the host so the screen is visible even if LIST blocks.
             clear_demo_canvas(0x10);
             show_file_browser_line(0, b"NAND FILES - SELECT PROGRAM", false);
             show_file_browser_line(3, b"LOADING...", true);
 
-            browser_count = 0;
-            browser_selected = 0;
-            browser_open = true;
-            FILE_BROWSER_ACTIVE.store(true, Ordering::Release);
+            // Keep USB/UVC servicing active while the loading screen is sent.
+            FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
+            xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+            let loading_started = TICKS.load(Ordering::Acquire);
+            while TICKS.load(Ordering::Acquire).wrapping_sub(loading_started) < 40 {
+                service_file_browser_io();
+                while prepare_next_video_batch(&mut video_renderer) {}
+            }
+
+            // Only after the loading screen has had a frame interval to
+            // display do we enter the synchronous LittleFS directory listing.
+            let listing_result = list_root_files(
+                &mut *browser_files,
+                |done, total| {
+                    if done == u32::MAX {
+                        show_file_browser_line(
+                            27,
+                            if total == 0 {
+                                b"F2: LITTLEFS MOUNT" as &[u8]
+                            } else {
+                                b"F2: ROOT DIRECTORY"
+                            },
+                            false,
+                        );
+                    } else if total == 0 {
+                        show_file_browser_line(27, b"F2: NAND INIT", false);
+                    } else if done == 1 || done % 32 == 0 || done == total {
+                        let percent = done.saturating_mul(100) / total;
+                        let mut line = [b' '; 32];
+                        line[..13].copy_from_slice(b"F2: NAND SCAN");
+                        line[13] = b'0' + ((percent / 100) % 10) as u8;
+                        line[14] = b'0' + ((percent / 10) % 10) as u8;
+                        line[15] = b'0' + (percent % 10) as u8;
+                        line[16] = b'%';
+                        show_file_browser_line(27, &line, false);
+                    }
+                    service_file_browser_io();
+                },
+            );
+            xcore407i_blinker::nand_fs::set_io_service_hook(None);
+            FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
+
+            match listing_result {
+                Ok(count) => {
+                    browser_count = count;
+                    browser_selected = 0;
+                    browser_open = true;
+                    FILE_BROWSER_ACTIVE.store(true, Ordering::Release);
+                    draw_file_browser(
+                        &*browser_files,
+                        browser_count,
+                        browser_selected,
+                    );
+                }
+                Err(error) => {
+                    browser_open = false;
+                    FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
+                    if matches!(
+                        error,
+                        xcore407i_blinker::nand_fs::FsAccessError::Init(
+                            xcore407i_blinker::nand_fs::InitError::DharaNoJournal
+                        )
+                    ) {
+                        INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
+                    } else if matches!(
+                        error,
+                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_)
+                    ) {
+                        let detail = match error {
+                            xcore407i_blinker::nand_fs::FsAccessError::Mount(code) => code,
+                            _ => 0,
+                        };
+                        FORMAT_ERROR.store(detail, Ordering::Release);
+                        FORMAT_STATE.store(FORMAT_CONFIRM, Ordering::Release);
+                    } else {
+                    let message: &[u8] = match error {
+                        xcore407i_blinker::nand_fs::FsAccessError::Init(error) => {
+                            match error {
+                                xcore407i_blinker::nand_fs::InitError::Timeout =>
+                                    b"NAND TIMEOUT",
+                                xcore407i_blinker::nand_fs::InitError::WrongDevice =>
+                                    b"NAND WRONG DEVICE",
+                                xcore407i_blinker::nand_fs::InitError::MarkerRead =>
+                                    b"NAND MARKER READ",
+                                xcore407i_blinker::nand_fs::InitError::MountFailed =>
+                                    b"NAND INIT MOUNT FAIL",
+                                xcore407i_blinker::nand_fs::InitError::DharaNoJournal =>
+                                    b"DHARA JOURNAL MISSING",
+                                xcore407i_blinker::nand_fs::InitError::DharaCapacity =>
+                                    b"DHARA CAPACITY LOW",
+                                xcore407i_blinker::nand_fs::InitError::ProvisionFailed =>
+                                    b"DHARA PROVISION FAILED",
+                            }
+                        },
+                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_) =>
+                            b"LFS MOUNT FAILED",
+                        xcore407i_blinker::nand_fs::FsAccessError::Operation =>
+                            b"LFS ROOT READ FAILED",
+                    };
+                    show_usb_status(message);
+                    }
+                }
+            }
         }
 
         if browser_open {
