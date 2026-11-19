@@ -108,8 +108,10 @@ static FIFO_WRITE_FAILURES: AtomicU32 = AtomicU32::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
+    #[cfg(not(feature = "audio-test-tone"))]
     safe fn bk_audio_start() -> u8;
     safe fn bk_timing_cycles() -> u32;
+    #[cfg(not(feature = "audio-test-tone"))]
     safe fn bk_audio_stop();
     #[cfg(feature = "audio-underrun-diag")]
     safe fn bk_audio_take_edge_overflows() -> u32;
@@ -124,6 +126,8 @@ pub struct BkEmulatorAudio {
     sample_step_q16: u32,
     last_clock_control_cycle: u32,
     clock_integral_ppm: i32,
+    #[cfg(feature = "audio-test-tone")]
+    test_tone_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
     previous_edge: Option<(u32, i32)>,
@@ -140,6 +144,8 @@ impl BkEmulatorAudio {
             sample_step_q16: AUDIO_SAMPLE_PERIOD_PHASE << 16,
             last_clock_control_cycle: 0,
             clock_integral_ppm: 0,
+            #[cfg(feature = "audio-test-tone")]
+            test_tone_phase: 0,
             sample_level: false,
             pending_edge: None,
             previous_edge: None,
@@ -153,7 +159,10 @@ impl BkEmulatorAudio {
     pub fn tinyusb_set_active(&mut self, active: bool) {
         if active {
             if !self.active {
-                self.sample_level = bk_audio_start() != 0;
+                #[cfg(not(feature = "audio-test-tone"))]
+                { self.sample_level = bk_audio_start() != 0; }
+                #[cfg(feature = "audio-test-tone")]
+                { self.sample_level = true; self.test_tone_phase = 0; }
                 #[cfg(feature = "audio-underrun-diag")]
                 {
                     UNDERRUN_EVENTS.store(0, Ordering::Relaxed);
@@ -195,6 +204,7 @@ impl BkEmulatorAudio {
             LAST_OUTPUT_SAMPLE.store(0, Ordering::Relaxed);
             CROSSFADE_START_SAMPLE.store(0, Ordering::Relaxed);
             UNDERRUN_ACTIVE.store(1, Ordering::Relaxed);
+            #[cfg(not(feature = "audio-test-tone"))]
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
@@ -244,10 +254,29 @@ impl BkEmulatorAudio {
                 break;
             }
 
-            self.apply_edges_through(sample_phase);
-            let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
-            let corrected_sample = raw_sample as i32 + self.blep_edge_correction(sample_phase);
-            let corrected_sample = corrected_sample.clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
+            #[cfg(not(feature = "audio-test-tone"))]
+            let corrected_sample = {
+                self.apply_edges_through(sample_phase);
+                let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
+                (raw_sample as i32 + self.blep_edge_correction(sample_phase))
+                    .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16
+            };
+            #[cfg(feature = "audio-test-tone")]
+            let corrected_sample = {
+                // 440 Hz square wave, generated at the PCM sample rate. This
+                // bypasses BK edge capture while retaining the normal filter,
+                // ring buffer, adaptive clock, crossfade, and USB consumer.
+                let sample = if self.test_tone_phase < crate::AUDIO_SAMPLE_RATE_HZ / 2 {
+                    AUDIO_AMPLITUDE
+                } else {
+                    -AUDIO_AMPLITUDE
+                };
+                self.test_tone_phase += 440;
+                if self.test_tone_phase >= crate::AUDIO_SAMPLE_RATE_HZ {
+                    self.test_tone_phase -= crate::AUDIO_SAMPLE_RATE_HZ;
+                }
+                sample
+            };
             let sample = self.speaker_filter.process(corrected_sample);
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
