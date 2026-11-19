@@ -328,7 +328,6 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32) {
     )
 }
 
-#[cfg(feature = "audio-underrun-diag")]
 pub fn note_fifo_write_failure() {
     #[cfg(feature = "audio-underrun-diag")]
     FIFO_WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
