@@ -141,6 +141,17 @@ impl BkEmulatorAudio {
         if active {
             if !self.active {
                 self.sample_level = bk_audio_start() != 0;
+                #[cfg(feature = "audio-underrun-diag")]
+                {
+                    UNDERRUN_EVENTS.store(0, Ordering::Relaxed);
+                    UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
+                    PCM_SAMPLES_RENDERED.store(0, Ordering::Relaxed);
+                    PCM_SAMPLES_CONSUMED.store(0, Ordering::Relaxed);
+                    PCM_MIN_OCCUPANCY.store(u32::MAX, Ordering::Relaxed);
+                    RENDER_GAP_INITIALIZED.store(false, Ordering::Relaxed);
+                    MAX_RENDER_GAP_DWT.store(0, Ordering::Relaxed);
+                    FIFO_WRITE_FAILURES.store(0, Ordering::Relaxed);
+                }
                 self.speaker_filter.reset(self.sample_level);
                 self.pending_edge = None;
                 self.previous_edge = None;
@@ -319,6 +330,7 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32) {
 
 #[cfg(feature = "audio-underrun-diag")]
 pub fn note_fifo_write_failure() {
+    #[cfg(feature = "audio-underrun-diag")]
     FIFO_WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
