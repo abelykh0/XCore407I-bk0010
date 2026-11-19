@@ -73,6 +73,9 @@ const UNDERRUN_GAIN_MAX: i32 = 32_768;
 const UNDERRUN_GAIN_STEP: i32 = UNDERRUN_GAIN_MAX / 32;
 static OUTPUT_GAIN_Q15: AtomicI32 = AtomicI32::new(0);
 static LAST_PCM_SAMPLE: AtomicI32 = AtomicI32::new(0);
+static LAST_OUTPUT_SAMPLE: AtomicI32 = AtomicI32::new(0);
+static CROSSFADE_START_SAMPLE: AtomicI32 = AtomicI32::new(0);
+static UNDERRUN_ACTIVE: AtomicU16 = AtomicU16::new(1);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
@@ -123,6 +126,9 @@ impl BkEmulatorAudio {
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 OUTPUT_GAIN_Q15.store(0, Ordering::Relaxed);
                 LAST_PCM_SAMPLE.store(0, Ordering::Relaxed);
+                LAST_OUTPUT_SAMPLE.store(0, Ordering::Relaxed);
+                CROSSFADE_START_SAMPLE.store(0, Ordering::Relaxed);
+                UNDERRUN_ACTIVE.store(1, Ordering::Relaxed);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
                 self.active = true;
@@ -134,6 +140,9 @@ impl BkEmulatorAudio {
             self.speaker_filter.reset(false);
             OUTPUT_GAIN_Q15.store(0, Ordering::Relaxed);
             LAST_PCM_SAMPLE.store(0, Ordering::Relaxed);
+            LAST_OUTPUT_SAMPLE.store(0, Ordering::Relaxed);
+            CROSSFADE_START_SAMPLE.store(0, Ordering::Relaxed);
+            UNDERRUN_ACTIVE.store(1, Ordering::Relaxed);
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
@@ -274,6 +283,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     let head = PCM_HEAD.load(Ordering::Acquire);
     let mut gain = OUTPUT_GAIN_Q15.load(Ordering::Relaxed);
     let mut last_sample = LAST_PCM_SAMPLE.load(Ordering::Relaxed);
+    let mut last_output = LAST_OUTPUT_SAMPLE.load(Ordering::Relaxed);
+    let mut crossfade_start = CROSSFADE_START_SAMPLE.load(Ordering::Relaxed);
+    let mut underrun_active = UNDERRUN_ACTIVE.load(Ordering::Relaxed) != 0;
     for index in 0..SAMPLES_PER_MICROFRAME {
         let sample = if tail != head {
             let value = unsafe {
@@ -283,21 +295,38 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .read()
             };
             tail = tail.wrapping_add(1);
+
+            if underrun_active {
+                // Start recovery from the exact last output value, not from zero.
+                crossfade_start = last_output;
+                gain = 0;
+                underrun_active = false;
+            }
             last_sample = value as i32;
             gain = (gain + UNDERRUN_GAIN_STEP).min(UNDERRUN_GAIN_MAX);
-            ((last_sample * gain) >> 15) as i16
+            let blended = crossfade_start
+                + (((last_sample - crossfade_start) * gain) >> 15);
+            blended.clamp(i16::MIN as i32, i16::MAX as i32) as i16
         } else {
-            // Hold the last sample briefly while fading its amplitude to zero.
-            // This avoids an abrupt discontinuity when the PCM producer falls behind.
+            // On the first missing sample, anchor the fade at the last emitted
+            // value. Keep fading only while the producer remains behind.
+            if !underrun_active {
+                last_sample = last_output;
+                underrun_active = true;
+            }
             gain = (gain - UNDERRUN_GAIN_STEP).max(0);
             ((last_sample * gain) >> 15) as i16
         };
         let bytes = sample.to_le_bytes();
+        last_output = sample as i32;
         buffer[index * 2] = bytes[0];
         buffer[index * 2 + 1] = bytes[1];
     }
     OUTPUT_GAIN_Q15.store(gain, Ordering::Relaxed);
     LAST_PCM_SAMPLE.store(last_sample, Ordering::Relaxed);
+    LAST_OUTPUT_SAMPLE.store(last_output, Ordering::Relaxed);
+    CROSSFADE_START_SAMPLE.store(crossfade_start, Ordering::Relaxed);
+    UNDERRUN_ACTIVE.store(underrun_active as u16, Ordering::Relaxed);
     PCM_TAIL.store(tail, Ordering::Release);
     PACKET_BYTES as u16
 }
