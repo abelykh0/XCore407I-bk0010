@@ -286,9 +286,17 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                 + (((s1 as i32 - s0 as i32) * fraction) >> 16);
 
             resampler.phase = resampler.phase.wrapping_add(resampler.step);
-            let consumed = resampler.phase >> 16;
-            resampler.phase &= 0xFFFF;
-            tail = tail.wrapping_add(consumed as u16);
+            let consumed = (resampler.phase >> 16) as u16;
+            if consumed > available {
+                // Never let the consumer cursor pass the published producer
+                // head. This can occur at the upper rate limit when only one
+                // source sample remains.
+                tail = tail.wrapping_add(available);
+                resampler.phase = 0;
+            } else {
+                tail = tail.wrapping_add(consumed);
+                resampler.phase &= 0xFFFF;
+            }
             interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16
         } else {
             // Do not advance the source cursor while empty; the next valid
