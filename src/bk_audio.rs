@@ -304,8 +304,12 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             }
             last_sample = value as i32;
             gain = (gain + UNDERRUN_GAIN_STEP).min(UNDERRUN_GAIN_MAX);
+            // Smoothstep (3t² - 2t³) gives zero slope at both ends,
+            // avoiding the slope discontinuity of a linear crossfade.
+            let t2 = (gain * gain) >> 15;
+            let blend = (t2 * (3 * 32_768 - 2 * gain)) >> 15;
             let blended = crossfade_start
-                + (((last_sample - crossfade_start) * gain) >> 15);
+                + (((last_sample - crossfade_start) * blend) >> 15);
             blended.clamp(i16::MIN as i32, i16::MAX as i32) as i16
         } else {
             // On the first missing sample, anchor the fade at the last emitted
