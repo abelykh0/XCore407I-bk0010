@@ -309,7 +309,12 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32) {
     let missing_samples = UNDERRUN_SAMPLES.swap(0, Ordering::AcqRel);
     let generated = PCM_SAMPLES_RENDERED.swap(0, Ordering::AcqRel);
     let consumed = PCM_SAMPLES_CONSUMED.swap(0, Ordering::AcqRel);
-    let minimum = PCM_MIN_OCCUPANCY.swap(u32::MAX, Ordering::AcqRel).min(PCM_RING_CAPACITY as u32) as u16;
+    let minimum_raw = PCM_MIN_OCCUPANCY.swap(u32::MAX, Ordering::AcqRel);
+    let minimum = if minimum_raw == u32::MAX {
+        0
+    } else {
+        minimum_raw.min(PCM_RING_CAPACITY as u32) as u16
+    };
     let max_gap_dwt = MAX_RENDER_GAP_DWT.swap(0, Ordering::AcqRel);
     let max_gap_us = ((max_gap_dwt as u64 * 1_000_000) / 168_000_000) as u32;
     let edge_overflows = unsafe { bk_audio_take_edge_overflows() };
