@@ -1046,15 +1046,16 @@ fn main() -> ! {
                         while prepare_next_video_batch(&mut video_renderer) {}
                     }
 
-                    // Convert queued BK speaker transitions into PCM in thread
-                    // context. The USB audio completion callback only drains
-                    // this ring and must never perform sample rendering itself.
-                    xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
-
                     service_keyboard_frame_pacing();
                 }
             }
         }
+
+        // Refill the PCM ring on every main-loop iteration, independently of
+        // whether PDP execution is currently behind its pacing target. Keep
+        // rendering in thread context; the USB completion callback only drains
+        // the pre-rendered ring.
+        xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
     }
 }
 
