@@ -5,6 +5,8 @@
 //! only copies three already-rendered samples from that ring.
 
 use core::sync::atomic::{AtomicI32, AtomicU16, AtomicU32, Ordering};
+#[cfg(feature = "audio-underrun-diag")]
+use core::sync::atomic::AtomicBool;
 
 const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
 const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 2 / 1_000;
@@ -80,12 +82,28 @@ static UNDERRUN_ACTIVE: AtomicU16 = AtomicU16::new(1);
 static UNDERRUN_EVENTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "audio-underrun-diag")]
 static UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "audio-underrun-diag")]
+static PCM_SAMPLES_RENDERED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "audio-underrun-diag")]
+static PCM_SAMPLES_CONSUMED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "audio-underrun-diag")]
+static PCM_MIN_OCCUPANCY: AtomicU32 = AtomicU32::new(u32::MAX);
+#[cfg(feature = "audio-underrun-diag")]
+static LAST_RENDER_DWT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "audio-underrun-diag")]
+static RENDER_GAP_INITIALIZED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "audio-underrun-diag")]
+static MAX_RENDER_GAP_DWT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "audio-underrun-diag")]
+static FIFO_WRITE_FAILURES: AtomicU32 = AtomicU32::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
     safe fn bk_audio_start() -> u8;
     safe fn bk_timing_cycles() -> u32;
     safe fn bk_audio_stop();
+    #[cfg(feature = "audio-underrun-diag")]
+    safe fn bk_audio_take_edge_overflows() -> u32;
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
 }
 
@@ -168,6 +186,8 @@ impl BkEmulatorAudio {
         if !self.active {
             return 0;
         }
+        #[cfg(feature = "audio-underrun-diag")]
+        record_render_interval();
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
         // Emulator execution and rendering are sequential in the main loop, so
         // an empty edge queue stays empty for the rest of this render batch.
@@ -205,6 +225,8 @@ impl BkEmulatorAudio {
         }
         if rendered != 0 {
             PCM_HEAD.store(head, Ordering::Release);
+            #[cfg(feature = "audio-underrun-diag")]
+            PCM_SAMPLES_RENDERED.fetch_add(rendered as u32, Ordering::Relaxed);
         }
         rendered
     }
@@ -269,15 +291,47 @@ impl BkEmulatorAudio {
 
 }
 
-/// Return and reset underrun counts, plus the current PCM ring occupancy.
-/// Counts cover the interval since the previous call.
+/// Return and reset audio pipeline diagnostics for the previous interval.
 #[cfg(feature = "audio-underrun-diag")]
-pub fn take_audio_diagnostics() -> (u32, u32, u16) {
+pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32) {
     let underruns = UNDERRUN_EVENTS.swap(0, Ordering::AcqRel);
     let missing_samples = UNDERRUN_SAMPLES.swap(0, Ordering::AcqRel);
+    let generated = PCM_SAMPLES_RENDERED.swap(0, Ordering::AcqRel);
+    let consumed = PCM_SAMPLES_CONSUMED.swap(0, Ordering::AcqRel);
+    let minimum = PCM_MIN_OCCUPANCY.swap(u32::MAX, Ordering::AcqRel).min(PCM_RING_CAPACITY as u32) as u16;
+    let max_gap_dwt = MAX_RENDER_GAP_DWT.swap(0, Ordering::AcqRel);
+    let max_gap_us = ((max_gap_dwt as u64 * 1_000_000) / 168_000_000) as u32;
+    let edge_overflows = unsafe { bk_audio_take_edge_overflows() };
+    let fifo_failures = FIFO_WRITE_FAILURES.swap(0, Ordering::AcqRel);
     let head = PCM_HEAD.load(Ordering::Acquire);
     let tail = PCM_TAIL.load(Ordering::Acquire);
-    (underruns, missing_samples, head.wrapping_sub(tail))
+    (
+        underruns,
+        missing_samples,
+        head.wrapping_sub(tail),
+        generated as i32 - consumed as i32,
+        minimum,
+        max_gap_us,
+        edge_overflows,
+        fifo_failures,
+    )
+}
+
+#[cfg(feature = "audio-underrun-diag")]
+pub fn note_fifo_write_failure() {
+    FIFO_WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(feature = "audio-underrun-diag")]
+fn record_render_interval() {
+    const DWT_CYCCNT: *const u32 = 0xE000_1004 as *const u32;
+    let now = unsafe { core::ptr::read_volatile(DWT_CYCCNT) };
+    if RENDER_GAP_INITIALIZED.swap(true, Ordering::AcqRel) {
+        let previous = LAST_RENDER_DWT.swap(now, Ordering::AcqRel);
+        MAX_RENDER_GAP_DWT.fetch_max(now.wrapping_sub(previous), Ordering::Relaxed);
+    } else {
+        LAST_RENDER_DWT.store(now, Ordering::Release);
+    }
 }
 
 /// Copy one USB microframe of pre-rendered PCM, smoothing buffer underruns with short fades.
@@ -301,6 +355,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     let mut last_output = LAST_OUTPUT_SAMPLE.load(Ordering::Relaxed);
     let mut crossfade_start = CROSSFADE_START_SAMPLE.load(Ordering::Relaxed);
     let mut underrun_active = UNDERRUN_ACTIVE.load(Ordering::Relaxed) != 0;
+    #[cfg(feature = "audio-underrun-diag")]
+    PCM_MIN_OCCUPANCY.fetch_min(head.wrapping_sub(tail) as u32, Ordering::Relaxed);
     for index in 0..SAMPLES_PER_MICROFRAME {
         let sample = if tail != head {
             let value = unsafe {
@@ -310,6 +366,11 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .read()
             };
             tail = tail.wrapping_add(1);
+            #[cfg(feature = "audio-underrun-diag")]
+            {
+                PCM_SAMPLES_CONSUMED.fetch_add(1, Ordering::Relaxed);
+                PCM_MIN_OCCUPANCY.fetch_min(head.wrapping_sub(tail) as u32, Ordering::Relaxed);
+            }
 
             if underrun_active {
                 // Start recovery from the exact last output value, not from zero.
