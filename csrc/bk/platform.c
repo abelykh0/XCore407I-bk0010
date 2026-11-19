@@ -193,6 +193,7 @@ uint8_t bk_audio_start(void)
 {
     // Called from the USB ISR; the emulator producer is paused while this runs.
     bk_audio_edge_tail = bk_audio_edge_head;
+    bk_audio_edge_overflows = 0;
     bk_audio_level = (port0177716 & 0x0040u) ? 1u : 0u;
     __asm volatile("dmb" ::: "memory");
     bk_audio_enabled = 1u;
