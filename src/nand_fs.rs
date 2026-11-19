@@ -117,7 +117,7 @@ pub(crate) fn configure_fsmc() {
 
             // TAR=0: no additional FSMC turnaround cycles; the required
             // NAND address-to-read timing is already met by MEMSET=1.
-            w.tar().bits(1);
+            w.tar().bits(0);
 
             // ECCPS=1: select the FSMC ECC engine's 512-byte page size.
             // A 2 KiB NAND page is therefore captured as four independent
