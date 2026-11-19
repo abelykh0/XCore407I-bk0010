@@ -30,6 +30,26 @@ static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
+const RESAMPLER_ONE: u32 = 1 << 16;
+const RESAMPLER_MAX_CORRECTION: i32 = 328; // approximately +/-0.5%
+const RESAMPLER_TARGET_LEVEL: i32 = 128; // about 5.3 ms at 24 kHz
+
+#[derive(Clone, Copy)]
+struct PcmResampler {
+    phase: u32,
+    step: u32,
+}
+
+impl PcmResampler {
+    const fn new() -> Self {
+        Self { phase: 0, step: RESAMPLER_ONE }
+    }
+}
+
+// Accessed by the single USB audio consumer. Stream start/stop resets it with
+// USB interrupts masked, so the main-loop producer never races this state.
+static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new();
+
 unsafe extern "C" {
     safe fn bk_audio_start() -> u8;
     safe fn bk_timing_cycles() -> u32;
@@ -75,6 +95,9 @@ impl BkEmulatorAudio {
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
+                unsafe {
+                    core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+                }
                 self.active = true;
             }
         } else if self.active {
@@ -84,6 +107,9 @@ impl BkEmulatorAudio {
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
+            unsafe {
+                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+            }
         }
     }
 
@@ -202,7 +228,12 @@ impl BkEmulatorAudio {
 
 }
 
-/// Copy one USB microframe of pre-rendered PCM. Missing samples are zero-filled.
+/// Resample one USB microframe from the emulator PCM ring at a controlled
+/// rate. USB always receives the fixed number of samples for this microframe.
+///
+/// Buffer occupancy adjusts the source read step: a high level speeds up
+/// consumption slightly; a low level slows it down. Linear interpolation
+/// smooths the fractional source positions.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
@@ -218,22 +249,61 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
+    let occupancy = head.wrapping_sub(tail) as i32;
+
+    // Proportional occupancy controller. One Q16 step unit per sample of
+    // level error gives a bounded +/-0.5% correction. Low-pass the target so
+    // packet-to-packet changes cannot create audible pitch modulation.
+    let correction = (occupancy - RESAMPLER_TARGET_LEVEL)
+        .clamp(-RESAMPLER_MAX_CORRECTION, RESAMPLER_MAX_CORRECTION);
+    let target_step = (RESAMPLER_ONE as i32 + correction) as u32;
+    let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
+    let step_delta = target_step as i32 - resampler.step as i32;
+    resampler.step = (resampler.step as i32 + step_delta / 8) as u32;
+
     for index in 0..SAMPLES_PER_MICROFRAME {
-        let sample = if tail != head {
-            let value = unsafe {
+        let available = head.wrapping_sub(tail);
+        let sample = if available != 0 {
+            let s0 = unsafe {
                 core::ptr::addr_of!(PCM_RING)
                     .cast::<i16>()
                     .add((tail & PCM_RING_MASK) as usize)
                     .read()
             };
-            tail = tail.wrapping_add(1);
-            value
+            let s1 = if available > 1 {
+                unsafe {
+                    core::ptr::addr_of!(PCM_RING)
+                        .cast::<i16>()
+                        .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
+                        .read()
+                }
+            } else {
+                s0
+            };
+
+            let fraction = (resampler.phase & 0xFFFF) as i32;
+            let interpolated = s0 as i32
+                + (((s1 as i32 - s0 as i32) * fraction) >> 16);
+
+            resampler.phase = resampler.phase.wrapping_add(resampler.step);
+            let consumed = resampler.phase >> 16;
+            resampler.phase &= 0xFFFF;
+            tail = tail.wrapping_add(consumed as u16);
+            interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16
         } else {
+            // Do not advance the source cursor while empty; the next valid
+            // sample starts a fresh interpolation interval.
+            resampler.phase = 0;
             0
         };
+
         let bytes = sample.to_le_bytes();
         buffer[index * 2] = bytes[0];
         buffer[index * 2 + 1] = bytes[1];
+    }
+
+    unsafe {
+        core::ptr::addr_of_mut!(PCM_RESAMPLER).write(resampler);
     }
     PCM_TAIL.store(tail, Ordering::Release);
     PACKET_BYTES as u16
