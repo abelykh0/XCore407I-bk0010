@@ -1,8 +1,8 @@
 //! BK-0010 speaker-edge capture and deferred PCM16 rendering for TinyUSB UAC2.
 //!
 //! The emulator publishes timestamped speaker transitions. The main-loop audio
-//! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
-//! only copies three already-rendered samples from that ring.
+//! worker converts them to nominal 24 kHz PCM in a ring buffer. The USB
+//! completion ISR dynamically resamples that ring to the fixed USB sample rate.
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
