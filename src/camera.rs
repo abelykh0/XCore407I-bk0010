@@ -756,15 +756,39 @@ pub fn show_pdp_cycles_per_second(pdp_cycles_per_second: u32) {
 }
 
 #[cfg(feature = "audio-underrun-diag")]
-pub fn show_audio_underrun_diagnostics(underruns: u32, missing_samples: u32, buffered_samples: u16) {
+pub fn show_audio_underrun_diagnostics(
+    underruns: u32,
+    missing_samples: u32,
+    buffered_samples: u16,
+    generated_minus_consumed: i32,
+    minimum_occupancy: u16,
+    max_render_gap_us: u32,
+    edge_overflows: u32,
+    fifo_failures: u32,
+) {
     let mut line = [b' '; 32];
     let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"AUD U:");
+    append_bytes(&mut line, &mut pos, b"U");
     append_decimal(&mut line, &mut pos, underruns);
-    append_bytes(&mut line, &mut pos, b" M:");
+    append_bytes(&mut line, &mut pos, b" M");
     append_decimal(&mut line, &mut pos, missing_samples);
-    append_bytes(&mut line, &mut pos, b" B:");
+    append_bytes(&mut line, &mut pos, b" B");
     append_decimal(&mut line, &mut pos, buffered_samples as u32);
+    append_bytes(&mut line, &mut pos, b" D");
+    if generated_minus_consumed < 0 {
+        append_bytes(&mut line, &mut pos, b"-");
+        append_decimal(&mut line, &mut pos, generated_minus_consumed.unsigned_abs());
+    } else {
+        append_decimal(&mut line, &mut pos, generated_minus_consumed as u32);
+    }
+    append_bytes(&mut line, &mut pos, b" L");
+    append_decimal(&mut line, &mut pos, minimum_occupancy as u32);
+    append_bytes(&mut line, &mut pos, b" T");
+    append_decimal(&mut line, &mut pos, max_render_gap_us);
+    append_bytes(&mut line, &mut pos, b" E");
+    append_decimal(&mut line, &mut pos, edge_overflows);
+    append_bytes(&mut line, &mut pos, b" F");
+    append_decimal(&mut line, &mut pos, fifo_failures);
     show_file_browser_line(29, &line[..pos], false);
 }
 
