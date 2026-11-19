@@ -21,6 +21,43 @@ const AUDIO_SAMPLE_PERIOD_PHASE: u32 =
 const _: () = assert!(crate::AUDIO_SAMPLE_RATE_HZ % USB_MICROFRAMES_PER_SECOND == 0);
 const _: () = assert!(PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE % crate::AUDIO_SAMPLE_RATE_HZ == 0);
 const AUDIO_AMPLITUDE: i16 = 12_000;
+
+// 2-pole Butterworth low-pass, 4.5 kHz cutoff at the 24 kHz PCM rate.
+// Coefficients are normalized (a0 = 1) and calculated once, not per sample.
+const SPEAKER_LPF_B0: f32 = 0.186_694_34;
+const SPEAKER_LPF_B1: f32 = 0.373_388_68;
+const SPEAKER_LPF_B2: f32 = 0.186_694_34;
+const SPEAKER_LPF_A1: f32 = -0.462_938_04;
+const SPEAKER_LPF_A2: f32 = 0.209_715_36;
+
+struct SpeakerLowPass {
+    // Transposed direct-form II delay elements.
+    z1: f32,
+    z2: f32,
+}
+
+impl SpeakerLowPass {
+    const fn new() -> Self {
+        Self { z1: 0.0, z2: 0.0 }
+    }
+
+    // Initialize to the steady-state output for a constant speaker level,
+    // avoiding an artificial filter ramp when USB audio is enabled.
+    fn reset(&mut self, level: bool) {
+        let input = if level { AUDIO_AMPLITUDE as f32 } else { -(AUDIO_AMPLITUDE as f32) };
+        self.z1 = (1.0 - SPEAKER_LPF_B0) * input;
+        self.z2 = (SPEAKER_LPF_B2 - SPEAKER_LPF_A2) * input;
+    }
+
+    #[inline(always)]
+    fn process(&mut self, input: i16) -> i16 {
+        let input = input as f32;
+        let output = SPEAKER_LPF_B0 * input + self.z1;
+        self.z1 = SPEAKER_LPF_B1 * input - SPEAKER_LPF_A1 * output + self.z2;
+        self.z2 = SPEAKER_LPF_B2 * input - SPEAKER_LPF_A2 * output;
+        output as i16
+    }
+}
 const PCM_RING_CAPACITY: u16 = 2048;
 const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
 const _: () = assert!(PCM_RING_CAPACITY.is_power_of_two());
@@ -43,6 +80,7 @@ pub struct BkEmulatorAudio {
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
     edge_queue_empty: bool,
+    speaker_filter: SpeakerLowPass,
     active: bool,
 }
 
@@ -53,6 +91,7 @@ impl BkEmulatorAudio {
             sample_level: false,
             pending_edge: None,
             edge_queue_empty: false,
+            speaker_filter: SpeakerLowPass::new(),
             active: false,
         }
     }
@@ -67,6 +106,7 @@ impl BkEmulatorAudio {
         if active {
             if !self.active {
                 self.sample_level = bk_audio_start() != 0;
+                self.speaker_filter.reset(self.sample_level);
                 self.pending_edge = None;
                 self.next_sample_phase = Self::cycle_phase()
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
@@ -77,6 +117,7 @@ impl BkEmulatorAudio {
         } else if self.active {
             self.active = false;
             self.pending_edge = None;
+            self.speaker_filter.reset(false);
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
@@ -118,7 +159,8 @@ impl BkEmulatorAudio {
             }
 
             self.apply_edges_through(sample_phase);
-            let sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
+            let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
+            let sample = self.speaker_filter.process(raw_sample);
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
                     .cast::<i16>()
