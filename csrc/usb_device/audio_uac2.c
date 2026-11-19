@@ -9,9 +9,7 @@
 #if CFG_TUD_AUDIO
 // The clock rate is supplied by the shared Rust AUDIO_KHZ constant.
 extern uint32_t xcore_audio_sample_rate_hz(void);
-#if defined(XCORE_AUDIO_UNDERRUN_DIAG)
 extern void xcore_tud_audio_note_write_failure(void);
-#endif
 
 bool tud_audio_get_req_entity_cb(uint8_t rhport,
                                  tusb_control_request_t const *request) {
@@ -98,11 +96,9 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
     return true;
   }
   const uint16_t written = tud_audio_n_write(func_id, packet, length);
-#if defined(XCORE_AUDIO_UNDERRUN_DIAG)
   if (written != length) {
     xcore_tud_audio_note_write_failure();
   }
-#endif
   return written == length;
 }
 
