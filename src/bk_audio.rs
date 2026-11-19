@@ -149,11 +149,6 @@ impl BkEmulatorAudio {
         }
     }
 
-    #[inline(always)]
-    fn cycle_phase() -> u32 {
-        bk_timing_cycles().wrapping_mul(PHASE_UNITS_PER_CYCLE)
-    }
-
     /// Start/stop edge capture. Called from TinyUSB control/task context.
     pub fn tinyusb_set_active(&mut self, active: bool) {
         if active {
