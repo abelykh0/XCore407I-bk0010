@@ -162,6 +162,7 @@ static volatile uint16_t bk_audio_edge_head;
 static volatile uint16_t bk_audio_edge_tail;
 static volatile uint8_t bk_audio_enabled;
 static uint8_t bk_audio_level;
+static uint32_t bk_audio_edge_overflows;
 static uint32_t bk_audio_edge_cycles[BK_AUDIO_EDGE_CAPACITY];
 static uint8_t bk_audio_edge_levels[BK_AUDIO_EDGE_CAPACITY];
 
@@ -173,6 +174,7 @@ static void bk_audio_record_level(uint8_t level)
     uint16_t head = bk_audio_edge_head;
     uint16_t tail = bk_audio_edge_tail;
     if ((uint16_t)(head - tail) >= BK_AUDIO_EDGE_CAPACITY) {
+        bk_audio_edge_overflows++;
         // Preserve the last successfully queued level so a later write can
         // retry recording the current speaker state after space becomes free.
         return;
@@ -201,6 +203,13 @@ void bk_audio_stop(void)
 {
     bk_audio_enabled = 0u;
     __asm volatile("dmb" ::: "memory");
+}
+
+uint32_t bk_audio_take_edge_overflows(void)
+{
+    uint32_t count = bk_audio_edge_overflows;
+    bk_audio_edge_overflows = 0;
+    return count;
 }
 
 uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
