@@ -12,6 +12,7 @@ glob = "0.3"
 default = []
 cpu-cycle-diag = []
 audio-underrun-diag = []
+audio-test-tone = []
 list-profile = []
 nand-diagnostics = []
 
