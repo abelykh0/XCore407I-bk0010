@@ -9,13 +9,15 @@ use core::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
 const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 2 / 1_000;
 
-const PDP_CLOCK_HZ: u32 = 3_000_000;
-const PHASE_UNITS_PER_CYCLE: u32 = 4;
+// Keep audio timestamps on the same clock as the emulator's cycle budget.
+const PDP_CLOCK_HZ: u32 = 3_010_000;
+// 24 phase units/cycle make 3.01 MHz / 24 kHz exactly 3010 units/sample.
+const PHASE_UNITS_PER_CYCLE: u32 = 24;
 const USB_MICROFRAMES_PER_SECOND: u32 = 8_000;
 const SAMPLES_PER_MICROFRAME: usize =
     (crate::AUDIO_SAMPLE_RATE_HZ / USB_MICROFRAMES_PER_SECOND) as usize;
 const PACKET_BYTES: usize = SAMPLES_PER_MICROFRAME * 2;
-// Quarter-cycle phase units represent 125 PDP cycles/sample exactly at 24 kHz.
+// At the configured 3.01 MHz PDP clock, each 24 kHz sample spans 3010 phase units.
 const AUDIO_SAMPLE_PERIOD_PHASE: u32 =
     PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / crate::AUDIO_SAMPLE_RATE_HZ;
 const _: () = assert!(crate::AUDIO_SAMPLE_RATE_HZ % USB_MICROFRAMES_PER_SECOND == 0);
@@ -81,7 +83,7 @@ unsafe extern "C" {
 }
 
 pub struct BkEmulatorAudio {
-    // Quarter-cycle units preserve exact sample timing; at 24 kHz each sample is 125 PDP cycles.
+    // Fixed-point cycle phase preserves exact 24 kHz sample timing at the configured PDP clock.
     next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
