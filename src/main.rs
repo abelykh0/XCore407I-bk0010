@@ -50,7 +50,7 @@ use usb_host::{
     USB_FS_LAST_ACTIVITY_TICK,
 };
 
-const PDP_CYCLES_PER_SECOND: u32 = 3_000_500;
+const PDP_CYCLES_PER_SECOND: u32 = 3_003_500;
 
 static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
     AtomicPtr::new(ptr::null_mut());
