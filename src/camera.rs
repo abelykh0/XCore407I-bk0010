@@ -771,35 +771,6 @@ fn append_decimal(out: &mut [u8; 32], pos: &mut usize, value: u32) {
     append_bytes(out, pos, digits);
 }
 
-/// Append keyboard input to one persistent canvas row instead of allocating a
-/// new status row for every key report. When the line fills, overwrite it from
-/// the beginning; a single key press never advances the row.
-pub fn show_keyboard_input(message: &[u8]) {
-    use crate::font8x8::FONT8X8;
-
-    let max_chars = canvas_width() / 8;
-    const TEXT_ROW: usize = CANVAS_HEIGHT / 8 - 2;
-
-    for &character in message {
-        let column = KEYBOARD_TEXT_COLUMN.fetch_add(1, Ordering::Relaxed) as usize % max_chars;
-        let character = if character == 0 { b'?' } else { character };
-        let glyph = (character as usize - 1) * 8;
-
-        for row in 0..8 {
-            let bits = FONT8X8[glyph + row];
-            for x in 0..8 {
-                let color = if bits & (0x80 >> x) != 0 { TEXT_FOREGROUND_WHITE } else { TEXT_BACKGROUND_BLACK };
-                set_pixel(column * 8 + x, TEXT_ROW * 8 + row, color);
-            }
-        }
-    }
-}
-
-/// Draw a persistent status message after a USB keyboard is enumerated.
-pub fn show_keyboard_connected() {
-    show_usb_status(b"USB KEYBOARD CONNECTED");
-}
-
 /// Update the top-center clock text directly in the source canvas.
 pub fn update_clock_from_rtc() {
     let text = crate::rtc::display_time();
