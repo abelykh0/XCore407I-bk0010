@@ -991,9 +991,26 @@ fn main() -> ! {
         {
             let now_ms = TICKS.load(Ordering::Relaxed);
             if now_ms.wrapping_sub(audio_diag_last_ms) >= 1_000 {
-                let (underruns, missing_samples, buffered_samples) =
-                    xcore407i_blinker::bk_audio::take_audio_diagnostics();
-                show_audio_underrun_diagnostics(underruns, missing_samples, buffered_samples);
+                let (
+                    underruns,
+                    missing_samples,
+                    buffered_samples,
+                    generated_minus_consumed,
+                    minimum_occupancy,
+                    max_render_gap_us,
+                    edge_overflows,
+                    fifo_failures,
+                ) = xcore407i_blinker::bk_audio::take_audio_diagnostics();
+                show_audio_underrun_diagnostics(
+                    underruns,
+                    missing_samples,
+                    buffered_samples,
+                    generated_minus_consumed,
+                    minimum_occupancy,
+                    max_render_gap_us,
+                    edge_overflows,
+                    fifo_failures,
+                );
                 audio_diag_last_ms = now_ms;
             }
         }
