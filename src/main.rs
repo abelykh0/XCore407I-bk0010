@@ -1019,7 +1019,7 @@ fn main() -> ! {
                     // batch is deliberately bounded so USB servicing remains
                     // responsive; any small cycle overshoot is corrected by
                     // the next iteration.
-                    for _ in 0..8 {
+                    for _ in 0..16 {
                         unsafe { bk_loop(); }
 
                         // Refill buffers while the emulator runs, outside USB IRQs.
