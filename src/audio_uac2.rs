@@ -59,7 +59,6 @@ pub extern "C" fn xcore_tud_audio_render() {
 }
 
 /// Record a failed TinyUSB FIFO write. PCM was already consumed by the fill callback.
-#[cfg(feature = "audio-underrun-diag")]
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_note_write_failure() {
     crate::bk_audio::note_fifo_write_failure();
