@@ -257,6 +257,14 @@ int32_t bk_load_bin_prepare(uint16_t load_addr, uint16_t data_len)
         return -1;
     }
 
+    // F3 full-memory images span base RAM and the reclaimed 12 KiB
+    // extended program-RAM window. Select that map before streaming the
+    // payload so writes at 0x4000..0x6FFF reach hidden RAM, not video RAM.
+    if (load_addr == 0x0200u && data_len == 0x6E00u) {
+        port0177664 &= (uint16_t)~0x0200u;
+        bk_video_shift_changed(port0177664);
+    }
+
     if (sl_word(&pdp, 0000264, load_addr) != OK ||
         sl_word(&pdp, 0000266, data_len) != OK) {
         return -1;

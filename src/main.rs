@@ -744,10 +744,19 @@ fn main() -> ! {
             let path_len = unsafe { build_save_path(&mut path) };
             let overwrite = SAVE_OVERWRITE.load(Ordering::Acquire);
             show_file_browser_line(27, b"F3: WRITING RAM TO NAND", false);
-            let saved = path_len != 0 && save_ram_to_path(&path[..path_len], overwrite).is_ok();
+            let extended_mode = xcore407i_blinker::bk_screen::extended_memory_enabled();
+            let saved = extended_mode
+                && path_len != 0
+                && save_ram_to_path(&path[..path_len], overwrite).is_ok();
             show_file_browser_line(
                 27,
-                if saved { b"F3: NAND WRITE COMPLETE" } else { b"F3: NAND WRITE FAILED" },
+                if saved {
+                    b"F3: NAND WRITE COMPLETE"
+                } else if !extended_mode {
+                    b"F3: SWITCH TO EXTENDED MODE"
+                } else {
+                    b"F3: NAND WRITE FAILED"
+                },
                 false,
             );
             SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);

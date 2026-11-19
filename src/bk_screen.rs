@@ -9,6 +9,11 @@ const BK_UNSCROLLED_VALUE: u8 = 216;
 static BK_VERTICAL_SHIFT: AtomicU8 = AtomicU8::new(0);
 static BK_EXTENDED_MEMORY: AtomicBool = AtomicBool::new(false);
 
+/// Whether the BK address map currently exposes the reclaimed 12 KiB as program RAM.
+pub fn extended_memory_enabled() -> bool {
+    BK_EXTENDED_MEMORY.load(Ordering::Acquire)
+}
+
 // Extended-mode program RAM is backed by the hidden portion of the camera canvas.
 
 fn shifted_row(vram_y: usize) -> usize {

@@ -33,7 +33,7 @@ pub(crate) const INIT_DONE: u8 = 5;
 pub(crate) const INIT_FAILED: u8 = 6;
 pub(crate) static INIT_STATE: AtomicU8 = AtomicU8::new(INIT_IDLE);
 pub(crate) const SAVE_RAM_START: usize = 0x0200;
-pub(crate) const SAVE_RAM_LENGTH: usize = 15_872;
+pub(crate) const SAVE_RAM_LENGTH: usize = 0x6E00; // 0x0200..0x6FFF
 pub(crate) const MAX_BROWSER_FILENAME: usize = 30; // includes the .bin extension
 pub(crate) const SAVE_NAME_CAPACITY: usize = MAX_BROWSER_FILENAME - 4;
 pub(crate) const MAX_BROWSER_FILES: usize = 17;
@@ -235,6 +235,10 @@ pub(crate) fn save_file_exists(path_bytes: &[u8]) -> bool {
 /// Save the complete non-video user RAM range in the loader's 4-byte
 /// little-endian Start/Size format, without allocating a second RAM image.
 pub(crate) fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(), ()> {
+    // In normal mode these same canvas bytes are visible video data, not RAM.
+    if !xcore407i_blinker::bk_screen::extended_memory_enabled() {
+        return Err(());
+    }
     let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
     xcore407i_blinker::nand_fs::with_mounted(|fs| {
         if fs.exists(path) && !overwrite {
@@ -259,10 +263,13 @@ pub(crate) fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(),
                     header_written += count;
                 }
 
+                // The first part lives in RamBuffer; the extended 12 KiB
+                // window is backed by the hidden camera-canvas storage.
+                let base_length = 0x4000 - SAVE_RAM_START;
                 let ram = unsafe {
                     core::slice::from_raw_parts(
                         core::ptr::addr_of!(RamBuffer).cast::<u8>().add(SAVE_RAM_START),
-                        SAVE_RAM_LENGTH,
+                        base_length,
                     )
                 };
                 let mut total = 0usize;
@@ -272,6 +279,24 @@ pub(crate) fn save_ram_to_path(path_bytes: &[u8], overwrite: bool) -> Result<(),
                         return Err(littlefs2::io::Error::IO);
                     }
                     total += count;
+                }
+
+                let mut extended = [0u8; 128];
+                let mut offset = 0usize;
+                while offset < 0x3000 {
+                    let count = (0x3000 - offset).min(extended.len());
+                    for (index, byte) in extended[..count].iter_mut().enumerate() {
+                        *byte = xcore407i_blinker::camera::bk_extended_ram_read(offset + index);
+                    }
+                    let mut written = 0usize;
+                    while written < count {
+                        let amount = file.write(&extended[written..count])?;
+                        if amount == 0 {
+                            return Err(littlefs2::io::Error::IO);
+                        }
+                        written += amount;
+                    }
+                    offset += count;
                 }
                 Ok(())
             },
@@ -363,6 +388,9 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
                     if (load_addr as usize) + data_len > 0o100000 {
                         return Err(littlefs2::io::Error::IO);
                     }
+                    // The complete F3 image (0x0200..0x6FFF) is recognized by
+                    // bk_load_bin_prepare(), which selects extended memory before
+                    // the payload reaches the 0x4000 boundary.
 
                     // The BK monitor stores the received header in system
                     // cells 264/266 before receiving the payload. Keep that

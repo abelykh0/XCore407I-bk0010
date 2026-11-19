@@ -291,12 +291,12 @@ pub(crate) fn set_bk_extended_mode(enabled: bool) {
     BK_EXTENDED_MODE.store(enabled, Ordering::Release);
 }
 
-pub(crate) fn bk_extended_ram_read(offset: usize) -> u8 {
+pub fn bk_extended_ram_read(offset: usize) -> u8 {
     debug_assert!(offset < BK_EXTENDED_RAM_BYTES);
     unsafe { canvas_read_chunk(BK_EXTENDED_RAM_OFFSET + offset).0.read() }
 }
 
-pub(crate) fn bk_extended_ram_write(offset: usize, value: u8) {
+pub fn bk_extended_ram_write(offset: usize, value: u8) {
     debug_assert!(offset < BK_EXTENDED_RAM_BYTES);
     unsafe {
         let (destination, _) = canvas_write_chunk(BK_EXTENDED_RAM_OFFSET + offset);
