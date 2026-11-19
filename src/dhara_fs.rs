@@ -319,7 +319,7 @@ pub extern "C" fn dhara_nand_read(
     }
 
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
-    if !nand_fs::read_data_page(page, &mut scratch[..PAGE_SIZE]) {
+    if !nand_fs::read_data_page(page, scratch) {
         unsafe { set_error(error, DHARA_E_ECC); }
         return -1;
     }
@@ -348,7 +348,7 @@ pub extern "C" fn dhara_nand_copy(
     }
 
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
-    if !nand_fs::read_data_page(source, &mut scratch[..PAGE_SIZE]) {
+    if !nand_fs::read_data_page(source, scratch) {
         unsafe { set_error(error, DHARA_E_ECC); }
         return -1;
     }

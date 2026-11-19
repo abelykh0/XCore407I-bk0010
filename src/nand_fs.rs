@@ -1159,31 +1159,34 @@ pub(crate) fn set_ecc_check_enabled(enabled: bool) {
     NAND_ECC_CHECK_ENABLED.store(enabled, Ordering::Release);
 }
 
-pub(crate) fn read_data_page(page: u32, out: &mut [u8]) -> bool {
-    if out.len() != PAGE_SIZE { return false; }
+pub(crate) fn read_data_page(page: u32, buffer: &mut [u8]) -> bool {
+    const ECC_SPARE_BYTES: usize =
+        ECC_OOB_OFFSET as usize + ECC_OOB_BYTES + ECC_TAG.len();
 
-    // Read the page with the FSMC ECC engine disabled. The hardware-ECC
-    // read path has produced inconsistent syndromes under filesystem load,
-    // while raw reads and independent software ECC agree on verified pages.
-    if !read_page(page, 0, out) {
+    if buffer.len() < PAGE_SIZE + ECC_SPARE_BYTES {
+        return false;
+    }
+
+    // The hardware-ECC read path has produced inconsistent syndromes under
+    // filesystem load, so read raw NAND data and validate it with software ECC.
+    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
+        if !read_page(page, 0, &mut buffer[..PAGE_SIZE]) {
+            record_nand_read_failure(1, page);
+            return false;
+        }
+        return true;
+    }
+
+    // Read page data and the ECC/tag bytes in one NAND page-read transaction.
+    // The intervening OOB bytes (including factory bad-block markers) are
+    // retained so the existing erased-page validation remains unchanged.
+    if !read_page(page, 0, &mut buffer[..PAGE_SIZE + ECC_SPARE_BYTES]) {
         record_nand_read_failure(1, page);
         return false;
     }
 
-    if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
-        return true;
-    }
-
-    // Read OOB bytes 0..15: factory bad-block markers, four ECC values,
-    // and the ECC tag. An absent tag is valid only for a physically erased
-    // page; otherwise corrupted or unprotected programmed data could bypass
-    // ECC validation.
-    let mut spare = [0u8; ECC_OOB_OFFSET as usize + ECC_OOB_BYTES + ECC_TAG.len()];
-    if !read_page(page, PAGE_SIZE as u16, &mut spare) {
-        record_nand_read_failure(2, page);
-        return false;
-    }
-
+    let (out, spare) = buffer.split_at_mut(PAGE_SIZE);
+    let spare = &spare[..ECC_SPARE_BYTES];
     let ecc_start = ECC_OOB_OFFSET as usize;
     let tag_start = ecc_start + ECC_OOB_BYTES;
     let tag = &spare[tag_start..tag_start + ECC_TAG.len()];
