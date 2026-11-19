@@ -4,7 +4,7 @@
 //! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
 //! only copies three already-rendered samples from that ring.
 
-use core::sync::atomic::{AtomicI32, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU16, AtomicU32, Ordering};
 
 const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
 const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 2 / 1_000;
@@ -76,6 +76,10 @@ static LAST_PCM_SAMPLE: AtomicI32 = AtomicI32::new(0);
 static LAST_OUTPUT_SAMPLE: AtomicI32 = AtomicI32::new(0);
 static CROSSFADE_START_SAMPLE: AtomicI32 = AtomicI32::new(0);
 static UNDERRUN_ACTIVE: AtomicU16 = AtomicU16::new(1);
+#[cfg(feature = "audio-underrun-diag")]
+static UNDERRUN_EVENTS: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "audio-underrun-diag")]
+static UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 unsafe extern "C" {
@@ -265,6 +269,17 @@ impl BkEmulatorAudio {
 
 }
 
+/// Return and reset underrun counts, plus the current PCM ring occupancy.
+/// Counts cover the interval since the previous call.
+#[cfg(feature = "audio-underrun-diag")]
+pub fn take_audio_diagnostics() -> (u32, u32, u16) {
+    let underruns = UNDERRUN_EVENTS.swap(0, Ordering::AcqRel);
+    let missing_samples = UNDERRUN_SAMPLES.swap(0, Ordering::AcqRel);
+    let head = PCM_HEAD.load(Ordering::Acquire);
+    let tail = PCM_TAIL.load(Ordering::Acquire);
+    (underruns, missing_samples, head.wrapping_sub(tail))
+}
+
 /// Copy one USB microframe of pre-rendered PCM, smoothing buffer underruns with short fades.
 ///
 /// # Safety
@@ -315,9 +330,13 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             // On the first missing sample, anchor the fade at the last emitted
             // value. Keep fading only while the producer remains behind.
             if !underrun_active {
+                #[cfg(feature = "audio-underrun-diag")]
+                UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
                 last_sample = last_output;
                 underrun_active = true;
             }
+            #[cfg(feature = "audio-underrun-diag")]
+            UNDERRUN_SAMPLES.fetch_add(1, Ordering::Relaxed);
             gain = (gain - UNDERRUN_GAIN_STEP).max(0);
             ((last_sample * gain) >> 15) as i16
         };
