@@ -8,7 +8,16 @@ use core::sync::atomic::{AtomicI32, AtomicU16, AtomicU32, Ordering};
 #[cfg(feature = "audio-underrun-diag")]
 use core::sync::atomic::AtomicBool;
 
-const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
+// Keep three milliseconds of PCM queued so normal main-loop jitter does not
+// immediately starve the USB consumer. The controller targets this depth.
+const AUDIO_STARTUP_LATENCY_PHASE: u32 =
+    PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 3 / 1_000;
+const AUDIO_TARGET_BUFFER_SAMPLES: i32 =
+    (crate::AUDIO_SAMPLE_RATE_HZ as i32 * 3) / 1_000;
+const AUDIO_CLOCK_CONTROL_INTERVAL_CYCLES: u32 = PDP_CLOCK_HZ / 100;
+const AUDIO_CLOCK_CORRECTION_LIMIT_PPM: i32 = 1_000;
+const AUDIO_CLOCK_KP_PPM_PER_SAMPLE: i32 = 40;
+const AUDIO_CLOCK_KI_PPM_PER_SAMPLE_PER_INTERVAL: i32 = 2;
 const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 2 / 1_000;
 
 // Keep audio timestamps on the same clock as the emulator's cycle budget.
@@ -110,6 +119,11 @@ unsafe extern "C" {
 pub struct BkEmulatorAudio {
     // Quarter-cycle units preserve exact sample timing; at 24 kHz each sample is 125 PDP cycles.
     next_sample_phase: u32,
+    // Fractional phase accumulator allows sub-phase-unit clock corrections.
+    next_sample_fraction: u16,
+    sample_step_q16: u32,
+    last_clock_control_cycle: u32,
+    clock_integral_ppm: i32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
     previous_edge: Option<(u32, i32)>,
@@ -122,6 +136,10 @@ impl BkEmulatorAudio {
     pub const fn new() -> Self {
         Self {
             next_sample_phase: 0,
+            next_sample_fraction: 0,
+            sample_step_q16: AUDIO_SAMPLE_PERIOD_PHASE << 16,
+            last_clock_control_cycle: 0,
+            clock_integral_ppm: 0,
             sample_level: false,
             pending_edge: None,
             previous_edge: None,
@@ -155,8 +173,14 @@ impl BkEmulatorAudio {
                 self.speaker_filter.reset(self.sample_level);
                 self.pending_edge = None;
                 self.previous_edge = None;
-                self.next_sample_phase = Self::cycle_phase()
+                let now_cycles = bk_timing_cycles();
+                self.next_sample_phase = now_cycles
+                    .wrapping_mul(PHASE_UNITS_PER_CYCLE)
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
+                self.next_sample_fraction = 0;
+                self.sample_step_q16 = AUDIO_SAMPLE_PERIOD_PHASE << 16;
+                self.last_clock_control_cycle = now_cycles;
+                self.clock_integral_ppm = 0;
                 OUTPUT_GAIN_Q15.store(0, Ordering::Relaxed);
                 LAST_PCM_SAMPLE.store(0, Ordering::Relaxed);
                 LAST_OUTPUT_SAMPLE.store(0, Ordering::Relaxed);
@@ -199,7 +223,11 @@ impl BkEmulatorAudio {
         }
         #[cfg(feature = "audio-underrun-diag")]
         record_render_interval();
-        let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
+        let now_cycles = bk_timing_cycles();
+        self.update_sample_rate_control(now_cycles);
+        let render_until = now_cycles
+            .wrapping_mul(PHASE_UNITS_PER_CYCLE)
+            .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
         // Emulator execution and rendering are sequential in the main loop, so
         // an empty edge queue stays empty for the rest of this render batch.
         self.edge_queue_empty = false;
@@ -214,7 +242,10 @@ impl BkEmulatorAudio {
             }
 
             let sample_phase = self.next_sample_phase;
-            if (render_until.wrapping_sub(sample_phase) as i32) < 0 {
+            let phase_difference = render_until.wrapping_sub(sample_phase) as i32;
+            if phase_difference < 0
+                || (phase_difference == 0 && self.next_sample_fraction != 0)
+            {
                 break;
             }
 
@@ -230,8 +261,15 @@ impl BkEmulatorAudio {
                     .write(sample);
             }
             head = head.wrapping_add(1);
-            self.next_sample_phase = self.next_sample_phase
-                .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
+            // Apply a slowly varying Q16 sample interval. The integer phase
+            // remains in quarter-cycle units; the fractional part accumulates
+            // clock corrections much smaller than one phase unit per sample.
+            let phase_step = self.sample_step_q16;
+            let fraction = self.next_sample_fraction as u32 + (phase_step & 0xffff);
+            self.next_sample_phase = self.next_sample_phase.wrapping_add(
+                (phase_step >> 16).wrapping_add(fraction >> 16),
+            );
+            self.next_sample_fraction = fraction as u16;
             rendered += 1;
         }
         if rendered != 0 {
@@ -241,6 +279,36 @@ impl BkEmulatorAudio {
         }
         rendered
     }
+    // Occupancy feedback adjusts only the audio resampling clock. It never
+    // changes PDP execution speed or the timestamps produced by the emulator.
+    fn update_sample_rate_control(&mut self, now_cycles: u32) {
+        let elapsed = now_cycles.wrapping_sub(self.last_clock_control_cycle);
+        if elapsed < AUDIO_CLOCK_CONTROL_INTERVAL_CYCLES {
+            return;
+        }
+
+        self.last_clock_control_cycle = now_cycles;
+        let intervals = (elapsed / AUDIO_CLOCK_CONTROL_INTERVAL_CYCLES).min(10) as i32;
+        let head = PCM_HEAD.load(Ordering::Acquire);
+        let tail = PCM_TAIL.load(Ordering::Acquire);
+        let occupancy = head.wrapping_sub(tail) as i32;
+        let error = occupancy - AUDIO_TARGET_BUFFER_SAMPLES;
+
+        // Positive error means the queue is too full: advance source time
+        // slightly faster, producing fewer output samples. Negative error does
+        // the opposite. The integral term removes persistent clock mismatch.
+        self.clock_integral_ppm = (self.clock_integral_ppm
+            + error * AUDIO_CLOCK_KI_PPM_PER_SAMPLE_PER_INTERVAL * intervals)
+            .clamp(-AUDIO_CLOCK_CORRECTION_LIMIT_PPM, AUDIO_CLOCK_CORRECTION_LIMIT_PPM);
+        let correction_ppm = (error * AUDIO_CLOCK_KP_PPM_PER_SAMPLE
+            + self.clock_integral_ppm)
+            .clamp(-AUDIO_CLOCK_CORRECTION_LIMIT_PPM, AUDIO_CLOCK_CORRECTION_LIMIT_PPM);
+        let nominal_step_q16 = (AUDIO_SAMPLE_PERIOD_PHASE as i64) << 16;
+        let corrected_step_q16 = nominal_step_q16
+            + nominal_step_q16 * correction_ppm as i64 / 1_000_000;
+        self.sample_step_q16 = corrected_step_q16 as u32;
+    }
+
     // Apply a compact polynomial BLEP correction around each speaker edge.
     // The correction is calculated in Q15 to avoid floating-point work here.
     #[inline(always)]
