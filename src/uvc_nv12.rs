@@ -33,6 +33,10 @@ static UVC_STATE_READY: AtomicBool = AtomicBool::new(false);
 static UVC_ENDPOINT_ALLOCATED: AtomicBool = AtomicBool::new(false);
 static mut UVC_STATE: MaybeUninit<UvcClass> = MaybeUninit::uninit();
 static mut UVC_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
+// TinyUSB retains the EP0 response pointer until the control transfer completes.
+// Keep it separate from UVC_STATE, which is mutable by other USB callbacks.
+static mut UVC_CONTROL_RESPONSE: [u8; crate::uvc::PROBE_LENGTH] =
+    [0; crate::uvc::PROBE_LENGTH];
 
 unsafe extern "C" {
     fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
@@ -43,30 +47,32 @@ unsafe extern "C" {
     fn xcore_usbd_edpt_ready(rhport: u8, ep_addr: u8) -> bool;
 }
 
-fn uvc_state_ptr() -> Option<*mut UvcClass> {
-    if !UVC_STATE_READY.load(Ordering::Acquire) {
-        return None;
-    }
-    Some(core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>())
-}
-
+// UVC_STATE is shared by foreground USB callbacks and the transfer-completion
+// ISR. Every access to the object must use this critical-section wrapper.
 fn with_uvc_state<R>(f: impl FnOnce(&mut UvcClass) -> R) -> Option<R> {
-    let state = uvc_state_ptr()?;
-    Some(unsafe { f(&mut *state) })
+    cortex_m::interrupt::free(|_| {
+        if !UVC_STATE_READY.load(Ordering::Acquire) {
+            return None;
+        }
+        let state = unsafe { &mut *core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>() };
+        Some(f(state))
+    })
 }
 
 fn initialize_uvc_state() -> bool {
-    if UVC_STATE_READY.load(Ordering::Acquire) {
-        return true;
-    }
-    let Some(state) = UvcClass::try_new() else {
-        return false;
-    };
-    unsafe {
-        core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>().write(state);
-    }
-    UVC_STATE_READY.store(true, Ordering::Release);
-    true
+    cortex_m::interrupt::free(|_| {
+        if UVC_STATE_READY.load(Ordering::Acquire) {
+            return true;
+        }
+        let Some(state) = UvcClass::try_new() else {
+            return false;
+        };
+        unsafe {
+            core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>().write(state);
+        }
+        UVC_STATE_READY.store(true, Ordering::Release);
+        true
+    })
 }
 
 /// Validate and measure the complete UVC function beginning at interface 0.
@@ -496,22 +502,34 @@ pub extern "C" fn xcore_tud_uvc_class_control_in(
     if data_out.is_null() || length_out.is_null() {
         return false;
     }
-    let Some(state) = uvc_state_ptr() else {
+    // Copy while UVC_STATE is locked: TinyUSB retains this pointer after this
+    // callback returns, so it must not point into the mutable state object.
+    let response_len = cortex_m::interrupt::free(|_| {
+        if !UVC_STATE_READY.load(Ordering::Acquire) {
+            return None;
+        }
+        let state = unsafe { &mut *core::ptr::addr_of_mut!(UVC_STATE).cast::<UvcClass>() };
+        match state.control(request_type, request_code, value, index, length, &[]) {
+            Ok(ControlResponse::Data(data)) => {
+                let len = data.len();
+                unsafe {
+                    core::ptr::addr_of_mut!(UVC_CONTROL_RESPONSE)
+                        .cast::<u8>()
+                        .copy_from_nonoverlapping(data.as_ptr(), len);
+                }
+                Some(len)
+            }
+            _ => None,
+        }
+    });
+    let Some(response_len) = response_len else {
         return false;
     };
-    let response = unsafe {
-        (&mut *state).control(request_type, request_code, value, index, length, &[])
-    };
-    match response {
-        Ok(ControlResponse::Data(data)) => {
-            unsafe {
-                data_out.write(data.as_ptr());
-                length_out.write(data.len() as u16);
-            }
-            true
-        }
-        _ => false,
+    unsafe {
+        data_out.write(core::ptr::addr_of!(UVC_CONTROL_RESPONSE).cast::<u8>());
+        length_out.write(response_len as u16);
     }
+    true
 }
 
 #[unsafe(no_mangle)]
@@ -526,14 +544,14 @@ pub extern "C" fn xcore_tud_uvc_class_control_out(
     if data.is_null() || length > crate::uvc::PROBE_LENGTH as u16 {
         return false;
     }
-    let Some(state) = uvc_state_ptr() else {
-        return false;
-    };
     let data = unsafe { core::slice::from_raw_parts(data, length as usize) };
-    matches!(
-        unsafe { (&mut *state).control(request_type, request_code, value, index, length, data) },
-        Ok(ControlResponse::Ack)
-    )
+    with_uvc_state(|state| {
+        matches!(
+            state.control(request_type, request_code, value, index, length, data),
+            Ok(ControlResponse::Ack)
+        )
+    })
+    .unwrap_or(false)
 }
 
 #[unsafe(no_mangle)]
