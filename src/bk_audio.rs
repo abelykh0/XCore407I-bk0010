@@ -53,7 +53,7 @@ impl PcmResampler {
         }
     }
 
-        // Sum every edge affecting this output sample. Edges in the interval
+    // Sum every edge affecting this output sample. Edges in the interval
     // (sample_phase, next_phase] also contribute to the following sample;
     // carry that sum as a scalar instead of retaining an edge history array.
     #[inline(always)]
@@ -107,7 +107,10 @@ impl PcmResampler {
         }
 
         correction
-    }// Accessed by the single USB audio consumer. Stream start/stop resets it with
+    }
+}
+
+// Accessed by the single USB audio consumer. Stream start/stop resets it with
 // USB interrupts masked, so the main-loop producer never races this state.
 static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new(0);
 
