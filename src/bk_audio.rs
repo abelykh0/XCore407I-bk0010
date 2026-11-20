@@ -58,7 +58,7 @@ static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY a
 const RESAMPLER_ONE: u32 = 1 << 16;
 const RESAMPLER_TARGET_OCCUPANCY: i32 = 72; // 3 ms at 24 kHz.
 const RESAMPLER_CONTROL_PACKETS: u8 = 80; // 10 ms at 8 kHz.
-const RESAMPLER_CORRECTION_LIMIT_PPM: i32 = 1_000;
+const RESAMPLER_CORRECTION_LIMIT_PPM: i32 = 5_000;
 
 /// USB-side source-position controller. The output cadence remains fixed;
 /// only the fractional source position advances slightly faster or slower.
