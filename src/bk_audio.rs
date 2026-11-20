@@ -54,6 +54,56 @@ static FIFO_WRITE_FAILURES: AtomicU32 = AtomicU32::new(0);
 static PCM_RING_FULL_EVENTS: AtomicU32 = AtomicU32::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
+const RESAMPLER_ONE: u32 = 1 << 16;
+const RESAMPLER_TARGET_OCCUPANCY: i32 = 72; // 3 ms at 24 kHz.
+const RESAMPLER_CONTROL_PACKETS: u8 = 80; // 10 ms at 8 kHz.
+const RESAMPLER_CORRECTION_LIMIT_PPM: i32 = 1_000;
+
+/// USB-side source-position controller. The output cadence remains fixed;
+/// only the fractional source position advances slightly faster or slower.
+#[derive(Clone, Copy)]
+struct PcmResampler {
+    phase: u32,
+    step: u32,
+    control_packets: u8,
+    integral_q7: i32,
+}
+
+impl PcmResampler {
+    const fn new() -> Self {
+        Self {
+            phase: 0,
+            step: RESAMPLER_ONE,
+            control_packets: 0,
+            integral_q7: 0,
+        }
+    }
+
+    /// A fuller ring increases the source step, draining it faster.
+    /// The integral term is deliberately slow to avoid audible rate hunting.
+    #[inline]
+    fn update_rate(&mut self, occupancy: u16) {
+        self.control_packets += 1;
+        if self.control_packets < RESAMPLER_CONTROL_PACKETS {
+            return;
+        }
+        self.control_packets = 0;
+
+        let error = occupancy as i32 - RESAMPLER_TARGET_OCCUPANCY;
+        self.integral_q7 = (self.integral_q7 + error)
+            .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM * 128,
+                   RESAMPLER_CORRECTION_LIMIT_PPM * 128);
+        let integral_ppm = self.integral_q7 / 128;
+        let correction_ppm = (error * 4 + integral_ppm)
+            .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM,
+                   RESAMPLER_CORRECTION_LIMIT_PPM);
+        self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
+            / 1_000_000) as u32;
+    }
+}
+
+static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new();
+
 unsafe extern "C" {
     safe fn bk_audio_start() -> u8;
     safe fn bk_timing_cycles() -> u32;
@@ -96,6 +146,9 @@ impl BkEmulatorAudio {
                 #[cfg(feature = "audio-underrun-diag")]
                 reset_audio_diagnostics();
                 self.pending_edge = None;
+                unsafe {
+                    core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+                }
                 self.next_sample_phase = Self::cycle_phase()
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 PCM_TAIL.store(0, Ordering::Relaxed);
@@ -105,6 +158,9 @@ impl BkEmulatorAudio {
         } else if self.active {
             self.active = false;
             self.pending_edge = None;
+            unsafe {
+                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+            }
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
@@ -196,9 +252,9 @@ impl BkEmulatorAudio {
 
 }
 
-/// Copy exactly one USB microframe of pre-rendered PCM samples.
-/// USB runs at 8 kHz and receives three 24 kHz samples per microframe.
-/// Missing samples are zero-filled; the consumer never changes the source rate.
+/// Resample one USB microframe from the PCM ring at a slowly adjusted rate.
+/// USB runs at 8 kHz and always receives exactly three 24 kHz output samples.
+/// Linear interpolation changes source position smoothly without changing USB cadence.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
@@ -211,6 +267,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     let buffer = unsafe { core::slice::from_raw_parts_mut(buffer, capacity as usize) };
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
+    let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
+    resampler.update_rate(head.wrapping_sub(tail));
+
     #[cfg(feature = "audio-underrun-diag")]
     let mut missing_samples = 0u32;
     #[cfg(feature = "audio-underrun-diag")]
@@ -220,20 +279,45 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         let available = head.wrapping_sub(tail);
         #[cfg(feature = "audio-underrun-diag")]
         PCM_MIN_OCCUPANCY.fetch_min(available as u32, Ordering::Relaxed);
-        let sample = if available != 0 {
-            #[cfg(feature = "audio-underrun-diag")]
-            {
-                underrun_active = false;
-                PCM_SAMPLES_CONSUMED.fetch_add(1, Ordering::Relaxed);
-            }
-            let value = unsafe {
+
+        let sample = if available >= 2 {
+            let a = unsafe {
                 core::ptr::addr_of!(PCM_RING)
                     .cast::<i16>()
                     .add((tail & PCM_RING_MASK) as usize)
                     .read()
             };
-            tail = tail.wrapping_add(1);
-            value
+            let b = unsafe {
+                core::ptr::addr_of!(PCM_RING)
+                    .cast::<i16>()
+                    .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
+                    .read()
+            };
+            let fraction = (resampler.phase & 0xFFFF) as i32;
+            let interpolated = a as i32
+                + (((b as i32 - a as i32) * fraction) >> 16);
+
+            resampler.phase = resampler.phase.wrapping_add(resampler.step);
+            let advance = resampler.phase >> 16;
+            resampler.phase &= 0xFFFF;
+            tail = tail.wrapping_add(advance as u16);
+
+            #[cfg(feature = "audio-underrun-diag")]
+            {
+                underrun_active = false;
+                PCM_SAMPLES_CONSUMED.fetch_add(advance, Ordering::Relaxed);
+            }
+            interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+        } else if available == 1 {
+            // Hold the final available sample until its interpolation neighbor arrives.
+            #[cfg(feature = "audio-underrun-diag")]
+            underrun_active = false;
+            unsafe {
+                core::ptr::addr_of!(PCM_RING)
+                    .cast::<i16>()
+                    .add((tail & PCM_RING_MASK) as usize)
+                    .read()
+            }
         } else {
             #[cfg(feature = "audio-underrun-diag")]
             {
@@ -252,6 +336,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     }
 
     PCM_TAIL.store(tail, Ordering::Release);
+    unsafe {
+        core::ptr::addr_of_mut!(PCM_RESAMPLER).write(resampler);
+    }
     #[cfg(feature = "audio-underrun-diag")]
     {
         UNDERRUN_ACTIVE.store(underrun_active, Ordering::Relaxed);
