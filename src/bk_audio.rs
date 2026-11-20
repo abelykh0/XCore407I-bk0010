@@ -162,15 +162,18 @@ impl PcmResampler {
             correction +=
                 polarity * AUDIO_AMPLITUDE as i32 * Self::blep_value(until_now) / 32_768;
 
-            // If the edge is still more than one kernel period ahead of the
-            // next output position, retain it for a later sample. Otherwise
-            // consume it and carry its exact next-position correction.
-            if until_next > period {
-                break;
+            if until_now > 0 {
+                // The edge is still ahead of the current sample. Retain it
+                // if it is outside the correction window at the next sample;
+                // otherwise carry the post-edge correction to that sample.
+                if until_next > period {
+                    break;
+                }
+                self.next_blep_correction +=
+                    polarity * AUDIO_AMPLITUDE as i32 * Self::blep_value(until_next) / 32_768;
             }
-
-            self.next_blep_correction +=
-                polarity * AUDIO_AMPLITUDE as i32 * Self::blep_value(until_next) / 32_768;
+            // An edge at or behind the current sample has already had its
+            // current-position correction applied. Do not extend it again.
             self.pending_edge = None;
         }
 
