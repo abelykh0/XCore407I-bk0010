@@ -330,7 +330,7 @@ impl BkEmulatorAudio {
 
         while self.blep_applied_count < self.blep_edge_count {
             let edge = self.blep_edges[self.blep_applied_count];
-            if sample_phase.wrapping_sub(edge.phase) as i32 < 0 {
+            if (sample_phase.wrapping_sub(edge.phase) as i32) < 0 {
                 break;
             }
             self.sample_level = edge.level;
