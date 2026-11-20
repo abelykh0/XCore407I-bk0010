@@ -293,7 +293,8 @@ impl BkEmulatorAudio {
 
 /// Resample one USB microframe from the PCM ring at a slowly adjusted rate.
 /// USB runs at 8 kHz and always receives exactly three 24 kHz output samples.
-/// Linear interpolation changes source position smoothly without changing USB cadence.
+/// Cubic interpolation improves reconstruction without changing USB cadence; linear
+/// interpolation is used briefly at stream start until four-point history is available.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
@@ -332,9 +333,34 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
                     .read()
             };
-            let fraction = (resampler.phase & 0xFFFF) as u32;
-            let interpolated = a as i32
-                + (((b as i32 - a as i32) * fraction as i32) >> 16);
+            let fraction = (resampler.phase & 0xFFFF) as i64;
+            // Catmull-Rom needs one sample on either side of the linear pair.
+            // At stream start, fall back to linear interpolation until history exists.
+            let interpolated = if available >= 3 && tail != 0 {
+                let p0 = unsafe {
+                    core::ptr::addr_of!(PCM_RING)
+                        .cast::<i16>()
+                        .add((tail.wrapping_sub(1) & PCM_RING_MASK) as usize)
+                        .read()
+                } as i64;
+                let p1 = a as i64;
+                let p2 = b as i64;
+                let p3 = unsafe {
+                    core::ptr::addr_of!(PCM_RING)
+                        .cast::<i16>()
+                        .add((tail.wrapping_add(2) & PCM_RING_MASK) as usize)
+                        .read()
+                } as i64;
+
+                // Catmull-Rom polynomial in Q16, evaluated with Horner's method.
+                let c0 = -p0 + 3 * p1 - 3 * p2 + p3;
+                let c1 = 2 * p0 - 5 * p1 + 4 * p2 - p3;
+                let c2 = -p0 + p2;
+                let value = (((c0 * fraction >> 16) + c1) * fraction >> 16) + c2;
+                (p1 + (value * fraction >> 17)) as i32
+            } else {
+                a as i32 + (((b as i32 - a as i32) * fraction as i32) >> 16)
+            };
             resampler.phase = resampler.phase.wrapping_add(resampler.step);
             let advance = resampler.phase >> 16;
             resampler.phase &= 0xFFFF;
