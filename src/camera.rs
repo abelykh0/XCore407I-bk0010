@@ -778,12 +778,14 @@ pub fn show_audio_underrun_diagnostics(
     append_decimal(&mut line, &mut pos, missing_samples);
     append_bytes(&mut line, &mut pos, b"b");
     append_decimal(&mut line, &mut pos, buffered_samples as u32);
+    // Display correction in 100 ppm units to keep all fields on one row.
+    let correction_100ppm = resampler_correction_ppm / 100;
     append_bytes(&mut line, &mut pos, b"c");
-    if resampler_correction_ppm < 0 {
+    if correction_100ppm < 0 {
         append_bytes(&mut line, &mut pos, b"-");
-        append_decimal(&mut line, &mut pos, resampler_correction_ppm.unsigned_abs());
+        append_decimal(&mut line, &mut pos, correction_100ppm.unsigned_abs());
     } else {
-        append_decimal(&mut line, &mut pos, resampler_correction_ppm as u32);
+        append_decimal(&mut line, &mut pos, correction_100ppm as u32);
     }
     append_bytes(&mut line, &mut pos, b"d");
     if generated_minus_consumed < 0 {
