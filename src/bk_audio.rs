@@ -38,8 +38,8 @@ struct PcmResampler {
     step: u32,
     // Emulator-cycle phase corresponding to PCM_RING[PCM_TAIL].
     source_phase: u32,
-    previous_edge: Option<(u32, i32)>,
     pending_edge: Option<(u32, i32)>,
+    next_blep_correction: i32,
 }
 
 impl PcmResampler {
@@ -48,15 +48,20 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             source_phase,
-            previous_edge: None,
             pending_edge: None,
+            next_blep_correction: 0,
         }
     }
 
-    // Pull transitions into a small state pair. The C queue remains the
-    // authoritative storage; no second edge or PCM ring is allocated.
+        // Sum every edge affecting this output sample. Edges in the interval
+    // (sample_phase, next_phase] also contribute to the following sample;
+    // carry that sum as a scalar instead of retaining an edge history array.
     #[inline(always)]
-    fn update_blep_edges(&mut self, sample_phase: u32) {
+    fn blep_correction(&mut self, sample_phase: u32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE;
+        let mut correction = self.next_blep_correction;
+        self.next_blep_correction = 0;
+
         loop {
             if self.pending_edge.is_none() {
                 let mut cycles = 0u32;
@@ -71,45 +76,38 @@ impl PcmResampler {
             }
 
             let (edge_phase, polarity) = self.pending_edge.unwrap();
-            if sample_phase.wrapping_sub(edge_phase) as i32 >= 0 {
-                self.previous_edge = Some((edge_phase, polarity));
-                self.pending_edge = None;
-            } else {
+            let until_edge = edge_phase.wrapping_sub(sample_phase) as i32;
+            if until_edge > period as i32 {
                 break;
             }
-        }
-    }
 
-    // Evaluate the existing polynomial BLEP at the resampled source-time
-    // position, after raw PCM interpolation.
-    #[inline(always)]
-    fn blep_correction(&self, sample_phase: u32) -> i32 {
-        let period = AUDIO_SAMPLE_PERIOD_PHASE;
-        let mut correction = 0i32;
-
-        if let Some((edge_phase, polarity)) = self.previous_edge {
-            let age = sample_phase.wrapping_sub(edge_phase) as i32;
-            if age >= 0 && (age as u32) < period {
-                let t = ((age as u32 * 32_768) / period) as i32;
-                let q = 2 * t - ((t * t) >> 15) - 32_768;
-                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-            }
-        }
-
-        if let Some((edge_phase, polarity)) = self.pending_edge {
-            let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
-            if ahead > 0 && (ahead as u32) < period {
-                let t = (((period - ahead as u32) * 32_768) / period) as i32;
+            if until_edge > 0 {
+                // The edge is ahead of this sample: apply the pre-edge
+                // polynomial now and carry its post-edge correction forward.
+                let t = (((period - until_edge as u32) * 32_768) / period) as i32;
                 let q = (t * t) >> 15;
                 correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
+
+                let age_next = period - until_edge as u32;
+                let t_next = ((age_next * 32_768) / period) as i32;
+                let q_next = 2 * t_next - ((t_next * t_next) >> 15) - 32_768;
+                self.next_blep_correction +=
+                    polarity * AUDIO_AMPLITUDE as i32 * q_next / 32_768;
+            } else {
+                // The edge is at or behind this sample.
+                let age = sample_phase.wrapping_sub(edge_phase) as i32;
+                if age >= 0 && (age as u32) < period {
+                    let t = (((age as u32) * 32_768) / period) as i32;
+                    let q = 2 * t - ((t * t) >> 15) - 32_768;
+                    correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
+                }
             }
+
+            self.pending_edge = None;
         }
 
         correction
-    }
-}
-
-// Accessed by the single USB audio consumer. Stream start/stop resets it with
+    }// Accessed by the single USB audio consumer. Stream start/stop resets it with
 // USB interrupts masked, so the main-loop producer never races this state.
 static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new(0);
 
@@ -307,7 +305,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
             // BLEP is evaluated at the actual resampled position, after raw
             // PCM interpolation rather than in the nominal-rate producer.
-            resampler.update_blep_edges(sample_phase);
             let sample = (interpolated + resampler.blep_correction(sample_phase))
                 .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
 
