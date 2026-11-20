@@ -4,7 +4,7 @@
 //! worker converts them to nominal 24 kHz PCM in a ring buffer. The USB
 //! completion ISR dynamically resamples that ring to the fixed USB sample rate.
 
-use core::sync::atomic::{AtomicI32, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering};
 #[cfg(feature = "audio-underrun-diag")]
 use core::sync::atomic::{AtomicBool, AtomicU32};
 
@@ -196,7 +196,6 @@ unsafe extern "C" {
     #[cfg(feature = "audio-underrun-diag")]
     safe fn bk_audio_take_edge_overflows() -> u32;
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
-    fn bk_audio_pop_blep_edge(cycles: *mut u32, level: *mut u8) -> u8;
 }
 
 pub struct BkEmulatorAudio {
@@ -236,9 +235,6 @@ impl BkEmulatorAudio {
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
-                unsafe {
-                    core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(self.next_sample_phase));
-                }
                 self.active = true;
             }
         } else if self.active {
@@ -247,9 +243,6 @@ impl BkEmulatorAudio {
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
-            unsafe {
-                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(0));
-            }
         }
     }
 
@@ -292,14 +285,12 @@ impl BkEmulatorAudio {
             }
 
             self.apply_edges_through(sample_phase);
-            // Store only the raw speaker level. BLEP is applied later by
-            // the USB consumer, after the PCM sample position is resampled.
-            let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
+            let sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
                     .cast::<i16>()
                     .add((head & PCM_RING_MASK) as usize)
-                    .write(raw_sample);
+                    .write(sample);
             }
             head = head.wrapping_add(1);
             self.next_sample_phase = self.next_sample_phase
@@ -340,11 +331,9 @@ impl BkEmulatorAudio {
 
 }
 
-/// Resample one USB microframe from the emulator PCM ring at a controlled
-/// rate. USB always receives the fixed number of samples for this microframe.
-///
-/// A slow occupancy controller adjusts the source ratio around 1.0 so
-/// emulator and USB clock differences do not accumulate in the PCM ring.
+/// Copy exactly one USB microframe of pre-rendered PCM samples.
+/// USB runs at 8 kHz and receives three 24 kHz samples per microframe.
+/// Missing samples are zero-filled; the consumer never changes the source rate.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
@@ -354,83 +343,33 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         return 0;
     }
 
-    // The caller supplies the DMA packet buffer; validate its pointer and
-    // declared extent once, then keep all packet writes within this slice.
     let buffer = unsafe { core::slice::from_raw_parts_mut(buffer, capacity as usize) };
-
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
-    let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
-    resampler.update_rate_control(head.wrapping_sub(tail));
-
     #[cfg(feature = "audio-underrun-diag")]
     let mut missing_samples = 0u32;
     #[cfg(feature = "audio-underrun-diag")]
     let mut underrun_active = UNDERRUN_ACTIVE.load(Ordering::Relaxed);
+
     for index in 0..SAMPLES_PER_MICROFRAME {
         let available = head.wrapping_sub(tail);
         #[cfg(feature = "audio-underrun-diag")]
         PCM_MIN_OCCUPANCY.fetch_min(available as u32, Ordering::Relaxed);
         let sample = if available != 0 {
             #[cfg(feature = "audio-underrun-diag")]
-            { underrun_active = false; }
-            let s0 = unsafe {
+            {
+                underrun_active = false;
+                PCM_SAMPLES_CONSUMED.fetch_add(1, Ordering::Relaxed);
+            }
+            let value = unsafe {
                 core::ptr::addr_of!(PCM_RING)
                     .cast::<i16>()
                     .add((tail & PCM_RING_MASK) as usize)
                     .read()
             };
-            let s1 = if available > 1 {
-                unsafe {
-                    core::ptr::addr_of!(PCM_RING)
-                        .cast::<i16>()
-                        .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
-                        .read()
-                }
-            } else {
-                s0
-            };
-
-            let fraction = (resampler.phase & 0xFFFF) as u32;
-            let interpolated = s0 as i32
-                + (((s1 as i32 - s0 as i32) * fraction as i32) >> 16);
-            let sample_phase = resampler.source_phase.wrapping_add(
-                (AUDIO_SAMPLE_PERIOD_PHASE.wrapping_mul(fraction)) >> 16,
-            );
-
-            // Calculate the exact source-time distance to the next output
-            // position, including the fractional phase accumulator.
-            let phase_after = resampler.phase as u64 + resampler.step as u64;
-            let current_offset =
-                (AUDIO_SAMPLE_PERIOD_PHASE as u64 * (resampler.phase as u64 & 0xFFFF)) >> 16;
-            let next_offset = (AUDIO_SAMPLE_PERIOD_PHASE as u64 * phase_after) >> 16;
-            let sample_delta = (next_offset - current_offset) as u32;
-
-            // BLEP is evaluated at the actual resampled position, after raw
-            // PCM interpolation, using the actual interval to the next sample.
-            let sample = (interpolated + resampler.blep_correction(sample_phase, sample_delta))
-                .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
-
-            resampler.phase = resampler.phase.wrapping_add(resampler.step);
-            let consumed = (resampler.phase >> 16) as u16;
-            #[cfg(feature = "audio-underrun-diag")]
-            PCM_SAMPLES_CONSUMED.fetch_add(consumed.min(available) as u32, Ordering::Relaxed);
-            if consumed > available {
-                // Keep the source-time cursor aligned with samples actually consumed.
-                tail = tail.wrapping_add(available);
-                resampler.source_phase = resampler.source_phase
-                    .wrapping_add(available as u32 * AUDIO_SAMPLE_PERIOD_PHASE);
-                resampler.phase = 0;
-            } else {
-                tail = tail.wrapping_add(consumed);
-                resampler.source_phase = resampler.source_phase
-                    .wrapping_add(consumed as u32 * AUDIO_SAMPLE_PERIOD_PHASE);
-                resampler.phase &= 0xFFFF;
-            }
-            sample
+            tail = tail.wrapping_add(1);
+            value
         } else {
-            // Do not advance the source cursor while empty; the next valid
-            // sample starts a fresh interpolation interval.
             #[cfg(feature = "audio-underrun-diag")]
             {
                 if !underrun_active {
@@ -439,7 +378,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                 }
                 missing_samples += 1;
             }
-            resampler.phase = 0;
             0
         };
 
@@ -448,9 +386,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         buffer[index * 2 + 1] = bytes[1];
     }
 
-    unsafe {
-        core::ptr::addr_of_mut!(PCM_RESAMPLER).write(resampler);
-    }
     PCM_TAIL.store(tail, Ordering::Release);
     #[cfg(feature = "audio-underrun-diag")]
     {
@@ -491,7 +426,7 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32, u32,
         edge_overflows,
         fifo_failures,
         ring_full_events,
-        RESAMPLER_CORRECTION_PPM.load(Ordering::Relaxed),
+        0,
     )
 }
 
