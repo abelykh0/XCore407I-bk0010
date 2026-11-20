@@ -67,14 +67,21 @@ struct PcmResampler {
     phase: u32,
     step: u32,
     control_packets: u8,
+    // Emulator-cycle phase corresponding to PCM_RING[PCM_TAIL].
+    source_phase: u32,
+    pending_edge: Option<(u32, i32)>,
+    next_blep_correction: i32,
 }
 
 impl PcmResampler {
-    const fn new() -> Self {
+    const fn new(source_phase: u32) -> Self {
         Self {
             phase: 0,
             step: RESAMPLER_ONE,
             control_packets: 0,
+            source_phase,
+            pending_edge: None,
+            next_blep_correction: 0,
         }
     }
 
@@ -98,6 +105,62 @@ impl PcmResampler {
             / RESAMPLER_ONE as i64) as i32;
         RESAMPLER_CORRECTION_PPM.store(actual_correction_ppm, Ordering::Release);
     }
+
+    #[inline(always)]
+    fn blep_value(until_edge: i32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE as i32;
+        if until_edge > 0 {
+            if until_edge >= period {
+                return 0;
+            }
+            let t = (((period - until_edge) * 32_768) / period) as i32;
+            (t * t) >> 15
+        } else {
+            let age = -until_edge;
+            if age >= period {
+                return 0;
+            }
+            let t = ((age * 32_768) / period) as i32;
+            2 * t - ((t * t) >> 15) - 32_768
+        }
+    }
+
+    #[inline(always)]
+    fn blep_correction(&mut self, sample_phase: u32, sample_delta: u32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE as i32;
+        let mut correction = self.next_blep_correction;
+        self.next_blep_correction = 0;
+
+        loop {
+            if self.pending_edge.is_none() {
+                let mut cycles = 0u32;
+                let mut level = 0u8;
+                if unsafe { bk_audio_pop_blep_edge(&mut cycles, &mut level) } == 0 {
+                    break;
+                }
+                self.pending_edge = Some((
+                    cycles.wrapping_mul(PHASE_UNITS_PER_CYCLE),
+                    if level != 0 { 1 } else { -1 },
+                ));
+            }
+
+            let (edge_phase, polarity) = self.pending_edge.unwrap();
+            let until_now = edge_phase.wrapping_sub(sample_phase) as i32;
+            let until_next = until_now.saturating_sub(sample_delta as i32);
+            correction +=
+                polarity * AUDIO_AMPLITUDE as i32 * Self::blep_value(until_now) / 32_768;
+
+            if until_now > 0 {
+                if until_next > period {
+                    break;
+                }
+                self.next_blep_correction +=
+                    polarity * AUDIO_AMPLITUDE as i32 * Self::blep_value(until_next) / 32_768;
+            }
+            self.pending_edge = None;
+        }
+        correction
+    }
 }
 
 static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new();
@@ -109,6 +172,7 @@ unsafe extern "C" {
     #[cfg(feature = "audio-underrun-diag")]
     safe fn bk_audio_take_edge_overflows() -> u32;
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
+    fn bk_audio_pop_blep_edge(cycles: *mut u32, level: *mut u8) -> u8;
 }
 
 pub struct BkEmulatorAudio {
@@ -145,7 +209,8 @@ impl BkEmulatorAudio {
                 reset_audio_diagnostics();
                 self.pending_edge = None;
                 unsafe {
-                    core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+                    core::ptr::addr_of_mut!(PCM_RESAMPLER)
+                        .write(PcmResampler::new(self.next_sample_phase));
                 }
                 self.next_sample_phase = Self::cycle_phase()
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
@@ -157,7 +222,7 @@ impl BkEmulatorAudio {
             self.active = false;
             self.pending_edge = None;
             unsafe {
-                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(0));
             }
             RESAMPLER_CORRECTION_PPM.store(0, Ordering::Release);
             bk_audio_stop();
@@ -292,21 +357,35 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
                     .read()
             };
-            let fraction = (resampler.phase & 0xFFFF) as i32;
+            let fraction = (resampler.phase & 0xFFFF) as u32;
             let interpolated = a as i32
-                + (((b as i32 - a as i32) * fraction) >> 16);
+                + (((b as i32 - a as i32) * fraction as i32) >> 16);
+            let sample_phase = resampler.source_phase.wrapping_add(
+                (AUDIO_SAMPLE_PERIOD_PHASE.wrapping_mul(fraction)) >> 16,
+            );
+            let phase_after = (resampler.phase & 0xFFFF) as u64
+                + resampler.step as u64;
+            let current_offset =
+                (AUDIO_SAMPLE_PERIOD_PHASE as u64 * (resampler.phase as u64 & 0xFFFF)) >> 16;
+            let next_offset = (AUDIO_SAMPLE_PERIOD_PHASE as u64 * phase_after) >> 16;
+            let sample_delta = (next_offset - current_offset) as u32;
+            let sample = (interpolated
+                + resampler.blep_correction(sample_phase, sample_delta))
+                .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
 
             resampler.phase = resampler.phase.wrapping_add(resampler.step);
             let advance = resampler.phase >> 16;
             resampler.phase &= 0xFFFF;
             tail = tail.wrapping_add(advance as u16);
+            resampler.source_phase = resampler.source_phase
+                .wrapping_add(advance.wrapping_mul(AUDIO_SAMPLE_PERIOD_PHASE));
 
             #[cfg(feature = "audio-underrun-diag")]
             {
                 underrun_active = false;
                 PCM_SAMPLES_CONSUMED.fetch_add(advance, Ordering::Relaxed);
             }
-            interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+            sample
         } else if available == 1 {
             // Hold the final available sample until its interpolation neighbor arrives.
             #[cfg(feature = "audio-underrun-diag")]
@@ -320,6 +399,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .read()
             }
         } else {
+            resampler.phase = 0;
             #[cfg(feature = "audio-underrun-diag")]
             {
                 if !underrun_active {
