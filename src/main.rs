@@ -17,6 +17,8 @@ use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, show_file_browser_line, Nv12DemoImage};
 #[cfg(feature = "cpu-cycle-diag")]
 use xcore407i_blinker::camera::show_pdp_cycles_per_second;
+#[cfg(feature = "audio-underrun-diag")]
+use xcore407i_blinker::camera::show_audio_underrun_diagnostics;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -530,6 +532,8 @@ fn main() -> ! {
     let mut diagnostic_last_dwt = read_dwt_cycle_count();
     #[cfg(feature = "cpu-cycle-diag")]
     let mut diagnostic_last_pdp = pacing_start_cycles;
+    #[cfg(feature = "audio-underrun-diag")]
+    let mut audio_diag_last_ms = TICKS.load(Ordering::Relaxed);
 
     loop {
         // Advance the autonomous BK timer even while PDP execution is paused.
@@ -980,6 +984,34 @@ fn main() -> ! {
                 show_pdp_cycles_per_second(pdp_cycles_per_second);
                 diagnostic_last_dwt = now_dwt;
                 diagnostic_last_pdp = now_pdp;
+            }
+        }
+
+        #[cfg(feature = "audio-underrun-diag")]
+        {
+            let now_ms = TICKS.load(Ordering::Relaxed);
+            if now_ms.wrapping_sub(audio_diag_last_ms) >= 1_000 {
+                let (
+                    underruns,
+                    missing_samples,
+                    buffered_samples,
+                    generated_minus_consumed,
+                    minimum_occupancy,
+                    max_render_gap_us,
+                    edge_overflows,
+                    fifo_failures,
+                ) = xcore407i_blinker::bk_audio::take_audio_diagnostics();
+                show_audio_underrun_diagnostics(
+                    underruns,
+                    missing_samples,
+                    buffered_samples,
+                    generated_minus_consumed,
+                    minimum_occupancy,
+                    max_render_gap_us,
+                    edge_overflows,
+                    fifo_failures,
+                );
+                audio_diag_last_ms = now_ms;
             }
         }
 
