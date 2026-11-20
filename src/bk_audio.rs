@@ -249,17 +249,10 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
-    let occupancy = head.wrapping_sub(tail) as i32;
-
-    // Proportional occupancy controller. One Q16 step unit per sample of
-    // level error gives a bounded +/-0.5% correction. Low-pass the target so
-    // packet-to-packet changes cannot create audible pitch modulation.
-    let correction = (occupancy - RESAMPLER_TARGET_LEVEL)
-        .clamp(-RESAMPLER_MAX_CORRECTION, RESAMPLER_MAX_CORRECTION);
-    let target_step = (RESAMPLER_ONE as i32 + correction) as u32;
+    // Diagnostic isolation: keep the resampler at exactly 1.0.
+    // This preserves fractional interpolation but disables occupancy feedback.
     let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
-    let step_delta = target_step as i32 - resampler.step as i32;
-    resampler.step = (resampler.step as i32 + step_delta / 8) as u32;
+    resampler.step = RESAMPLER_ONE;
 
     for index in 0..SAMPLES_PER_MICROFRAME {
         let available = head.wrapping_sub(tail);
