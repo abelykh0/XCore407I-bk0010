@@ -4,7 +4,7 @@
 //! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
 //! copies exactly three samples per 8 kHz microframe.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 #[cfg(feature = "audio-underrun-diag")]
 use core::sync::atomic::{AtomicBool, AtomicU32};
 
@@ -30,6 +30,7 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
+static RESAMPLER_CORRECTION_PPM: AtomicI32 = AtomicI32::new(0);
 #[cfg(feature = "audio-underrun-diag")]
 static UNDERRUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "audio-underrun-diag")]
@@ -99,6 +100,9 @@ impl PcmResampler {
                    RESAMPLER_CORRECTION_LIMIT_PPM);
         self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
             / 1_000_000) as u32;
+        let actual_correction_ppm = ((self.step as i64 - RESAMPLER_ONE as i64) * 1_000_000
+            / RESAMPLER_ONE as i64) as i32;
+        RESAMPLER_CORRECTION_PPM.store(actual_correction_ppm, Ordering::Release);
     }
 }
 
@@ -161,6 +165,7 @@ impl BkEmulatorAudio {
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
             }
+            RESAMPLER_CORRECTION_PPM.store(0, Ordering::Release);
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
@@ -380,7 +385,7 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32, u32,
         edge_overflows,
         fifo_failures,
         ring_full_events,
-        0,
+        RESAMPLER_CORRECTION_PPM.load(Ordering::Acquire),
     )
 }
 
