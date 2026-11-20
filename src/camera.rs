@@ -765,30 +765,35 @@ pub fn show_audio_underrun_diagnostics(
     max_render_gap_us: u32,
     edge_overflows: u32,
     fifo_failures: u32,
+    ring_full_events: u32,
 ) {
+    // Keep the complete diagnostic on the 32-character display row.
+    // Single-character labels preserve all counters without separators.
     let mut line = [b' '; 32];
     let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"U");
+    append_bytes(&mut line, &mut pos, b"u");
     append_decimal(&mut line, &mut pos, underruns);
-    append_bytes(&mut line, &mut pos, b" M");
+    append_bytes(&mut line, &mut pos, b"m");
     append_decimal(&mut line, &mut pos, missing_samples);
-    append_bytes(&mut line, &mut pos, b" B");
+    append_bytes(&mut line, &mut pos, b"b");
     append_decimal(&mut line, &mut pos, buffered_samples as u32);
-    append_bytes(&mut line, &mut pos, b" D");
+    append_bytes(&mut line, &mut pos, b"d");
     if generated_minus_consumed < 0 {
         append_bytes(&mut line, &mut pos, b"-");
         append_decimal(&mut line, &mut pos, generated_minus_consumed.unsigned_abs());
     } else {
         append_decimal(&mut line, &mut pos, generated_minus_consumed as u32);
     }
-    append_bytes(&mut line, &mut pos, b" L");
+    append_bytes(&mut line, &mut pos, b"l");
     append_decimal(&mut line, &mut pos, minimum_occupancy as u32);
-    append_bytes(&mut line, &mut pos, b" T");
+    append_bytes(&mut line, &mut pos, b"t");
     append_decimal(&mut line, &mut pos, max_render_gap_us);
-    append_bytes(&mut line, &mut pos, b" E");
+    append_bytes(&mut line, &mut pos, b"e");
     append_decimal(&mut line, &mut pos, edge_overflows);
-    append_bytes(&mut line, &mut pos, b" F");
+    append_bytes(&mut line, &mut pos, b"f");
     append_decimal(&mut line, &mut pos, fifo_failures);
+    append_bytes(&mut line, &mut pos, b"r");
+    append_decimal(&mut line, &mut pos, ring_full_events);
     show_file_browser_line(29, &line[..pos], false);
 }
 
