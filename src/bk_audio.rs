@@ -48,6 +48,7 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             source_phase,
+            previous_edge: None,
             pending_edge: None,
         }
     }
@@ -135,7 +136,6 @@ impl BkEmulatorAudio {
             next_sample_phase: 0,
             sample_level: false,
             pending_edge: None,
-            previous_edge: None,
             edge_queue_empty: false,
             active: false,
         }
