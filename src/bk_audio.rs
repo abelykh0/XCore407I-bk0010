@@ -335,6 +335,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             let fraction = (resampler.phase & 0xFFFF) as u32;
             let interpolated = a as i32
                 + (((b as i32 - a as i32) * fraction as i32) >> 16);
+            resampler.phase = resampler.phase.wrapping_add(resampler.step);
             let advance = resampler.phase >> 16;
             resampler.phase &= 0xFFFF;
             tail = tail.wrapping_add(advance as u16);
