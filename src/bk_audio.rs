@@ -4,7 +4,7 @@
 //! worker converts them to nominal 24 kHz PCM in a ring buffer. The USB
 //! completion ISR dynamically resamples that ring to the fixed USB sample rate.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 #[cfg(feature = "audio-underrun-diag")]
 use core::sync::atomic::{AtomicBool, AtomicU32};
 
@@ -55,6 +55,8 @@ static PCM_RING_FULL_EVENTS: AtomicU32 = AtomicU32::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 const RESAMPLER_ONE: u32 = 1 << 16;
+#[cfg(feature = "audio-underrun-diag")]
+static RESAMPLER_CORRECTION_PPM: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Clone, Copy)]
 struct PcmResampler {
@@ -109,6 +111,8 @@ impl PcmResampler {
         self.step = ((RESAMPLER_ONE as i64
             * (1_000_000 + correction_ppm) as i64)
             / 1_000_000) as u32;
+        #[cfg(feature = "audio-underrun-diag")]
+        RESAMPLER_CORRECTION_PPM.store(correction_ppm, Ordering::Relaxed);
     }
 
     // Sum every edge affecting this output sample. Edges in the interval
@@ -459,7 +463,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
 /// Return and reset audio pipeline diagnostics for the previous interval.
 #[cfg(feature = "audio-underrun-diag")]
-pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32, u32) {
+pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32, u32, i32) {
     let underruns = UNDERRUN_EVENTS.swap(0, Ordering::AcqRel);
     let missing_samples = UNDERRUN_SAMPLES.swap(0, Ordering::AcqRel);
     let generated = PCM_SAMPLES_RENDERED.swap(0, Ordering::AcqRel);
@@ -487,6 +491,7 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32, u32)
         edge_overflows,
         fifo_failures,
         ring_full_events,
+        RESAMPLER_CORRECTION_PPM.load(Ordering::Relaxed),
     )
 }
 
