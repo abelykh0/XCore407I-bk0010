@@ -67,6 +67,8 @@ struct PcmResampler {
     phase: u32,
     step: u32,
     control_packets: u8,
+    // Q5 integral correction learns the persistent source/USB clock mismatch.
+    integral_ppm_q5: i32,
 }
 
 impl PcmResampler {
@@ -75,6 +77,7 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             control_packets: 0,
+            integral_ppm_q5: 0,
         }
     }
 
@@ -88,9 +91,28 @@ impl PcmResampler {
         self.control_packets = 0;
 
         let error = occupancy as i32 - RESAMPLER_TARGET_OCCUPANCY;
-        let correction_ppm = (error * 4)
+
+        // Proportional correction responds to current FIFO displacement.
+        let proportional_ppm = error * 4;
+
+        // Integrate slowly (one update per 10 ms) to learn persistent clock
+        // mismatch. Q5 retains fractional ppm without floating-point math.
+        const INTEGRAL_LIMIT_PPM: i32 = 3_000;
+        let proposed_integral = (self.integral_ppm_q5 + error)
+            .clamp(-INTEGRAL_LIMIT_PPM * 32, INTEGRAL_LIMIT_PPM * 32);
+        let unconstrained_ppm = proportional_ppm + proposed_integral / 32;
+        let correction_ppm = unconstrained_ppm
             .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM,
                    RESAMPLER_CORRECTION_LIMIT_PPM);
+
+        // Conditional integration prevents windup when the rate limit is hit.
+        if unconstrained_ppm == correction_ppm
+            || (unconstrained_ppm > correction_ppm && error < 0)
+            || (unconstrained_ppm < correction_ppm && error > 0)
+        {
+            self.integral_ppm_q5 = proposed_integral;
+        }
+
         self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
             / 1_000_000) as u32;
         let actual_correction_ppm = ((self.step as i64 - RESAMPLER_ONE as i64) * 1_000_000
