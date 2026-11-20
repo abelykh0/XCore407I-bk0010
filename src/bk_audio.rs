@@ -38,23 +38,89 @@ const RESAMPLER_TARGET_LEVEL: i32 = 128; // about 5.3 ms at 24 kHz
 struct PcmResampler {
     phase: u32,
     step: u32,
+    // Emulator-cycle phase corresponding to PCM_RING[PCM_TAIL].
+    source_phase: u32,
+    previous_edge: Option<(u32, i32)>,
+    pending_edge: Option<(u32, i32)>,
 }
 
 impl PcmResampler {
-    const fn new() -> Self {
-        Self { phase: 0, step: RESAMPLER_ONE }
+    const fn new(source_phase: u32) -> Self {
+        Self {
+            phase: 0,
+            step: RESAMPLER_ONE,
+            source_phase,
+            previous_edge: None,
+            pending_edge: None,
+        }
+    }
+
+    // Pull transitions into a small state pair. The C queue remains the
+    // authoritative storage; no second edge or PCM ring is allocated.
+    #[inline(always)]
+    fn update_blep_edges(&mut self, sample_phase: u32) {
+        loop {
+            if self.pending_edge.is_none() {
+                let mut cycles = 0u32;
+                let mut level = 0u8;
+                if unsafe { bk_audio_pop_blep_edge(&mut cycles, &mut level) } == 0 {
+                    break;
+                }
+                self.pending_edge = Some((
+                    cycles.wrapping_mul(PHASE_UNITS_PER_CYCLE),
+                    if level != 0 { 1 } else { -1 },
+                ));
+            }
+
+            let (edge_phase, polarity) = self.pending_edge.unwrap();
+            if sample_phase.wrapping_sub(edge_phase) as i32 >= 0 {
+                self.previous_edge = Some((edge_phase, polarity));
+                self.pending_edge = None;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Evaluate the existing polynomial BLEP at the resampled source-time
+    // position, after raw PCM interpolation.
+    #[inline(always)]
+    fn blep_correction(&self, sample_phase: u32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE;
+        let mut correction = 0i32;
+
+        if let Some((edge_phase, polarity)) = self.previous_edge {
+            let age = sample_phase.wrapping_sub(edge_phase) as i32;
+            if age >= 0 && (age as u32) < period {
+                let t = ((age as u32 * 32_768) / period) as i32;
+                let q = 2 * t - ((t * t) >> 15) - 32_768;
+                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
+            }
+        }
+
+        if let Some((edge_phase, polarity)) = self.pending_edge {
+            let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
+            if ahead > 0 && (ahead as u32) < period {
+                let t = (((period - ahead as u32) * 32_768) / period) as i32;
+                let q = (t * t) >> 15;
+                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
+            }
+        }
+
+        correction
     }
 }
 
 // Accessed by the single USB audio consumer. Stream start/stop resets it with
 // USB interrupts masked, so the main-loop producer never races this state.
-static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new();
+static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new(0);
 
 unsafe extern "C" {
     safe fn bk_audio_start() -> u8;
     safe fn bk_timing_cycles() -> u32;
     safe fn bk_audio_stop();
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
+    fn bk_audio_pop_blep_edge(cycles: *mut u32, level: *mut u8) -> u8;
 }
 
 pub struct BkEmulatorAudio {
@@ -96,7 +162,7 @@ impl BkEmulatorAudio {
                 PCM_TAIL.store(0, Ordering::Relaxed);
                 PCM_HEAD.store(0, Ordering::Release);
                 unsafe {
-                    core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+                    core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(self.next_sample_phase));
                 }
                 self.active = true;
             }
@@ -108,7 +174,7 @@ impl BkEmulatorAudio {
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
             unsafe {
-                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
+                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(0));
             }
         }
     }
@@ -274,23 +340,34 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                 s0
             };
 
-            let fraction = (resampler.phase & 0xFFFF) as i32;
+            let fraction = (resampler.phase & 0xFFFF) as u32;
             let interpolated = s0 as i32
-                + (((s1 as i32 - s0 as i32) * fraction) >> 16);
+                + (((s1 as i32 - s0 as i32) * fraction as i32) >> 16);
+            let sample_phase = resampler.source_phase.wrapping_add(
+                (AUDIO_SAMPLE_PERIOD_PHASE.wrapping_mul(fraction)) >> 16,
+            );
+
+            // BLEP is evaluated at the actual resampled position, after raw
+            // PCM interpolation rather than in the nominal-rate producer.
+            resampler.update_blep_edges(sample_phase);
+            let sample = (interpolated + resampler.blep_correction(sample_phase))
+                .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
 
             resampler.phase = resampler.phase.wrapping_add(resampler.step);
             let consumed = (resampler.phase >> 16) as u16;
             if consumed > available {
-                // Never let the consumer cursor pass the published producer
-                // head. This can occur at the upper rate limit when only one
-                // source sample remains.
+                // Keep the source-time cursor aligned with samples actually consumed.
                 tail = tail.wrapping_add(available);
+                resampler.source_phase = resampler.source_phase
+                    .wrapping_add(available as u32 * AUDIO_SAMPLE_PERIOD_PHASE);
                 resampler.phase = 0;
             } else {
                 tail = tail.wrapping_add(consumed);
+                resampler.source_phase = resampler.source_phase
+                    .wrapping_add(consumed as u32 * AUDIO_SAMPLE_PERIOD_PHASE);
                 resampler.phase &= 0xFFFF;
             }
-            interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+            sample
         } else {
             // Do not advance the source cursor while empty; the next valid
             // sample starts a fresh interpolation interval.
