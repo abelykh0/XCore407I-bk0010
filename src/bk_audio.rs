@@ -163,7 +163,7 @@ impl PcmResampler {
     }
 }
 
-static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new();
+static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new(0);
 
 unsafe extern "C" {
     safe fn bk_audio_start() -> u8;
