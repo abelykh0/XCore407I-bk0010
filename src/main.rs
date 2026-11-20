@@ -1000,6 +1000,7 @@ fn main() -> ! {
                     max_render_gap_us,
                     edge_overflows,
                     fifo_failures,
+                    ring_full_events,
                 ) = xcore407i_blinker::bk_audio::take_audio_diagnostics();
                 show_audio_underrun_diagnostics(
                     underruns,
@@ -1010,6 +1011,7 @@ fn main() -> ! {
                     max_render_gap_us,
                     edge_overflows,
                     fifo_failures,
+                    ring_full_events,
                 );
                 audio_diag_last_ms = now_ms;
             }
