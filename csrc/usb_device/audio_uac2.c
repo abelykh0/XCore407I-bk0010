@@ -9,6 +9,7 @@
 #if CFG_TUD_AUDIO
 // The clock rate is supplied by the shared Rust AUDIO_KHZ constant.
 extern uint32_t xcore_audio_sample_rate_hz(void);
+extern void xcore_tud_audio_note_write_failure(void);
 
 bool tud_audio_get_req_entity_cb(uint8_t rhport,
                                  tusb_control_request_t const *request) {
@@ -94,7 +95,11 @@ bool tud_audio_tx_done_isr(uint8_t rhport, uint16_t n_bytes_sent,
   if (length == 0) {
     return true;
   }
-  return tud_audio_n_write(func_id, packet, length) == length;
+  const uint16_t written = tud_audio_n_write(func_id, packet, length);
+  if (written != length) {
+    xcore_tud_audio_note_write_failure();
+  }
+  return written == length;
 }
 
 // Stop capture on bus reset, disconnect, or configuration teardown.
