@@ -31,6 +31,8 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 #[cfg(feature = "audio-underrun-diag")]
+static UNDERRUN_ACTIVE: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "audio-underrun-diag")]
 static UNDERRUN_EVENTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "audio-underrun-diag")]
 static UNDERRUN_SAMPLES: AtomicU32 = AtomicU32::new(0);
@@ -309,11 +311,15 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
     #[cfg(feature = "audio-underrun-diag")]
     let mut missing_samples = 0u32;
+    #[cfg(feature = "audio-underrun-diag")]
+    let mut underrun_active = UNDERRUN_ACTIVE.load(Ordering::Relaxed);
     for index in 0..SAMPLES_PER_MICROFRAME {
         let available = head.wrapping_sub(tail);
         #[cfg(feature = "audio-underrun-diag")]
         PCM_MIN_OCCUPANCY.fetch_min(available as u32, Ordering::Relaxed);
         let sample = if available != 0 {
+            #[cfg(feature = "audio-underrun-diag")]
+            { underrun_active = false; }
             let s0 = unsafe {
                 core::ptr::addr_of!(PCM_RING)
                     .cast::<i16>()
@@ -364,7 +370,13 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             // Do not advance the source cursor while empty; the next valid
             // sample starts a fresh interpolation interval.
             #[cfg(feature = "audio-underrun-diag")]
-            { missing_samples += 1; }
+            {
+                if !underrun_active {
+                    UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    underrun_active = true;
+                }
+                missing_samples += 1;
+            }
             resampler.phase = 0;
             0
         };
@@ -380,10 +392,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     PCM_TAIL.store(tail, Ordering::Release);
     #[cfg(feature = "audio-underrun-diag")]
     {
-        if missing_samples != 0 {
-            UNDERRUN_EVENTS.fetch_add(1, Ordering::Relaxed);
-            UNDERRUN_SAMPLES.fetch_add(missing_samples, Ordering::Relaxed);
-        }
+        UNDERRUN_ACTIVE.store(underrun_active, Ordering::Relaxed);
+        UNDERRUN_SAMPLES.fetch_add(missing_samples, Ordering::Relaxed);
     }
     PACKET_BYTES as u16
 }
@@ -427,6 +437,7 @@ pub fn note_fifo_write_failure() {
 
 #[cfg(feature = "audio-underrun-diag")]
 fn reset_audio_diagnostics() {
+    UNDERRUN_ACTIVE.store(false, Ordering::Relaxed);
     UNDERRUN_EVENTS.store(0, Ordering::Relaxed);
     UNDERRUN_SAMPLES.store(0, Ordering::Relaxed);
     PCM_SAMPLES_RENDERED.store(0, Ordering::Relaxed);
