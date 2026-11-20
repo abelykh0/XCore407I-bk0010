@@ -29,6 +29,8 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
+// Keep BLEP separate so it is added after source samples are resampled.
+static mut BLEP_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 const RESAMPLER_ONE: u32 = 1 << 16;
 const RESAMPLER_MAX_CORRECTION: i32 = 328; // approximately +/-0.5%
@@ -149,13 +151,17 @@ impl BkEmulatorAudio {
 
             self.apply_edges_through(sample_phase);
             let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
-            let sample = (raw_sample as i32 + self.blep_edge_correction(sample_phase))
+            let blep_sample = self.blep_edge_correction(sample_phase)
                 .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
                     .cast::<i16>()
                     .add((head & PCM_RING_MASK) as usize)
-                    .write(sample);
+                    .write(raw_sample);
+                core::ptr::addr_of_mut!(BLEP_RING)
+                    .cast::<i16>()
+                    .add((head & PCM_RING_MASK) as usize)
+                    .write(blep_sample);
             }
             head = head.wrapping_add(1);
             self.next_sample_phase = self.next_sample_phase
@@ -273,10 +279,31 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             } else {
                 s0
             };
+            let b0 = unsafe {
+                core::ptr::addr_of!(BLEP_RING)
+                    .cast::<i16>()
+                    .add((tail & PCM_RING_MASK) as usize)
+                    .read()
+            };
+            let b1 = if available > 1 {
+                unsafe {
+                    core::ptr::addr_of!(BLEP_RING)
+                        .cast::<i16>()
+                        .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
+                        .read()
+                }
+            } else {
+                b0
+            };
 
             let fraction = (resampler.phase & 0xFFFF) as i32;
-            let interpolated = s0 as i32
+            let resampled_raw = s0 as i32
                 + (((s1 as i32 - s0 as i32) * fraction) >> 16);
+            let resampled_blep = b0 as i32
+                + (((b1 as i32 - b0 as i32) * fraction) >> 16);
+            // Apply the band-limiting correction in the output sample domain.
+            let output_sample = (resampled_raw + resampled_blep)
+                .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32);
 
             resampler.phase = resampler.phase.wrapping_add(resampler.step);
             let consumed = (resampler.phase >> 16) as u16;
@@ -290,7 +317,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                 tail = tail.wrapping_add(consumed);
                 resampler.phase &= 0xFFFF;
             }
-            interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+            output_sample as i16
         } else {
             // Do not advance the source cursor while empty; the next valid
             // sample starts a fresh interpolation interval.
