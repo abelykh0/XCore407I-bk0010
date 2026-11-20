@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicU16, Ordering};
 use core::sync::atomic::{AtomicBool, AtomicU32};
 
 const AUDIO_STARTUP_LATENCY_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE / 1_000;
-const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 2 / 1_000;
+const AUDIO_PREFILL_PHASE: u32 = PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE * 3 / 1_000;
 
 const PDP_CLOCK_HZ: u32 = 3_000_000;
 const PHASE_UNITS_PER_CYCLE: u32 = 4;
