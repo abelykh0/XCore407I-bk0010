@@ -59,6 +59,8 @@ const RESAMPLER_ONE: u32 = 1 << 16;
 const RESAMPLER_TARGET_OCCUPANCY: i32 = 72; // 3 ms at 24 kHz.
 const RESAMPLER_CONTROL_PACKETS: u8 = 80; // 10 ms at 8 kHz.
 const RESAMPLER_CORRECTION_LIMIT_PPM: i32 = 5_000;
+// Gentle one-pole speaker-response roll-off: alpha=0.75 at 24 kHz (~5.3 kHz cutoff).
+const SPEAKER_FILTER_ALPHA_Q7: i32 = 96;
 
 /// USB-side source-position controller. The output cadence remains fixed;
 /// only the fractional source position advances slightly faster or slower.
@@ -67,6 +69,7 @@ struct PcmResampler {
     phase: u32,
     step: u32,
     control_packets: u8,
+    speaker_filter_q7: i32,
 }
 
 impl PcmResampler {
@@ -75,7 +78,18 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             control_packets: 0,
+            speaker_filter_q7: 0,
         }
+    }
+
+    /// Apply a mild one-pole speaker-response filter after resampling.
+    #[inline]
+    fn filter_speaker_sample(&mut self, sample: i16) -> i16 {
+        const SCALE: i32 = 1 << 7;
+        let target = sample as i32 * SCALE;
+        self.speaker_filter_q7 +=
+            ((target - self.speaker_filter_q7) * SPEAKER_FILTER_ALPHA_Q7) >> 7;
+        (self.speaker_filter_q7 >> 7).clamp(i16::MIN as i32, i16::MAX as i32) as i16
     }
 
     /// A fuller ring increases the source step, draining it faster.
@@ -371,6 +385,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             }
             0
         };
+        let sample = resampler.filter_speaker_sample(sample);
 
         let bytes = sample.to_le_bytes();
         buffer[index * 2] = bytes[0];
