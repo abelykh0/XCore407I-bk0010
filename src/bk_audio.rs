@@ -87,7 +87,7 @@ impl PcmResampler {
     fn update_rate_control(&mut self, occupancy: u16) {
         const PACKETS_PER_INTERVAL: u8 = 80; // 8 kHz USB microframes = 10 ms.
         const TARGET_OCCUPANCY: i32 = 72; // 3 ms at 24 kHz.
-        const CORRECTION_LIMIT_PPM: i32 = 1_000;
+        const CORRECTION_LIMIT_PPM: i32 = 5_000;
         const KP_PPM_PER_SAMPLE: i32 = 40;
         const KI_PPM_PER_SAMPLE_PER_INTERVAL: i32 = 2;
 
