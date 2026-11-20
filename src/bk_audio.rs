@@ -115,8 +115,30 @@ impl PcmResampler {
     // (sample_phase, next_phase] also contribute to the following sample;
     // carry that sum as a scalar instead of retaining an edge history array.
     #[inline(always)]
-    fn blep_correction(&mut self, sample_phase: u32) -> i32 {
-        let period = AUDIO_SAMPLE_PERIOD_PHASE;
+    fn blep_value(until_edge: i32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE as i32;
+        if until_edge > 0 {
+            if until_edge >= period {
+                return 0;
+            }
+            let t = (((period - until_edge) * 32_768) / period) as i32;
+            (t * t) >> 15
+        } else {
+            let age = -until_edge;
+            if age >= period {
+                return 0;
+            }
+            let t = ((age * 32_768) / period) as i32;
+            2 * t - ((t * t) >> 15) - 32_768
+        }
+    }
+
+    // Evaluate the BLEP at both actual resampled positions. The interval
+    // between output samples is not necessarily one source-sample period
+    // when the adaptive rate controller changes the source step.
+    #[inline(always)]
+    fn blep_correction(&mut self, sample_phase: u32, sample_delta: u32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE as i32;
         let mut correction = self.next_blep_correction;
         self.next_blep_correction = 0;
 
@@ -134,33 +156,21 @@ impl PcmResampler {
             }
 
             let (edge_phase, polarity) = self.pending_edge.unwrap();
-            let until_edge = edge_phase.wrapping_sub(sample_phase) as i32;
-            if until_edge > period as i32 {
+            let until_now = edge_phase.wrapping_sub(sample_phase) as i32;
+            let until_next = until_now.saturating_sub(sample_delta as i32);
+
+            correction +=
+                polarity * AUDIO_AMPLITUDE as i32 * Self::blep_value(until_now) / 32_768;
+
+            // If the edge is still more than one kernel period ahead of the
+            // next output position, retain it for a later sample. Otherwise
+            // consume it and carry its exact next-position correction.
+            if until_next > period {
                 break;
             }
 
-            if until_edge > 0 {
-                // The edge is ahead of this sample: apply the pre-edge
-                // polynomial now and carry its post-edge correction forward.
-                let t = (((period - until_edge as u32) * 32_768) / period) as i32;
-                let q = (t * t) >> 15;
-                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-
-                let age_next = period - until_edge as u32;
-                let t_next = ((age_next * 32_768) / period) as i32;
-                let q_next = 2 * t_next - ((t_next * t_next) >> 15) - 32_768;
-                self.next_blep_correction +=
-                    polarity * AUDIO_AMPLITUDE as i32 * q_next / 32_768;
-            } else {
-                // The edge is at or behind this sample.
-                let age = sample_phase.wrapping_sub(edge_phase) as i32;
-                if age >= 0 && (age as u32) < period {
-                    let t = (((age as u32) * 32_768) / period) as i32;
-                    let q = 2 * t - ((t * t) >> 15) - 32_768;
-                    correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-                }
-            }
-
+            self.next_blep_correction +=
+                polarity * AUDIO_AMPLITUDE as i32 * Self::blep_value(until_next) / 32_768;
             self.pending_edge = None;
         }
 
@@ -381,9 +391,17 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                 (AUDIO_SAMPLE_PERIOD_PHASE.wrapping_mul(fraction)) >> 16,
             );
 
+            // Calculate the exact source-time distance to the next output
+            // position, including the fractional phase accumulator.
+            let phase_after = resampler.phase as u64 + resampler.step as u64;
+            let current_offset =
+                (AUDIO_SAMPLE_PERIOD_PHASE as u64 * (resampler.phase as u64 & 0xFFFF)) >> 16;
+            let next_offset = (AUDIO_SAMPLE_PERIOD_PHASE as u64 * phase_after) >> 16;
+            let sample_delta = (next_offset - current_offset) as u32;
+
             // BLEP is evaluated at the actual resampled position, after raw
-            // PCM interpolation rather than in the nominal-rate producer.
-            let sample = (interpolated + resampler.blep_correction(sample_phase))
+            // PCM interpolation, using the actual interval to the next sample.
+            let sample = (interpolated + resampler.blep_correction(sample_phase, sample_delta))
                 .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
 
             resampler.phase = resampler.phase.wrapping_add(resampler.step);
