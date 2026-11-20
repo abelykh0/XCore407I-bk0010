@@ -154,8 +154,8 @@ static void bk_timer_write_control(uint8_t value)
 }
 uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 
-// Audio output transition queue. The emulator is the single producer
-// (thread context); the USB Audio endpoint callback consumes transitions.
+// Audio output transition queue. The emulator is the single producer;
+// the main-loop renderer and USB consumer use independent read cursors.
 #define BK_AUDIO_EDGE_CAPACITY 512u
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
 static volatile uint16_t bk_audio_edge_head;

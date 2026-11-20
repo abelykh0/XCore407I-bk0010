@@ -31,8 +31,6 @@ static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 const RESAMPLER_ONE: u32 = 1 << 16;
-const RESAMPLER_MAX_CORRECTION: i32 = 328; // approximately +/-0.5%
-const RESAMPLER_TARGET_LEVEL: i32 = 128; // about 5.3 ms at 24 kHz
 
 #[derive(Clone, Copy)]
 struct PcmResampler {
@@ -261,9 +259,8 @@ impl BkEmulatorAudio {
 /// Resample one USB microframe from the emulator PCM ring at a controlled
 /// rate. USB always receives the fixed number of samples for this microframe.
 ///
-/// Buffer occupancy adjusts the source read step: a high level speeds up
-/// consumption slightly; a low level slows it down. Linear interpolation
-/// smooths the fractional source positions.
+/// The current test holds the source ratio at exactly 1.0. The phase
+/// accumulator remains available for later rate-control experiments.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
@@ -279,8 +276,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
-    // Diagnostic isolation: keep the resampler at exactly 1.0.
-    // This preserves fractional interpolation but disables occupancy feedback.
+    // Keep the ratio at exactly 1.0 while isolating post-resample BLEP.
     let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
     resampler.step = RESAMPLER_ONE;
 
