@@ -48,7 +48,6 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             source_phase,
-            previous_edge: None,
             pending_edge: None,
         }
     }
@@ -165,7 +164,6 @@ impl BkEmulatorAudio {
         } else if self.active {
             self.active = false;
             self.pending_edge = None;
-            self.previous_edge = None;
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
