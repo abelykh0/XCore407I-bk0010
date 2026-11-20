@@ -86,7 +86,6 @@ impl PcmResampler {
     }
 
     /// A fuller ring increases the source step, draining it faster.
-    /// The integral term is deliberately slow to avoid audible rate hunting.
     #[inline]
     fn update_rate(&mut self, occupancy: u16) {
         self.control_packets += 1;
