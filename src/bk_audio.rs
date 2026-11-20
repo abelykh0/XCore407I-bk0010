@@ -67,7 +67,6 @@ struct PcmResampler {
     phase: u32,
     step: u32,
     control_packets: u8,
-    integral_q7: i32,
 }
 
 impl PcmResampler {
@@ -76,7 +75,6 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             control_packets: 0,
-            integral_q7: 0,
         }
     }
 
@@ -91,11 +89,7 @@ impl PcmResampler {
         self.control_packets = 0;
 
         let error = occupancy as i32 - RESAMPLER_TARGET_OCCUPANCY;
-        self.integral_q7 = (self.integral_q7 + error)
-            .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM * 128,
-                   RESAMPLER_CORRECTION_LIMIT_PPM * 128);
-        let integral_ppm = self.integral_q7 / 128;
-        let correction_ppm = (error * 4 + integral_ppm)
+        let correction_ppm = (error * 4)
             .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM,
                    RESAMPLER_CORRECTION_LIMIT_PPM);
         self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
