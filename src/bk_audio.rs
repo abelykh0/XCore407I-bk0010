@@ -67,8 +67,6 @@ struct PcmResampler {
     phase: u32,
     step: u32,
     control_packets: u8,
-    // Q5 integral correction learns the persistent source/USB clock mismatch.
-    integral_ppm_q5: i32,
 }
 
 impl PcmResampler {
@@ -77,7 +75,6 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             control_packets: 0,
-            integral_ppm_q5: 0,
         }
     }
 
@@ -92,26 +89,8 @@ impl PcmResampler {
 
         let error = occupancy as i32 - RESAMPLER_TARGET_OCCUPANCY;
 
-        // Proportional correction responds to current FIFO displacement.
-        let proportional_ppm = error * 4;
-
-        // Integrate slowly (one update per 10 ms) to learn persistent clock
-        // mismatch. Q5 retains fractional ppm without floating-point math.
-        const INTEGRAL_LIMIT_PPM: i32 = 3_000;
-        let proposed_integral = (self.integral_ppm_q5 + error)
-            .clamp(-INTEGRAL_LIMIT_PPM * 32, INTEGRAL_LIMIT_PPM * 32);
-        let unconstrained_ppm = proportional_ppm + proposed_integral / 32;
-        let correction_ppm = unconstrained_ppm
-            .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM,
-                   RESAMPLER_CORRECTION_LIMIT_PPM);
-
-        // Conditional integration prevents windup when the rate limit is hit.
-        if unconstrained_ppm == correction_ppm
-            || (unconstrained_ppm > correction_ppm && error < 0)
-            || (unconstrained_ppm < correction_ppm && error > 0)
-        {
-            self.integral_ppm_q5 = proposed_integral;
-        }
+        let correction_ppm = (error * 4)
+            .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM, RESAMPLER_CORRECTION_LIMIT_PPM);
 
         self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
             / 1_000_000) as u32;
@@ -140,7 +119,6 @@ pub struct BkEmulatorAudio {
     next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
-    previous_edge: Option<(u32, i32)>,
     edge_queue_empty: bool,
     active: bool,
 }
@@ -151,7 +129,6 @@ impl BkEmulatorAudio {
             next_sample_phase: 0,
             sample_level: false,
             pending_edge: None,
-            previous_edge: None,
             edge_queue_empty: false,
             active: false,
         }
@@ -168,7 +145,6 @@ impl BkEmulatorAudio {
             if !self.active {
                 self.sample_level = bk_audio_start() != 0;
                 self.pending_edge = None;
-                self.previous_edge = None;
                 self.edge_queue_empty = false;
                 #[cfg(feature = "audio-underrun-diag")]
                 reset_audio_diagnostics();
@@ -184,7 +160,6 @@ impl BkEmulatorAudio {
         } else if self.active {
             self.active = false;
             self.pending_edge = None;
-            self.previous_edge = None;
             self.edge_queue_empty = false;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
@@ -230,14 +205,12 @@ impl BkEmulatorAudio {
             }
 
             let sample_phase = self.next_sample_phase;
-            if (render_until.wrapping_sub(sample_phase) as i32) < 0 {
+            let sample_end = sample_phase.wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
+            if (render_until.wrapping_sub(sample_end) as i32) < 0 {
                 break;
             }
 
-            self.apply_edges_through(sample_phase);
-            let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
-            let sample = (raw_sample as i32 + self.blep_edge_correction(sample_phase))
-                .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
+            let sample = self.render_sample_average(sample_phase);
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
                     .cast::<i16>()
@@ -256,37 +229,17 @@ impl BkEmulatorAudio {
         }
         rendered
     }
-    // Original compact polynomial BLEP correction. Retains only the
-    // immediately preceding and next transition; no edge-history array.
-    #[inline(always)]
-    fn blep_edge_correction(&self, sample_phase: u32) -> i32 {
+    /// Reconstruct one PCM sample as the exact time-average of the speaker
+    /// level over its 125-PDP-cycle interval. Every captured edge in the
+    /// interval contributes, including multiple transitions between samples.
+    /// This is a box-filter reconstruction; it needs no edge-history buffer.
+    #[inline]
+    fn render_sample_average(&mut self, sample_start: u32) -> i16 {
         let period = AUDIO_SAMPLE_PERIOD_PHASE;
-        let mut correction = 0i32;
+        let sample_end = sample_start.wrapping_add(period);
+        let mut cursor = sample_start;
+        let mut signed_area = 0i32;
 
-        if let Some((edge_phase, polarity)) = self.previous_edge {
-            let age = sample_phase.wrapping_sub(edge_phase) as i32;
-            if age >= 0 && (age as u32) < period {
-                let t = ((age as u32 * 32_768) / period) as i32;
-                let q = 2 * t - ((t * t) >> 15) - 32_768;
-                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-            }
-        }
-
-        if let Some((edge_cycle, edge_level)) = self.pending_edge {
-            let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
-            let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
-            if ahead > 0 && (ahead as u32) < period {
-                let t = (((period - ahead as u32) * 32_768) / period) as i32;
-                let q = (t * t) >> 15;
-                let polarity = if edge_level { 1 } else { -1 };
-                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-            }
-        }
-
-        correction
-    }
-
-    fn apply_edges_through(&mut self, sample_phase: u32) {
         loop {
             if self.pending_edge.is_none() {
                 if self.edge_queue_empty {
@@ -303,18 +256,34 @@ impl BkEmulatorAudio {
 
             let (edge_cycle, edge_level) = self.pending_edge.unwrap();
             let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
-            if sample_phase.wrapping_sub(edge_phase) as i32 >= 0 {
+            let offset = edge_phase.wrapping_sub(sample_start) as i32;
+
+            // Consume late edges and edges exactly at the sample start before
+            // integrating the interval. They contribute no elapsed duration.
+            if offset < 0 || offset == 0 {
                 self.sample_level = edge_level;
-                self.previous_edge = Some((
-                    edge_phase,
-                    if edge_level { 1 } else { -1 },
-                ));
                 self.pending_edge = None;
                 unsafe { bk_audio_discard_edges(1) };
-            } else {
+                continue;
+            }
+
+            // An edge at the interval end belongs to the next sample.
+            if offset as u32 >= period {
                 break;
             }
+
+            let duration = edge_phase.wrapping_sub(cursor) as i32;
+            signed_area += if self.sample_level { duration } else { -duration };
+            cursor = edge_phase;
+            self.sample_level = edge_level;
+            self.pending_edge = None;
+            unsafe { bk_audio_discard_edges(1) };
         }
+
+        let remaining = sample_end.wrapping_sub(cursor) as i32;
+        signed_area += if self.sample_level { remaining } else { -remaining };
+        ((signed_area * AUDIO_AMPLITUDE as i32) / period as i32)
+            .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16
     }
 
 }
