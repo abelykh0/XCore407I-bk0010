@@ -50,6 +50,8 @@ static RENDER_GAP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static MAX_RENDER_GAP_DWT: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "audio-underrun-diag")]
 static FIFO_WRITE_FAILURES: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "audio-underrun-diag")]
+static PCM_RING_FULL_EVENTS: AtomicU32 = AtomicU32::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 const RESAMPLER_ONE: u32 = 1 << 16;
@@ -228,6 +230,8 @@ impl BkEmulatorAudio {
         let mut rendered = 0usize;
         while rendered < max_samples {
             if head.wrapping_sub(tail) >= PCM_RING_CAPACITY {
+                #[cfg(feature = "audio-underrun-diag")]
+                PCM_RING_FULL_EVENTS.fetch_add(1, Ordering::Relaxed);
                 break;
             }
 
@@ -401,7 +405,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
 /// Return and reset audio pipeline diagnostics for the previous interval.
 #[cfg(feature = "audio-underrun-diag")]
-pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32) {
+pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32, u32) {
     let underruns = UNDERRUN_EVENTS.swap(0, Ordering::AcqRel);
     let missing_samples = UNDERRUN_SAMPLES.swap(0, Ordering::AcqRel);
     let generated = PCM_SAMPLES_RENDERED.swap(0, Ordering::AcqRel);
@@ -416,6 +420,7 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32) {
     let max_gap_us = ((max_gap_dwt as u64 * 1_000_000) / 168_000_000) as u32;
     let edge_overflows = unsafe { bk_audio_take_edge_overflows() };
     let fifo_failures = FIFO_WRITE_FAILURES.swap(0, Ordering::AcqRel);
+    let ring_full_events = PCM_RING_FULL_EVENTS.swap(0, Ordering::AcqRel);
     let head = PCM_HEAD.load(Ordering::Acquire);
     let tail = PCM_TAIL.load(Ordering::Acquire);
     (
@@ -427,6 +432,7 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32) {
         max_gap_us,
         edge_overflows,
         fifo_failures,
+        ring_full_events,
     )
 }
 
@@ -446,6 +452,7 @@ fn reset_audio_diagnostics() {
     RENDER_GAP_INITIALIZED.store(false, Ordering::Relaxed);
     MAX_RENDER_GAP_DWT.store(0, Ordering::Relaxed);
     FIFO_WRITE_FAILURES.store(0, Ordering::Relaxed);
+    PCM_RING_FULL_EVENTS.store(0, Ordering::Relaxed);
 }
 
 #[cfg(feature = "audio-underrun-diag")]
