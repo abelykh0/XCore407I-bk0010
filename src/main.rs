@@ -1065,15 +1065,15 @@ fn main() -> ! {
                         while prepare_next_video_batch(&mut video_renderer) {}
                     }
 
-                    // Convert queued BK speaker transitions into PCM in thread
-                    // context. The USB audio completion callback only drains
-                    // this ring and must never perform sample rendering itself.
-                    xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
-
                     service_keyboard_frame_pacing();
                 }
             }
         }
+
+        // Render queued speaker transitions on every main-loop pass, not only
+        // after a PDP instruction batch. This keeps PCM production responsive
+        // while the emulator is caught up and USB/video work is being serviced.
+        xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
     }
 }
 
