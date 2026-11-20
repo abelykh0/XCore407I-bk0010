@@ -213,20 +213,29 @@ uint32_t bk_audio_take_edge_overflows(void)
     return count;
 }
 
-uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
+uint8_t bk_audio_peek_edge(uint16_t offset, uint32_t *cycles, uint8_t *level)
 {
     uint16_t tail = bk_audio_edge_render_tail;
-    if (tail == bk_audio_edge_head || cycles == NULL || level == NULL) {
+    uint16_t used = (uint16_t)(bk_audio_edge_head - tail);
+    if (offset >= used || cycles == NULL || level == NULL) {
         return 0u;
     }
 
     __asm volatile("dmb" ::: "memory");
-    uint16_t slot = tail & BK_AUDIO_EDGE_MASK;
+    uint16_t slot = (uint16_t)(tail + offset) & BK_AUDIO_EDGE_MASK;
     *cycles = bk_audio_edge_cycles[slot];
     *level = bk_audio_edge_levels[slot];
     __asm volatile("dmb" ::: "memory");
-    bk_audio_edge_render_tail = (uint16_t)(tail + 1u);
     return 1u;
+}
+
+void bk_audio_discard_edges(uint16_t count)
+{
+    uint16_t tail = bk_audio_edge_render_tail;
+    uint16_t used = (uint16_t)(bk_audio_edge_head - tail);
+    if (count > used) count = used;
+    __asm volatile("dmb" ::: "memory");
+    bk_audio_edge_render_tail = (uint16_t)(tail + count);
 }
 
 // STOP key requests the independent hardware IRQ1 (priority 5, vector 000004).
