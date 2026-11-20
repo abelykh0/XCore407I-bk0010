@@ -160,7 +160,6 @@ uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
 static volatile uint16_t bk_audio_edge_head;
 static volatile uint16_t bk_audio_edge_render_tail;
-static volatile uint16_t bk_audio_edge_blep_tail;
 static volatile uint8_t bk_audio_enabled;
 static uint8_t bk_audio_level;
 static uint32_t bk_audio_edge_overflows;
@@ -174,9 +173,7 @@ static void bk_audio_record_level(uint8_t level)
 
     uint16_t head = bk_audio_edge_head;
     uint16_t render_used = (uint16_t)(head - bk_audio_edge_render_tail);
-    uint16_t blep_used = (uint16_t)(head - bk_audio_edge_blep_tail);
-    if (render_used >= BK_AUDIO_EDGE_CAPACITY ||
-        blep_used >= BK_AUDIO_EDGE_CAPACITY) {
+    if (render_used >= BK_AUDIO_EDGE_CAPACITY) {
         bk_audio_edge_overflows++;
         // Preserve the last successfully queued level so a later write can
         // retry recording the current speaker state after space becomes free.
@@ -196,7 +193,6 @@ uint8_t bk_audio_start(void)
 {
     // Called from the USB ISR; the emulator producer is paused while this runs.
     bk_audio_edge_render_tail = bk_audio_edge_head;
-    bk_audio_edge_blep_tail = bk_audio_edge_head;
     bk_audio_edge_overflows = 0;
     bk_audio_level = (port0177716 & 0x0040u) ? 1u : 0u;
     __asm volatile("dmb" ::: "memory");
@@ -230,23 +226,6 @@ uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
     *level = bk_audio_edge_levels[slot];
     __asm volatile("dmb" ::: "memory");
     bk_audio_edge_render_tail = (uint16_t)(tail + 1u);
-    return 1u;
-}
-
-// USB retains an independent cursor for post-resample BLEP correction.
-uint8_t bk_audio_pop_blep_edge(uint32_t *cycles, uint8_t *level)
-{
-    uint16_t tail = bk_audio_edge_blep_tail;
-    if (tail == bk_audio_edge_head || cycles == NULL || level == NULL) {
-        return 0u;
-    }
-
-    __asm volatile("dmb" ::: "memory");
-    uint16_t slot = tail & BK_AUDIO_EDGE_MASK;
-    *cycles = bk_audio_edge_cycles[slot];
-    *level = bk_audio_edge_levels[slot];
-    __asm volatile("dmb" ::: "memory");
-    bk_audio_edge_blep_tail = (uint16_t)(tail + 1u);
     return 1u;
 }
 
@@ -399,7 +378,6 @@ void bk_reset(void)
     bk_audio_level = 0;
     bk_audio_edge_head = 0;
     bk_audio_edge_render_tail = 0;
-    bk_audio_edge_blep_tail = 0;
     stop_irq_pending = 0;
     io_stop_happened = 0;
     last_branch = 0;
