@@ -311,7 +311,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         } else if available == 1 {
             // Hold the final available sample until its interpolation neighbor arrives.
             #[cfg(feature = "audio-underrun-diag")]
-            underrun_active = false;
+            {
+                underrun_active = false;
+            }
             unsafe {
                 core::ptr::addr_of!(PCM_RING)
                     .cast::<i16>()
@@ -363,7 +365,7 @@ pub fn take_audio_diagnostics() -> (u32, u32, u16, i32, u16, u32, u32, u32, u32,
     };
     let max_gap_dwt = MAX_RENDER_GAP_DWT.swap(0, Ordering::AcqRel);
     let max_gap_us = ((max_gap_dwt as u64 * 1_000_000) / 168_000_000) as u32;
-    let edge_overflows = unsafe { bk_audio_take_edge_overflows() };
+    let edge_overflows = bk_audio_take_edge_overflows();
     let fifo_failures = FIFO_WRITE_FAILURES.swap(0, Ordering::AcqRel);
     let ring_full_events = PCM_RING_FULL_EVENTS.swap(0, Ordering::AcqRel);
     let head = PCM_HEAD.load(Ordering::Acquire);
