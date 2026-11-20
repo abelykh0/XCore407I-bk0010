@@ -1001,6 +1001,7 @@ fn main() -> ! {
                     edge_overflows,
                     fifo_failures,
                     ring_full_events,
+                    resampler_correction_ppm,
                 ) = xcore407i_blinker::bk_audio::take_audio_diagnostics();
                 show_audio_underrun_diagnostics(
                     underruns,
@@ -1012,6 +1013,7 @@ fn main() -> ! {
                     edge_overflows,
                     fifo_failures,
                     ring_full_events,
+                    resampler_correction_ppm,
                 );
                 audio_diag_last_ms = now_ms;
             }
