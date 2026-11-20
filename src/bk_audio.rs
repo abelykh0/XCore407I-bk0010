@@ -109,27 +109,14 @@ unsafe extern "C" {
     safe fn bk_audio_stop();
     #[cfg(feature = "audio-underrun-diag")]
     safe fn bk_audio_take_edge_overflows() -> u32;
-    fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
+    fn bk_audio_peek_edge(offset: u16, cycles: *mut u32, level: *mut u8) -> u8;
+    fn bk_audio_discard_edges(count: u16);
 }
-
-#[derive(Clone, Copy)]
-struct BlepEdge {
-    phase: u32,
-    level: bool,
-}
-
-const BLEP_EDGE_HISTORY_CAPACITY: usize = 128;
 
 pub struct BkEmulatorAudio {
     // Quarter-cycle units preserve exact sample timing; at 24 kHz each sample is 125 PDP cycles.
     next_sample_phase: u32,
     sample_level: bool,
-    pending_edge: Option<(u32, bool)>,
-    // All transitions within the BLEP support window, in timestamp order.
-    blep_edges: [BlepEdge; BLEP_EDGE_HISTORY_CAPACITY],
-    blep_edge_count: usize,
-    blep_applied_count: usize,
-    edge_queue_empty: bool,
     active: bool,
 }
 
@@ -138,11 +125,6 @@ impl BkEmulatorAudio {
         Self {
             next_sample_phase: 0,
             sample_level: false,
-            pending_edge: None,
-            blep_edges: [BlepEdge { phase: 0, level: false }; BLEP_EDGE_HISTORY_CAPACITY],
-            blep_edge_count: 0,
-            blep_applied_count: 0,
-            edge_queue_empty: false,
             active: false,
         }
     }
@@ -159,9 +141,6 @@ impl BkEmulatorAudio {
                 self.sample_level = bk_audio_start() != 0;
                 #[cfg(feature = "audio-underrun-diag")]
                 reset_audio_diagnostics();
-                self.pending_edge = None;
-                self.blep_edge_count = 0;
-                self.blep_applied_count = 0;
                 unsafe {
                     core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
                 }
@@ -173,9 +152,6 @@ impl BkEmulatorAudio {
             }
         } else if self.active {
             self.active = false;
-            self.pending_edge = None;
-            self.blep_edge_count = 0;
-            self.blep_applied_count = 0;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
             }
@@ -204,9 +180,6 @@ impl BkEmulatorAudio {
         #[cfg(feature = "audio-underrun-diag")]
         record_render_interval();
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
-        // Emulator execution and rendering are sequential in the main loop, so
-        // an empty edge queue stays empty for the rest of this render batch.
-        self.edge_queue_empty = false;
         // Keep producer indices local and publish the new head once per batch.
         // A stale tail is conservative: the USB consumer can only advance it.
         let mut head = PCM_HEAD.load(Ordering::Relaxed);
@@ -224,9 +197,9 @@ impl BkEmulatorAudio {
                 break;
             }
 
-            self.prepare_blep_edges(sample_phase);
+            let correction = self.process_blep_edges(sample_phase);
             let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
-            let sample = (raw_sample as i32 + self.blep_edge_correction(sample_phase))
+            let sample = (raw_sample as i32 + correction)
                 .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
@@ -246,96 +219,61 @@ impl BkEmulatorAudio {
         }
         rendered
     }
-    // Sum the compact polynomial BLEP contribution from every transition
-    // whose one-sample support overlaps this output sample.
-    #[inline(always)]
-    fn blep_edge_correction(&self, sample_phase: u32) -> i32 {
-        let period = AUDIO_SAMPLE_PERIOD_PHASE;
+    // Use the existing C edge ring as BLEP history. Do not copy transitions
+    // into a second array: scan queued edges, sum their contributions, then
+    // release only edges whose one-sample BLEP support has expired.
+    fn process_blep_edges(&mut self, sample_phase: u32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE as i32;
         let mut correction = 0i32;
+        let mut offset = 0u16;
+        let mut discard = 0u16;
 
-        for edge in self.blep_edges[..self.blep_edge_count].iter() {
-            let age = sample_phase.wrapping_sub(edge.phase) as i32;
-            let polarity = if edge.level { 1 } else { -1 };
+        loop {
+            let mut cycles = 0u32;
+            let mut level = 0u8;
+            if unsafe { bk_audio_peek_edge(offset, &mut cycles, &mut level) } == 0 {
+                break;
+            }
 
-            if age >= 0 && (age as u32) < period {
-                let t = ((age as u32 * 32_768) / period) as i32;
+            let edge_phase = cycles.wrapping_mul(PHASE_UNITS_PER_CYCLE);
+            let delta = edge_phase.wrapping_sub(sample_phase) as i32;
+
+            // The queue is timestamp ordered. No later edge can contribute.
+            if delta >= period {
+                break;
+            }
+
+            let edge_level = level != 0;
+            if delta <= -period {
+                // The correction has expired, but this transition still sets
+                // the held speaker level.
+                self.sample_level = edge_level;
+                discard = discard.wrapping_add(1);
+                offset = offset.wrapping_add(1);
+                continue;
+            }
+
+            let polarity = if edge_level { 1 } else { -1 };
+            if delta <= 0 {
+                self.sample_level = edge_level;
+                let age = (-delta) as u32;
+                let t = ((age * 32_768) / period as u32) as i32;
                 let q = 2 * t - ((t * t) >> 15) - 32_768;
                 correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
             } else {
-                let ahead = edge.phase.wrapping_sub(sample_phase) as i32;
-                if ahead > 0 && (ahead as u32) < period {
-                    let t = (((period - ahead as u32) * 32_768) / period) as i32;
-                    let q = (t * t) >> 15;
-                    correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-                }
+                let ahead = delta as u32;
+                let t = (((period as u32 - ahead) * 32_768) / period as u32) as i32;
+                let q = (t * t) >> 15;
+                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
             }
+
+            offset = offset.wrapping_add(1);
         }
 
+        if discard != 0 {
+            unsafe { bk_audio_discard_edges(discard) };
+        }
         correction
-    }
-
-    // Retain every transition whose BLEP support overlaps this sample. Old
-    // transitions update the held level; future transitions remain queued.
-    fn prepare_blep_edges(&mut self, sample_phase: u32) {
-        let period = AUDIO_SAMPLE_PERIOD_PHASE as i32;
-
-        while self.blep_edge_count != 0 {
-            let age = sample_phase.wrapping_sub(self.blep_edges[0].phase) as i32;
-            if age < period {
-                break;
-            }
-            for index in 1..self.blep_edge_count {
-                self.blep_edges[index - 1] = self.blep_edges[index];
-            }
-            self.blep_edge_count -= 1;
-            self.blep_applied_count = self.blep_applied_count.saturating_sub(1);
-        }
-
-        loop {
-            if self.pending_edge.is_none() {
-                if self.edge_queue_empty {
-                    break;
-                }
-                let mut cycles = 0u32;
-                let mut level = 0u8;
-                if unsafe { bk_audio_pop_edge(&mut cycles, &mut level) } == 0 {
-                    self.edge_queue_empty = true;
-                    break;
-                }
-                self.pending_edge = Some((cycles, level != 0));
-            }
-
-            let (edge_cycle, edge_level) = self.pending_edge.unwrap();
-            let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
-            let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
-            if ahead >= period {
-                break;
-            }
-
-            if ahead <= -period {
-                // Its BLEP support has ended, but its logic level still applies.
-                self.sample_level = edge_level;
-            } else if self.blep_edge_count < BLEP_EDGE_HISTORY_CAPACITY {
-                self.blep_edges[self.blep_edge_count] = BlepEdge {
-                    phase: edge_phase,
-                    level: edge_level,
-                };
-                self.blep_edge_count += 1;
-            } else {
-                // Keep the edge pending; older entries will expire next sample.
-                break;
-            }
-            self.pending_edge = None;
-        }
-
-        while self.blep_applied_count < self.blep_edge_count {
-            let edge = self.blep_edges[self.blep_applied_count];
-            if (sample_phase.wrapping_sub(edge.phase) as i32) < 0 {
-                break;
-            }
-            self.sample_level = edge.level;
-            self.blep_applied_count += 1;
-        }
     }
 
 }
