@@ -60,6 +60,8 @@ const RESAMPLER_ONE: u32 = 1 << 16;
 struct PcmResampler {
     phase: u32,
     step: u32,
+    control_packets: u8,
+    integral_ppm: i32,
     // Emulator-cycle phase corresponding to PCM_RING[PCM_TAIL].
     source_phase: u32,
     pending_edge: Option<(u32, i32)>,
@@ -71,10 +73,42 @@ impl PcmResampler {
         Self {
             phase: 0,
             step: RESAMPLER_ONE,
+            control_packets: 0,
+            integral_ppm: 0,
             source_phase,
             pending_edge: None,
             next_blep_correction: 0,
         }
+    }
+
+    // Correct the source/output ratio every 10 ms using PCM-ring occupancy.
+    // A fuller ring increases the source step so the consumer drains it faster.
+    #[inline]
+    fn update_rate_control(&mut self, occupancy: u16) {
+        const PACKETS_PER_INTERVAL: u8 = 80; // 8 kHz USB microframes = 10 ms.
+        const TARGET_OCCUPANCY: i32 = 72; // 3 ms at 24 kHz.
+        const CORRECTION_LIMIT_PPM: i32 = 1_000;
+        const KP_PPM_PER_SAMPLE: i32 = 40;
+        const KI_PPM_PER_SAMPLE_PER_INTERVAL: i32 = 2;
+
+        self.control_packets += 1;
+        if self.control_packets < PACKETS_PER_INTERVAL {
+            return;
+        }
+        self.control_packets = 0;
+
+        let error = occupancy as i32 - TARGET_OCCUPANCY;
+        self.integral_ppm = (self.integral_ppm
+            + error * KI_PPM_PER_SAMPLE_PER_INTERVAL)
+            .clamp(-CORRECTION_LIMIT_PPM, CORRECTION_LIMIT_PPM);
+        let correction_ppm = (error * KP_PPM_PER_SAMPLE + self.integral_ppm)
+            .clamp(-CORRECTION_LIMIT_PPM, CORRECTION_LIMIT_PPM);
+
+        // step is source samples consumed per USB output sample.
+        // Positive occupancy error therefore requires a step above 1.0.
+        self.step = ((RESAMPLER_ONE as i64
+            * (1_000_000 + correction_ppm) as i64)
+            / 1_000_000) as u32;
     }
 
     // Sum every edge affecting this output sample. Edges in the interval
@@ -292,8 +326,8 @@ impl BkEmulatorAudio {
 /// Resample one USB microframe from the emulator PCM ring at a controlled
 /// rate. USB always receives the fixed number of samples for this microframe.
 ///
-/// The current test holds the source ratio at exactly 1.0. The phase
-/// accumulator remains available for later rate-control experiments.
+/// A slow occupancy controller adjusts the source ratio around 1.0 so
+/// emulator and USB clock differences do not accumulate in the PCM ring.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
@@ -309,9 +343,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
-    // Keep the ratio at exactly 1.0 while isolating post-resample BLEP.
     let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
-    resampler.step = RESAMPLER_ONE;
+    resampler.update_rate_control(head.wrapping_sub(tail));
 
     #[cfg(feature = "audio-underrun-diag")]
     let mut missing_samples = 0u32;
