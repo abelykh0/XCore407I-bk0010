@@ -58,6 +58,12 @@ pub extern "C" fn xcore_tud_audio_render() {
     }
 }
 
+/// Record a failed TinyUSB FIFO write for the optional audio diagnostics.
+#[unsafe(no_mangle)]
+pub extern "C" fn xcore_tud_audio_note_write_failure() {
+    crate::bk_audio::note_fifo_write_failure();
+}
+
 /// USB completion callback: copy pre-rendered PCM samples only.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
