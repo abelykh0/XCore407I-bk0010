@@ -128,7 +128,6 @@ pub struct BkEmulatorAudio {
     next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
-    previous_edge: Option<(u32, i32)>,
     edge_queue_empty: bool,
     active: bool,
 }
@@ -156,7 +155,6 @@ impl BkEmulatorAudio {
             if !self.active {
                 self.sample_level = bk_audio_start() != 0;
                 self.pending_edge = None;
-                self.previous_edge = None;
                 self.next_sample_phase = Self::cycle_phase()
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 PCM_TAIL.store(0, Ordering::Relaxed);
@@ -214,14 +212,14 @@ impl BkEmulatorAudio {
             }
 
             self.apply_edges_through(sample_phase);
+            // Store only the raw speaker level. BLEP is applied later by
+            // the USB consumer, after the PCM sample position is resampled.
             let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
-            let sample = (raw_sample as i32 + self.blep_edge_correction(sample_phase))
-                .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
                     .cast::<i16>()
                     .add((head & PCM_RING_MASK) as usize)
-                    .write(sample);
+                    .write(raw_sample);
             }
             head = head.wrapping_add(1);
             self.next_sample_phase = self.next_sample_phase
@@ -233,36 +231,6 @@ impl BkEmulatorAudio {
         }
         rendered
     }
-    // Apply a compact polynomial BLEP correction around each speaker edge.
-    // The correction is calculated in Q15 to avoid floating-point work here.
-    #[inline(always)]
-    fn blep_edge_correction(&self, sample_phase: u32) -> i32 {
-        let period = AUDIO_SAMPLE_PERIOD_PHASE;
-        let mut correction = 0i32;
-
-        if let Some((edge_phase, polarity)) = self.previous_edge {
-            let age = sample_phase.wrapping_sub(edge_phase) as i32;
-            if age >= 0 && (age as u32) < period {
-                let t = ((age as u32 * 32_768) / period) as i32;
-                let q = 2 * t - ((t * t) >> 15) - 32_768;
-                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-            }
-        }
-
-        if let Some((edge_cycle, edge_level)) = self.pending_edge {
-            let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
-            let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
-            if ahead > 0 && (ahead as u32) < period {
-                let t = (((period - ahead as u32) * 32_768) / period) as i32;
-                let q = (t * t) >> 15;
-                let polarity = if edge_level { 1 } else { -1 };
-                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-            }
-        }
-
-        correction
-    }
-
     fn apply_edges_through(&mut self, sample_phase: u32) {
         loop {
             if self.pending_edge.is_none() {
@@ -281,10 +249,6 @@ impl BkEmulatorAudio {
             let (edge_cycle, edge_level) = self.pending_edge.unwrap();
             if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE)) as i32 >= 0 {
                 self.sample_level = edge_level;
-                self.previous_edge = Some((
-                    edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE),
-                    if edge_level { 1 } else { -1 },
-                ));
                 self.pending_edge = None;
             } else {
                 break;
