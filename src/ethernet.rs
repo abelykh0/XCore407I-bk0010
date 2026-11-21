@@ -6,6 +6,7 @@
 
 use core::marker::PhantomData;
 use core::ptr::{addr_of_mut, read_volatile, write_volatile};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
@@ -54,6 +55,8 @@ const TX_DESC_TCH: u32 = 1 << 20;
 const TX_DESC_FS: u32 = 1 << 28;
 const TX_DESC_LS: u32 = 1 << 29;
 const TX_DESC_IC: u32 = 1 << 30;
+
+const MAC_ADDRESS: [u8; 6] = [0x02, 0x12, 0x09, 0x40, 0x70, 0x01];
 
 const DP83848_ID1: u16 = 0x2000;
 const DP83848_ID2_MASK: u16 = 0xfff0;
@@ -352,6 +355,83 @@ impl TxToken for EthernetTxToken<'_> {
             );
             write_volatile(ETH_DMATPDR, 0);
             result
+        }
+    }
+}
+
+
+static IPV4_ADDRESS: AtomicU32 = AtomicU32::new(0);
+static IPV4_PREFIX: AtomicU8 = AtomicU8::new(0);
+
+/// Current DHCP address and prefix, if a lease has been acquired.
+pub fn ipv4_config() -> Option<([u8; 4], u8)> {
+    let address = IPV4_ADDRESS.load(Ordering::Acquire);
+    if address == 0 {
+        None
+    } else {
+        Some((address.to_be_bytes(), IPV4_PREFIX.load(Ordering::Acquire)))
+    }
+}
+
+/// Small no-heap DHCP client around the polled Ethernet device.
+pub struct EthernetNetwork<'a> {
+    device: EthernetDevice,
+    iface: smoltcp::iface::Interface,
+    sockets: smoltcp::iface::SocketSet<'a>,
+    dhcp_handle: smoltcp::iface::SocketHandle,
+}
+
+impl<'a> EthernetNetwork<'a> {
+    /// Create a network interface using caller-provided fixed socket storage.
+    pub fn new(storage: &'a mut [smoltcp::iface::SocketStorage<'a>]) -> Self {
+        use smoltcp::iface::{Config, Interface, SocketSet};
+        use smoltcp::socket::dhcpv4::Socket as Dhcpv4Socket;
+        use smoltcp::wire::{EthernetAddress, HardwareAddress};
+
+        let mut device = EthernetDevice::new();
+        let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress(MAC_ADDRESS)));
+        config.random_seed = 0x4071_1209_2026_0001;
+        let iface = Interface::new(config, &mut device, Instant::from_millis(0));
+        let mut sockets = SocketSet::new(storage);
+        let dhcp_handle = sockets.add(Dhcpv4Socket::new());
+
+        Self { device, iface, sockets, dhcp_handle }
+    }
+
+    /// Advance Ethernet, DHCP, and interface timers. Call frequently from the
+    /// foreground; no interrupt or executor is required.
+    pub fn poll(&mut self, now_ms: u32) {
+        if !is_initialized() {
+            return;
+        }
+
+        let timestamp = Instant::from_millis(now_ms as i64);
+        let _ = self.iface.poll(timestamp, &mut self.device, &mut self.sockets);
+
+        use smoltcp::socket::dhcpv4::Event as DhcpEvent;
+        if let Some(event) = self.sockets.get_mut::<smoltcp::socket::dhcpv4::Socket>(self.dhcp_handle).poll() {
+            match event {
+                DhcpEvent::Configured(config) => {
+                    let address = config.address;
+                    let router = config.router;
+                    self.iface.update_ip_addrs(|addrs| {
+                        addrs.clear();
+                        let _ = addrs.push(smoltcp::wire::IpCidr::Ipv4(address));
+                    });
+                    self.iface.routes_mut().remove_default_ipv4_route();
+                    if let Some(gateway) = router {
+                        let _ = self.iface.routes_mut().add_default_ipv4_route(gateway);
+                    }
+                    IPV4_ADDRESS.store(u32::from_be_bytes(address.address().octets()), Ordering::Release);
+                    IPV4_PREFIX.store(address.prefix_len(), Ordering::Release);
+                }
+                DhcpEvent::Deconfigured => {
+                    self.iface.update_ip_addrs(|addrs| addrs.clear());
+                    self.iface.routes_mut().remove_default_ipv4_route();
+                    IPV4_ADDRESS.store(0, Ordering::Release);
+                    IPV4_PREFIX.store(0, Ordering::Release);
+                }
+            }
         }
     }
 }
