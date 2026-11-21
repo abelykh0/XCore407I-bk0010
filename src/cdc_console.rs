@@ -1201,9 +1201,19 @@ pub fn service(
                             }
                             write_status(b"\r\nMAC/DMA: ");
                             write_status(if crate::ethernet::is_initialized() { b"initialized" } else { b"not initialized" });
-                            write_status(b"\r\nIPv4: no address (DHCP not yet enabled).\r\n> ");
-                        }
-                    } else if command_is(line, b"STATUS") {
+                            write_status(b"\r\nIPv4: ");
+                            if let Some((address, prefix)) = crate::ethernet::ipv4_config() {
+                                for (index, octet) in address.iter().enumerate() {
+                                    if index != 0 { write_status(b"."); }
+                                    write_decimal(*octet as usize);
+                                }
+                                write_status(b"/");
+                                write_decimal(prefix as usize);
+                            } else {
+                                write_status(b"acquiring via DHCP");
+                            }
+                            write_status(b"\r\n> ");
+                        } else if command_is(line, b"STATUS") {
                         write_status(if fs.is_some() {
                             STATUS_MOUNTED
                         } else {
