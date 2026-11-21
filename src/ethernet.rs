@@ -174,7 +174,7 @@ pub fn initialize() -> bool {
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         cortex_m::asm::dsb();
 
-        MAC_DMA_READY = true;
+        MAC_DMA_READY.store(true, Ordering::Release);
     }
     true
 }
