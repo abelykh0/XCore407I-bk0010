@@ -4,7 +4,7 @@
 //! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
 //! copies exactly three samples per 8 kHz microframe.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 #[cfg(feature = "audio-underrun-diag")]
 use core::sync::atomic::{AtomicBool, AtomicU32};
 
@@ -30,6 +30,7 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
+static RESAMPLER_CORRECTION_PPM: AtomicI32 = AtomicI32::new(0);
 #[cfg(feature = "audio-underrun-diag")]
 static UNDERRUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "audio-underrun-diag")]
@@ -95,6 +96,7 @@ impl PcmResampler {
             .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM, RESAMPLER_CORRECTION_LIMIT_PPM);
         self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
             / 1_000_000) as u32;
+        RESAMPLER_CORRECTION_PPM.store(correction_ppm, Ordering::Release);
     }
 }
 
@@ -163,6 +165,7 @@ impl BkEmulatorAudio {
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
             }
+            RESAMPLER_CORRECTION_PPM.store(0, Ordering::Release);
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
@@ -238,25 +241,21 @@ impl BkEmulatorAudio {
 
         if let Some((edge_phase, polarity)) = self.previous_edge {
             let age = sample_phase.wrapping_sub(edge_phase) as i32;
-            if age >= 0 {
-                if (age as u32) < period {
-                    let t = (((age as u32) * 32_768) / period) as i32;
-                    let q = 2 * t - ((t * t) >> 15) - 32_768;
-                    correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-                }
+            if age >= 0 && (age as u32) < period {
+                let t = ((age as u32 * 32_768) / period) as i32;
+                let q = 2 * t - ((t * t) >> 15) - 32_768;
+                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
             }
         }
 
         if let Some((edge_cycle, edge_level)) = self.pending_edge {
             let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
             let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
-            if ahead > 0 {
-                if (ahead as u32) < period {
-                    let t = (((period - ahead as u32) * 32_768) / period) as i32;
-                    let q = (t * t) >> 15;
-                    let polarity = if edge_level { 1 } else { -1 };
-                    correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
-                }
+            if ahead > 0 && (ahead as u32) < period {
+                let t = (((period - ahead as u32) * 32_768) / period) as i32;
+                let q = (t * t) >> 15;
+                let polarity = if edge_level { 1 } else { -1 };
+                correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
             }
         }
 
