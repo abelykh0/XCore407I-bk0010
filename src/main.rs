@@ -1043,10 +1043,6 @@ fn main() -> ! {
                     for _ in 0..16 {
                         unsafe { bk_loop(); }
 
-                        // Drain newly captured speaker edges before potentially
-                        // expensive video rendering delays the next audio service.
-                        xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
-
                         // Refill buffers while the emulator runs, outside USB IRQs.
                         while prepare_next_video_batch(&mut video_renderer) {}
 
