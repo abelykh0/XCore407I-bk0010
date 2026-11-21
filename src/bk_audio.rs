@@ -328,9 +328,14 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     };
 
                     if next != previous {
-                        let boundary_phase = (boundary as u64) << 16;
-                        let numerator = (boundary_phase - phase_before as u64) << 16;
-                        let ahead = (numerator / resampler.step as u64) as u32;
+                        let distance = (boundary << 16) - phase_before;
+                        let step_delta = resampler.step as i32 - RESAMPLER_ONE as i32;
+                        // Exact reciprocal correction without a 64-bit divide.
+                        // With the controller limited to +/-5000 ppm, the
+                        // signed product remains safely within i32.
+                        let ahead = (distance as i32
+                            - (distance as i32 * step_delta) / resampler.step as i32)
+                            as u32;
                         let age_next = RESAMPLER_ONE.saturating_sub(ahead);
                         let t = (age_next >> 1) as i32; // Q16 to Q15.
                         let t_squared = (t * t) >> 15;
