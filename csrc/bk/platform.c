@@ -154,16 +154,24 @@ static void bk_timer_write_control(uint8_t value)
 }
 uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 
-// Audio output transition queue. The emulator is the single producer
-// (thread context); the USB Audio endpoint callback consumes transitions.
+// Audio output transition queue. The emulator is the single producer.
+// The PCM renderer and USB-side BLEP stage are independent consumers of the
+// same timestamped edges; the oldest consumer cursor controls slot reuse.
 #define BK_AUDIO_EDGE_CAPACITY 512u
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
 static volatile uint16_t bk_audio_edge_head;
-static volatile uint16_t bk_audio_edge_tail;
+static volatile uint16_t bk_audio_edge_render_tail;
+static volatile uint16_t bk_audio_edge_blep_tail;
 static volatile uint8_t bk_audio_enabled;
 static uint8_t bk_audio_level;
 static uint32_t bk_audio_edge_cycles[BK_AUDIO_EDGE_CAPACITY];
 static uint8_t bk_audio_edge_levels[BK_AUDIO_EDGE_CAPACITY];
+
+static uint16_t bk_audio_oldest_tail(void)
+{
+    return (int16_t)(bk_audio_edge_render_tail - bk_audio_edge_blep_tail) <= 0
+        ? bk_audio_edge_render_tail : bk_audio_edge_blep_tail;
+}
 
 static void bk_audio_record_level(uint8_t level)
 {
@@ -171,16 +179,12 @@ static void bk_audio_record_level(uint8_t level)
     if (level == bk_audio_level) return;
 
     uint16_t head = bk_audio_edge_head;
-    uint16_t tail = bk_audio_edge_tail;
-    if ((uint16_t)(head - tail) >= BK_AUDIO_EDGE_CAPACITY) {
-        // Preserve the last successfully queued level so a later write can
-        // retry recording the current speaker state after space becomes free.
+    if ((uint16_t)(head - bk_audio_oldest_tail()) >= BK_AUDIO_EDGE_CAPACITY) {
         return;
     }
 
     bk_audio_level = level;
     uint16_t slot = head & BK_AUDIO_EDGE_MASK;
-    // Timestamp in the emulator's PDP-cycle domain, not the MCU clock domain.
     bk_audio_edge_cycles[slot] = bk_timing_cycles();
     bk_audio_edge_levels[slot] = level;
     __asm volatile("dmb" ::: "memory");
@@ -189,8 +193,8 @@ static void bk_audio_record_level(uint8_t level)
 
 uint8_t bk_audio_start(void)
 {
-    // Called from the USB ISR; the emulator producer is paused while this runs.
-    bk_audio_edge_tail = bk_audio_edge_head;
+    bk_audio_edge_render_tail = bk_audio_edge_head;
+    bk_audio_edge_blep_tail = bk_audio_edge_head;
     bk_audio_level = (port0177716 & 0x0040u) ? 1u : 0u;
     __asm volatile("dmb" ::: "memory");
     bk_audio_enabled = 1u;
@@ -203,9 +207,9 @@ void bk_audio_stop(void)
     __asm volatile("dmb" ::: "memory");
 }
 
-uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
+static uint8_t bk_audio_pop_edge_from(volatile uint16_t *tail_ptr, uint32_t *cycles, uint8_t *level)
 {
-    uint16_t tail = bk_audio_edge_tail;
+    uint16_t tail = *tail_ptr;
     if (tail == bk_audio_edge_head || cycles == NULL || level == NULL) {
         return 0u;
     }
@@ -215,8 +219,18 @@ uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
     *cycles = bk_audio_edge_cycles[slot];
     *level = bk_audio_edge_levels[slot];
     __asm volatile("dmb" ::: "memory");
-    bk_audio_edge_tail = (uint16_t)(tail + 1u);
+    *tail_ptr = (uint16_t)(tail + 1u);
     return 1u;
+}
+
+uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level)
+{
+    return bk_audio_pop_edge_from(&bk_audio_edge_render_tail, cycles, level);
+}
+
+uint8_t bk_audio_pop_blep_edge(uint32_t *cycles, uint8_t *level)
+{
+    return bk_audio_pop_edge_from(&bk_audio_edge_blep_tail, cycles, level);
 }
 
 // STOP key requests the independent hardware IRQ1 (priority 5, vector 000004).
@@ -367,7 +381,8 @@ void bk_reset(void)
     bk_audio_enabled = 0;
     bk_audio_level = 0;
     bk_audio_edge_head = 0;
-    bk_audio_edge_tail = 0;
+    bk_audio_edge_render_tail = 0;
+    bk_audio_edge_blep_tail = 0;
     stop_irq_pending = 0;
     io_stop_happened = 0;
     last_branch = 0;
