@@ -88,8 +88,7 @@ unsafe extern "C" {
     safe fn bk_audio_stop();
     #[cfg(feature = "audio-underrun-diag")]
     safe fn bk_audio_take_edge_overflows() -> u32;
-    fn bk_audio_peek_edge(offset: u16, cycles: *mut u32, level: *mut u8) -> u8;
-    fn bk_audio_discard_edges(count: u16);
+    fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
 }
 
 pub struct BkEmulatorAudio {
@@ -225,7 +224,7 @@ impl BkEmulatorAudio {
                 }
                 let mut cycles = 0u32;
                 let mut level = 0u8;
-                if unsafe { bk_audio_peek_edge(0, &mut cycles, &mut level) } == 0 {
+                if unsafe { bk_audio_pop_edge(&mut cycles, &mut level) } == 0 {
                     self.edge_queue_empty = true;
                     break;
                 }
@@ -241,7 +240,7 @@ impl BkEmulatorAudio {
             if offset < 0 || offset == 0 {
                 self.sample_level = edge_level;
                 self.pending_edge = None;
-                unsafe { bk_audio_discard_edges(1) };
+                
                 continue;
             }
 
@@ -254,7 +253,7 @@ impl BkEmulatorAudio {
                 cursor = sample_end;
                 self.sample_level = edge_level;
                 self.pending_edge = None;
-                unsafe { bk_audio_discard_edges(1) };
+                
                 continue;
             }
 
@@ -268,7 +267,7 @@ impl BkEmulatorAudio {
             cursor = edge_phase;
             self.sample_level = edge_level;
             self.pending_edge = None;
-            unsafe { bk_audio_discard_edges(1) };
+            
         }
 
         let remaining = sample_end.wrapping_sub(cursor) as i32;
