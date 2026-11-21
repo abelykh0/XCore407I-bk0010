@@ -1201,6 +1201,13 @@ pub fn service(
                             }
                             write_status(b"\r\nMAC/DMA: ");
                             write_status(if crate::ethernet::is_initialized() { b"initialized" } else { b"not initialized" });
+                            let (rx_frames, tx_frames, rx_errors) = crate::ethernet::frame_counts();
+                            write_status(b"\r\nFrames RX/TX/errors: ");
+                            write_decimal(rx_frames as usize);
+                            write_status(b"/");
+                            write_decimal(tx_frames as usize);
+                            write_status(b"/");
+                            write_decimal(rx_errors as usize);
                             write_status(b"\r\nIPv4: ");
                             if let Some((address, prefix)) = crate::ethernet::ipv4_config() {
                                 for (index, octet) in address.iter().enumerate() {
