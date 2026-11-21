@@ -38,7 +38,7 @@ static CDC_BANNER_COMPLETE_RX_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  PHY        Probe DP83848 Ethernet PHY and link\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
 #[cfg(feature = "list-profile")]
 const HELP_WRITE_PROFILE: &[u8] = b"  WRITE PROFILE Show last ZMODEM receive timing breakdown\r\n";
 #[cfg(feature = "nand-diagnostics")]
@@ -1178,6 +1178,32 @@ pub fn service(
                     } else if cfg!(feature = "list-profile") && command_is(line, b"WRITE PROFILE") {
                         #[cfg(feature = "list-profile")]
                         write_write_profile(zmodem);
+                    } else if command_is(line, b"PHY") {
+                        let phy = crate::ethernet::probe_dp83848();
+                        if phy.mdio_timeout {
+                            write_status(b"\r\nEthernet MDIO timeout. Check MAC clock and RMII/MDIO wiring.\r\n> ");
+                        } else if !phy.found {
+                            write_status(b"\r\nDP83848 PHY not found on MDIO addresses 0..31. Check PHY power, reset, MDC/MDIO, and straps.\r\n> ");
+                        } else {
+                            write_status(b"\r\nDP83848 PHY found: address=");
+                            write_decimal(phy.address as usize);
+                            write_status(b" ID1=0x");
+                            write_hex_u32(phy.id1 as u32);
+                            write_status(b" ID2=0x");
+                            write_hex_u32(phy.id2 as u32);
+                            write_status(b" BMSR=0x");
+                            write_hex_u32(phy.bmsr as u32);
+                            write_status(if phy.bmsr & (1 << 2) != 0 {
+                                b" LINK=up" as &[u8]
+                            } else {
+                                b" LINK=down" as &[u8]
+                            });
+                            write_status(if phy.bmsr & (1 << 5) != 0 {
+                                b" AUTONEG=complete\r\n> "
+                            } else {
+                                b" AUTONEG=incomplete\r\n> "
+                            });
+                        }
                     } else if command_is(line, b"STATUS") {
                         write_status(if fs.is_some() {
                             STATUS_MOUNTED
