@@ -315,12 +315,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .add((tail & PCM_RING_MASK) as usize)
                     .read()
             };
-            let b = unsafe {
-                core::ptr::addr_of!(PCM_RING)
-                    .cast::<i16>()
-                    .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
-                    .read()
-            };
             // Diagnostic experiment: zero-order hold the current source sample.
             // Keep the same phase accumulator and source-index advancement so
             // only the interpolation calculation is removed.
