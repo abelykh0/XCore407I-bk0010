@@ -32,6 +32,7 @@ const ETH_DMATDLAR: *mut u32 = (ETH_DMA_BASE + 0x10) as *mut u32;
 const ETH_DMASR: *mut u32 = (ETH_DMA_BASE + 0x14) as *mut u32;
 const ETH_DMAOMR: *mut u32 = (ETH_DMA_BASE + 0x18) as *mut u32;
 const ETH_DMAIER: *mut u32 = (ETH_DMA_BASE + 0x1c) as *mut u32;
+const ETH_DMACHTDR: *mut u32 = (ETH_DMA_BASE + 0x48) as *mut u32;
 const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
 const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 
@@ -401,7 +402,7 @@ static TX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static RX_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 /// Snapshot DMA engine and RX descriptor state without allocating memory.
-pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32) {
+pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32) {
     unsafe {
         let rx = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>();
         (
@@ -410,6 +411,7 @@ pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32) {
             read_volatile(addr_of_mut!((*rx).words[0])),
             read_volatile(addr_of_mut!((*rx.add(1)).words[0])),
             read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[0])),
+            read_volatile(ETH_DMACHTDR),
             read_volatile(ETH_DMAIER),
         )
     }
