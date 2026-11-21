@@ -397,6 +397,14 @@ fn main() -> ! {
         // Start the Ethernet MAC/DMA after the RMII pins and PHY management bus are ready.
         // DHCP and HTTP are layered on this polled frame device in the next step.
         let _ethernet_mac_dma_ready = xcore407i_blinker::ethernet::initialize();
+        if _ethernet_mac_dma_ready {
+            xcore407i_blinker::ethernet::enable_dma_interrupts();
+            unsafe {
+                core.NVIC.set_priority(interrupt::ETH, 0x2 << 4);
+                NVIC::unpend(interrupt::ETH);
+                NVIC::unmask(interrupt::ETH);
+            }
+        }
         let ethernet_socket_storage = unsafe { &mut *ptr::addr_of_mut!(ETHERNET_SOCKET_STORAGE) };
         let mut ethernet_network = xcore407i_blinker::ethernet::EthernetNetwork::new(ethernet_socket_storage);
 
@@ -1056,6 +1064,12 @@ fn main() -> ! {
             }
         }
     }
+}
+
+#[interrupt]
+#[allow(non_snake_case)]
+fn ETH() {
+    xcore407i_blinker::ethernet::on_dma_interrupt();
 }
 
 #[interrupt]
