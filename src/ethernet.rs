@@ -53,7 +53,6 @@ const RX_DESC_RCH: u32 = 1 << 14;
 const TX_DESC_TCH: u32 = 1 << 20;
 const TX_DESC_FS: u32 = 1 << 28;
 const TX_DESC_LS: u32 = 1 << 29;
-const TX_DESC_CIC: u32 = 0b11 << 22;
 const TX_DESC_IC: u32 = 1 << 30;
 
 const DP83848_ID1: u16 = 0x2000;
@@ -137,7 +136,7 @@ pub fn initialize() -> bool {
         write_volatile(addr_of_mut!((*tx_desc).words[0]), TX_DESC_TCH);
         write_volatile(addr_of_mut!((*tx_desc).words[1]), 0);
         write_volatile(addr_of_mut!((*tx_desc).words[2]), (*tx_buf).0.as_mut_ptr() as u32);
-        write_volatile(addr_of_mut!((*tx_desc).words[3]), 0);
+        write_volatile(addr_of_mut!((*tx_desc).words[3]), tx_desc as u32);
 
         // DMA software reset, then conservative fixed-burst configuration.
         write_volatile(ETH_DMABMR, 1);
@@ -348,7 +347,7 @@ impl TxToken for EthernetTxToken<'_> {
             cortex_m::asm::dsb();
             write_volatile(
                 addr_of_mut!(TX_DESCRIPTOR.words[0]),
-                DESC_OWN | TX_DESC_TCH | TX_DESC_FS | TX_DESC_LS | TX_DESC_CIC | TX_DESC_IC,
+                DESC_OWN | TX_DESC_TCH | TX_DESC_FS | TX_DESC_LS | TX_DESC_IC,
             );
             write_volatile(ETH_DMATPDR, 0);
             result
