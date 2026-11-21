@@ -67,6 +67,8 @@ struct PcmResampler {
     phase: u32,
     step: u32,
     control_packets: u8,
+    // Last emitted sample, held if the producer temporarily has no neighbor.
+    last_sample: i16,
 }
 
 impl PcmResampler {
@@ -75,6 +77,7 @@ impl PcmResampler {
             phase: 0,
             step: RESAMPLER_ONE,
             control_packets: 0,
+            last_sample: 0,
         }
     }
 
@@ -337,6 +340,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             resampler.phase &= 0xFFFF;
             tail = tail.wrapping_add(advance as u16);
             let sample = interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            resampler.last_sample = sample;
 
             #[cfg(feature = "audio-underrun-diag")]
             {
@@ -357,7 +361,9 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .read()
             }
         } else {
-            resampler.phase = 0;
+            // Preserve waveform continuity through starvation. Do not inject
+            // zero or reset fractional source phase; resume from the same
+            // resampler position when more PCM becomes available.
             #[cfg(feature = "audio-underrun-diag")]
             {
                 if !underrun_active {
@@ -366,7 +372,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                 }
                 missing_samples += 1;
             }
-            0
+            resampler.last_sample
         };
 
         let bytes = sample.to_le_bytes();
