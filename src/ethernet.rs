@@ -266,6 +266,8 @@ impl EthernetDevice {
             {
                 write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
                 self.rx_index = (self.rx_index + 1) % RX_COUNT;
+                RX_ERRORS.fetch_add(1, Ordering::Relaxed);
+                write_volatile(ETH_DMARPDR, 0);
                 return None;
             }
             Some((self.rx_index, length))
@@ -325,6 +327,7 @@ impl RxToken for EthernetRxToken<'_> {
             let buffer = addr_of_mut!(RX_BUFFERS).cast::<FrameBuffer>().add(self.index);
             let bytes = core::slice::from_raw_parts((*buffer).0.as_ptr(), self.length);
             let result = f(bytes);
+            RX_FRAMES.fetch_add(1, Ordering::Relaxed);
             let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.index);
             core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
             write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
@@ -354,11 +357,25 @@ impl TxToken for EthernetTxToken<'_> {
                 DESC_OWN | TX_DESC_TCH | TX_DESC_FS | TX_DESC_LS | TX_DESC_IC,
             );
             write_volatile(ETH_DMATPDR, 0);
+            TX_FRAMES.fetch_add(1, Ordering::Relaxed);
             result
         }
     }
 }
 
+
+static RX_FRAMES: AtomicU32 = AtomicU32::new(0);
+static TX_FRAMES: AtomicU32 = AtomicU32::new(0);
+static RX_ERRORS: AtomicU32 = AtomicU32::new(0);
+
+/// Ethernet frames accepted by the stack, transmitted, and rejected by RX.
+pub fn frame_counts() -> (u32, u32, u32) {
+    (
+        RX_FRAMES.load(Ordering::Relaxed),
+        TX_FRAMES.load(Ordering::Relaxed),
+        RX_ERRORS.load(Ordering::Relaxed),
+    )
+}
 
 static IPV4_ADDRESS: AtomicU32 = AtomicU32::new(0);
 static IPV4_PREFIX: AtomicU8 = AtomicU8::new(0);
