@@ -378,7 +378,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             }
         }
 
-        let output = sample.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let output = sample.clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
         resampler.last_sample = output;
 
         #[cfg(feature = "audio-underrun-diag")]
