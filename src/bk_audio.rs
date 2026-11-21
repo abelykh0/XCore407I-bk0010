@@ -307,9 +307,9 @@ impl BkEmulatorAudio {
 
 }
 
-/// Resample one USB microframe from the PCM ring at a slowly adjusted rate.
+/// Resample one USB microframe from the timestamp-compensated PCM ring.
 /// USB runs at 8 kHz and always receives exactly three 24 kHz output samples.
-/// Source steps are preserved so BLEP can be applied after resampling.
+/// The producer scales BLEP edge distances by the same adaptive rate used here.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
