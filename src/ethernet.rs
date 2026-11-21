@@ -6,7 +6,7 @@
 
 use core::marker::PhantomData;
 use core::ptr::{addr_of_mut, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
@@ -93,7 +93,7 @@ pub struct PhyStatus {
     pub mdio_timeout: bool,
 }
 
-static mut MAC_DMA_READY: bool = false;
+static MAC_DMA_READY: AtomicBool = AtomicBool::new(false);
 
 /// Initialize the RMII MAC and DMA rings after board RMII pins are configured.
 /// Returns false if the expected DP83848 PHY cannot be read.
@@ -181,7 +181,7 @@ pub fn initialize() -> bool {
 
 /// Whether MAC/DMA initialization completed successfully.
 pub fn is_initialized() -> bool {
-    unsafe { MAC_DMA_READY }
+    MAC_DMA_READY.load(Ordering::Acquire)
 }
 
 /// Result of a bounded MDIO scan for the board's DP83848 PHY.
@@ -316,7 +316,7 @@ impl Device for EthernetDevice {
 pub struct EthernetRxToken<'a> {
     index: usize,
     length: usize,
-    _borrow: PhantomData<&'a mut EthernetDevice>,
+    _borrow: PhantomData<&'a EthernetDevice>,
 }
 
 impl RxToken for EthernetRxToken<'_> {
@@ -336,7 +336,7 @@ impl RxToken for EthernetRxToken<'_> {
 }
 
 pub struct EthernetTxToken<'a> {
-    _borrow: PhantomData<&'a mut EthernetDevice>,
+    _borrow: PhantomData<&'a EthernetDevice>,
 }
 
 impl TxToken for EthernetTxToken<'_> {
