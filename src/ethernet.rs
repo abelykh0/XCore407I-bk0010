@@ -368,6 +368,19 @@ static RX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static TX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static RX_ERRORS: AtomicU32 = AtomicU32::new(0);
 
+/// Snapshot DMA engine and RX descriptor state without allocating memory.
+pub fn dma_diagnostic() -> (u32, u32, u32, u32) {
+    unsafe {
+        let rx = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>();
+        (
+            read_volatile(ETH_DMASR),
+            read_volatile(ETH_DMAOMR),
+            read_volatile(addr_of_mut!((*rx).words[0])),
+            read_volatile(addr_of_mut!((*rx.add(1)).words[0])),
+        )
+    }
+}
+
 /// Ethernet frames accepted by the stack, transmitted, and rejected by RX.
 pub fn frame_counts() -> (u32, u32, u32) {
     (
