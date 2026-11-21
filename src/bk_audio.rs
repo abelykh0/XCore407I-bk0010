@@ -321,14 +321,14 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     .add((tail.wrapping_add(1) & PCM_RING_MASK) as usize)
                     .read()
             };
-            let fraction = (resampler.phase & 0xFFFF) as u32;
-            let interpolated = a as i32
-                + (((b as i32 - a as i32) * fraction as i32) >> 16);
+            // Diagnostic experiment: zero-order hold the current source sample.
+            // Keep the same phase accumulator and source-index advancement so
+            // only the interpolation calculation is removed.
             resampler.phase = resampler.phase.wrapping_add(resampler.step);
             let advance = resampler.phase >> 16;
             resampler.phase &= 0xFFFF;
             tail = tail.wrapping_add(advance as u16);
-            let sample = interpolated.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let sample = a;
             resampler.last_sample = sample;
 
             #[cfg(feature = "audio-underrun-diag")]
