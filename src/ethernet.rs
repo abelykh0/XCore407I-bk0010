@@ -160,14 +160,14 @@ pub fn initialize() -> bool {
         let mut maccr = (1 << 25) | (1 << 7); // strip CRC, automatic pad/CRC stripping
         if phy.physts & (1 << 1) == 0 { maccr |= 1 << 14; } // 100 Mb/s
         if phy.physts & (1 << 2) != 0 { maccr |= 1 << 11; } // full duplex
-        maccr |= (1 << 3) | (1 << 2); // TX and RX enable
         write_volatile(ETH_MACCR, maccr);
         write_volatile(ETH_MACFFR, 0); // normal destination filtering
 
-        // Start DMA receive and transmit engines, then demand descriptor fetch.
+        // Start DMA before enabling MAC traffic, then demand descriptor fetch.
         write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | (1 << 1) | (1 << 13));
         write_volatile(ETH_DMARPDR, 0);
         write_volatile(ETH_DMATPDR, 0);
+        write_volatile(ETH_MACCR, maccr | (1 << 3) | (1 << 2)); // TX and RX enable
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         cortex_m::asm::dsb();
 
@@ -262,6 +262,7 @@ impl EthernetDevice {
                 || length < 14 || length > FRAME_CAPACITY
             {
                 write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
+                self.rx_index = (self.rx_index + 1) % RX_COUNT;
                 return None;
             }
             Some((self.rx_index, length))
