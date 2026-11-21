@@ -61,8 +61,8 @@ const RESAMPLER_CONTROL_PACKETS: u8 = 80; // 10 ms at 8 kHz.
 const RESAMPLER_CORRECTION_LIMIT_PPM: i32 = 5_000;
 
 /// USB-side source-position controller. USB cadence stays fixed; the source
-/// position is adjusted from PCM-ring occupancy. BLEP state is scalar and
-/// lives here, so the pipeline needs no additional sample or edge buffers.
+/// position is adjusted from PCM-ring occupancy. BLEP remains in the producer,
+/// and the existing PCM ring is reused without adding buffers.
 #[derive(Clone, Copy)]
 struct PcmResampler {
     phase: u32,
