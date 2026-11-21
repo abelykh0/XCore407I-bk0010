@@ -100,7 +100,12 @@ pub(crate) fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::F
 }
 
 
-/// Configure the STM32F407 RMII pin muxes for the board's alternate routing.
+/// Configure the STM32F407 RMII pin muxes for the XCore407I.
+///
+/// The board has a dedicated, always-powered 50 MHz oscillator for the
+/// DP83848. Its output is routed to both the PHY X1/REF_CLK input and MCU PA1.
+/// There is no MCU PLL or GPIO output configuration needed to generate this
+/// clock: PA1 must receive it as ETH_RMII_REF_CLK (AF11).
 ///
 /// The XCore407I routes TX_EN/TXD0/TXD1 to PG11/PG13/PG14, avoiding the
 /// USB3300 ULPI pins PB11/PB12/PB13. PC1 is shared with USB FS VBUS enable,
@@ -113,10 +118,11 @@ pub(crate) fn configure_ethernet_pins() {
     const GPIOG: usize = 0x4002_1800;
 
     unsafe {
-        // Enable GPIOG; GPIOA and GPIOC are already enabled by board setup.
+        // Make this routine self-contained: enable GPIOA for the external
+        // RMII reference-clock input, GPIOC for RX/MDC, and GPIOG for TX.
         core::ptr::write_volatile(
             RCC_AHB1ENR,
-            core::ptr::read_volatile(RCC_AHB1ENR) | (1 << 6),
+            core::ptr::read_volatile(RCC_AHB1ENR) | (1 << 0) | (1 << 2) | (1 << 6),
         );
         let _ = core::ptr::read_volatile(RCC_AHB1ENR);
 
