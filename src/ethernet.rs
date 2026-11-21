@@ -32,6 +32,7 @@ pub struct PhyStatus {
     pub id1: u16,
     pub id2: u16,
     pub bmsr: u16,
+    pub physts: u16,
     pub mdio_timeout: bool,
 }
 
@@ -80,12 +81,18 @@ pub fn probe_dp83848() -> PhyStatus {
                 None => return empty_status(true),
             };
 
+            let physts = match mdio_read(address, 0x10) {
+                Some(value) => value,
+                None => return empty_status(true),
+            };
+
             return PhyStatus {
                 found: true,
                 address,
                 id1,
                 id2,
                 bmsr,
+                physts,
                 mdio_timeout: false,
             };
         }
@@ -101,6 +108,7 @@ fn empty_status(mdio_timeout: bool) -> PhyStatus {
         id1: 0,
         id2: 0,
         bmsr: 0,
+        physts: 0,
         mdio_timeout,
     }
 }
