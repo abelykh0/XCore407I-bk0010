@@ -1199,6 +1199,8 @@ pub fn service(
                                     b", half duplex" as &[u8]
                                 });
                             }
+                            write_status(b"\r\nMAC/DMA: ");
+                            write_status(if crate::ethernet::is_initialized() { b"initialized" } else { b"not initialized" });
                             write_status(b"\r\nIPv4: no address (DHCP not yet enabled).\r\n> ");
                         }
                     } else if command_is(line, b"STATUS") {
