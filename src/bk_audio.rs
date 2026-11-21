@@ -69,7 +69,6 @@ struct PcmResampler {
     step: u32,
     control_packets: u8,
     last_sample: i16,
-    next_blep_correction: i32,
 }
 
 impl PcmResampler {
@@ -79,7 +78,6 @@ impl PcmResampler {
             step: RESAMPLER_ONE,
             control_packets: 0,
             last_sample: 0,
-            next_blep_correction: 0,
         }
     }
 
@@ -118,6 +116,7 @@ pub struct BkEmulatorAudio {
     next_sample_phase: u32,
     sample_level: bool,
     pending_edge: Option<(u32, bool)>,
+    previous_edge: Option<(u32, i32)>,
     edge_queue_empty: bool,
     active: bool,
 }
@@ -128,6 +127,7 @@ impl BkEmulatorAudio {
             next_sample_phase: 0,
             sample_level: false,
             pending_edge: None,
+            previous_edge: None,
             edge_queue_empty: false,
             active: false,
         }
@@ -144,6 +144,7 @@ impl BkEmulatorAudio {
             if !self.active {
                 self.sample_level = bk_audio_start() != 0;
                 self.pending_edge = None;
+                self.previous_edge = None;
                 self.edge_queue_empty = false;
                 #[cfg(feature = "audio-underrun-diag")]
                 reset_audio_diagnostics();
@@ -159,6 +160,7 @@ impl BkEmulatorAudio {
         } else if self.active {
             self.active = false;
             self.pending_edge = None;
+            self.previous_edge = None;
             self.edge_queue_empty = false;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
@@ -208,7 +210,10 @@ impl BkEmulatorAudio {
                 break;
             }
 
-            let sample = self.render_sample_step(sample_phase);
+            self.apply_edges_through(sample_phase);
+            let raw_sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
+            let sample = (raw_sample as i32 + self.blep_edge_correction(sample_phase))
+                .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RING)
                     .cast::<i16>()
@@ -227,11 +232,50 @@ impl BkEmulatorAudio {
         }
         rendered
     }
-    /// Emit the speaker level at this source-sample timestamp. Keep the
-    /// waveform discontinuous here; the USB-side resampler locates each
-    /// crossed source boundary fractionally and applies BLEP afterward.
-    #[inline]
-    fn render_sample_step(&mut self, sample_phase: u32) -> i16 {
+    // Evaluate the proven compact BLEP in the source timeline, compensated
+    // for the current resampler rate. This preserves the original PDP-cycle
+    // edge fraction while making the correction's time support match the
+    // source-time interval traversed by one USB output sample.
+    #[inline(always)]
+    fn blep_edge_correction(&self, sample_phase: u32) -> i32 {
+        let period = AUDIO_SAMPLE_PERIOD_PHASE;
+        let correction_ppm = RESAMPLER_CORRECTION_PPM.load(Ordering::Relaxed);
+        // Convert source-time distances into output-time distances:
+        // output_age = source_age / (1 + correction).
+        let denominator = (1_000_000 + correction_ppm) as i64;
+        let scale_q16 = (((1_000_000i64) << 16) / denominator) as u32;
+        let mut correction = 0i32;
+
+        if let Some((edge_phase, polarity)) = self.previous_edge {
+            let age = sample_phase.wrapping_sub(edge_phase) as i32;
+            if age >= 0 {
+                let effective_age = ((age as u64 * scale_q16 as u64) >> 16) as u32;
+                if effective_age < period {
+                    let t = ((effective_age * 32_768) / period) as i32;
+                    let q = 2 * t - ((t * t) >> 15) - 32_768;
+                    correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
+                }
+            }
+        }
+
+        if let Some((edge_cycle, edge_level)) = self.pending_edge {
+            let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
+            let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
+            if ahead > 0 {
+                let effective_ahead = ((ahead as u64 * scale_q16 as u64) >> 16) as u32;
+                if effective_ahead < period {
+                    let t = (((period - effective_ahead) * 32_768) / period) as i32;
+                    let q = (t * t) >> 15;
+                    let polarity = if edge_level { 1 } else { -1 };
+                    correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
+                }
+            }
+        }
+
+        correction
+    }
+
+    fn apply_edges_through(&mut self, sample_phase: u32) {
         loop {
             if self.pending_edge.is_none() {
                 if self.edge_queue_empty {
@@ -250,13 +294,15 @@ impl BkEmulatorAudio {
             let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
             if sample_phase.wrapping_sub(edge_phase) as i32 >= 0 {
                 self.sample_level = edge_level;
+                self.previous_edge = Some((
+                    edge_phase,
+                    if edge_level { 1 } else { -1 },
+                ));
                 self.pending_edge = None;
             } else {
                 break;
             }
         }
-
-        if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE }
     }
 
 }
@@ -289,72 +335,22 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         #[cfg(feature = "audio-underrun-diag")]
         PCM_MIN_OCCUPANCY.fetch_min(available as u32, Ordering::Relaxed);
 
-        // Apply the correction from any edge crossed during the previous
-        // output interval. The correction has one-sample support.
-        let mut sample = resampler.next_blep_correction;
-        resampler.next_blep_correction = 0;
+        let mut output = resampler.last_sample;
         #[cfg(feature = "audio-underrun-diag")]
         let mut consumed = 0u32;
 
         if available >= 2 {
-            let a = unsafe {
+            output = unsafe {
                 core::ptr::addr_of!(PCM_RING)
                     .cast::<i16>()
                     .add((tail & PCM_RING_MASK) as usize)
                     .read()
             };
-            sample += a as i32;
-
-            let phase_before = resampler.phase;
-            let phase_total = phase_before.wrapping_add(resampler.step);
+            let phase_total = resampler.phase.wrapping_add(resampler.step);
             let advance = phase_total >> 16;
-
-            // A source boundary is crossed at a fractional position within
-            // this USB output interval. Apply its post-resampling BLEP now,
-            // and retain the matching one-sample tail as a scalar correction.
-            // The adaptive step is close to 1.0, so at most two boundaries
-            // can be crossed in one output interval.
             if advance == 0 {
                 resampler.phase = phase_total;
             } else if available > advance as u16 {
-                let mut previous = a;
-                let mut next_correction = 0i32;
-
-                for boundary in 1..=advance {
-                    let next = unsafe {
-                        core::ptr::addr_of!(PCM_RING)
-                            .cast::<i16>()
-                            .add((tail.wrapping_add(boundary as u16) & PCM_RING_MASK) as usize)
-                            .read()
-                    };
-
-                    if next != previous {
-                        let distance = (boundary << 16) - phase_before;
-                        let step_delta = resampler.step as i32 - RESAMPLER_ONE as i32;
-                        // Exact reciprocal correction without a 64-bit divide.
-                        // With the controller limited to +/-5000 ppm, the
-                        // signed product remains safely within i32.
-                        let ahead = (distance as i32
-                            - (distance as i32 * step_delta) / resampler.step as i32)
-                            as u32;
-                        let age_next = RESAMPLER_ONE.saturating_sub(ahead);
-                        let t = (age_next >> 1) as i32; // Q16 to Q15.
-                        let t_squared = (t * t) >> 15;
-                        let polarity = if next > 0 { 1 } else { -1 };
-
-                        // Pre-ringing at the current output sample.
-                        let future_q = t_squared;
-                        sample += polarity * AUDIO_AMPLITUDE as i32 * future_q / 32_768;
-
-                        // The matching post-edge tail at the next output sample.
-                        let previous_q = 2 * t - t_squared - 32_768;
-                        next_correction +=
-                            polarity * AUDIO_AMPLITUDE as i32 * previous_q / 32_768;
-                    }
-                    previous = next;
-                }
-
-                resampler.next_blep_correction = next_correction;
                 resampler.phase = phase_total & 0xFFFF;
                 tail = tail.wrapping_add(advance as u16);
                 #[cfg(feature = "audio-underrun-diag")]
@@ -362,21 +358,20 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                     consumed = advance;
                 }
             }
-            // If the producer has not published enough look-ahead samples for
-            // this step, hold source position and retry on the next USB packet.
+            // If the producer has not published enough look-ahead samples,
+            // hold source position and retry on the next USB packet.
         } else if available == 1 {
-            sample += unsafe {
+            output = unsafe {
                 core::ptr::addr_of!(PCM_RING)
                     .cast::<i16>()
                     .add((tail & PCM_RING_MASK) as usize)
-                    .read() as i32
+                    .read()
             };
             #[cfg(feature = "audio-underrun-diag")]
             {
                 underrun_active = false;
             }
         } else {
-            sample += resampler.last_sample as i32;
             #[cfg(feature = "audio-underrun-diag")]
             {
                 if !underrun_active {
@@ -387,7 +382,6 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             }
         }
 
-        let output = sample.clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
         resampler.last_sample = output;
 
         #[cfg(feature = "audio-underrun-diag")]
