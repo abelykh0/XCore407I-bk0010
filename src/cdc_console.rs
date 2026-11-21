@@ -1220,7 +1220,8 @@ pub fn service(
                                 write_status(b"acquiring via DHCP");
                             }
                             write_status(b"\r\n> ");
-                        } else if command_is(line, b"STATUS") {
+                        }
+                    } else if command_is(line, b"STATUS") {
                         write_status(if fs.is_some() {
                             STATUS_MOUNTED
                         } else {
