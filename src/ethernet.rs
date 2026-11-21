@@ -2,7 +2,7 @@
 //!
 //! DMA descriptors and packet buffers are ordinary statics in SRAM (.bss).
 //! Do not move them to CCM: the STM32F407 Ethernet DMA cannot access CCM.
-//! The driver is polled from the foreground; it does not install an IRQ.
+//! DMA interrupts acknowledge hardware events; smoltcp remains foreground-polled.
 
 use core::marker::PhantomData;
 use core::ptr::{addr_of_mut, read_volatile, write_volatile};
@@ -32,6 +32,8 @@ const ETH_DMATDLAR: *mut u32 = (ETH_DMA_BASE + 0x10) as *mut u32;
 const ETH_DMASR: *mut u32 = (ETH_DMA_BASE + 0x14) as *mut u32;
 const ETH_DMAOMR: *mut u32 = (ETH_DMA_BASE + 0x18) as *mut u32;
 const ETH_DMAIER: *mut u32 = (ETH_DMA_BASE + 0x1c) as *mut u32;
+const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
+const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 
 const ETHMACEN: u32 = 1 << 25;
 const ETHMACTXEN: u32 = 1 << 26;
@@ -94,6 +96,7 @@ pub struct PhyStatus {
 }
 
 static MAC_DMA_READY: AtomicBool = AtomicBool::new(false);
+static DMA_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Initialize the RMII MAC and DMA rings after board RMII pins are configured.
 /// Returns false if the expected DP83848 PHY cannot be read.
@@ -177,6 +180,35 @@ pub fn initialize() -> bool {
         MAC_DMA_READY.store(true, Ordering::Release);
     }
     true
+}
+
+
+/// Enable receive, transmit-complete, and DMA-error interrupt sources.
+/// The NVIC line is enabled separately by the board startup code.
+pub fn enable_dma_interrupts() {
+    unsafe {
+        // Clear stale write-one-to-clear events before enabling sources.
+        write_volatile(ETH_DMASR, DMA_IRQ_CLEAR_MASK);
+        write_volatile(ETH_DMAIER, DMA_IRQ_ENABLE_MASK);
+    }
+}
+
+/// Ethernet DMA IRQ top half: acknowledge pending events only.
+/// Packet handling and all smoltcp/DHCP work remain in foreground context.
+pub fn on_dma_interrupt() {
+    unsafe {
+        let status = read_volatile(ETH_DMASR);
+        let pending = status & DMA_IRQ_CLEAR_MASK;
+        if pending != 0 {
+            write_volatile(ETH_DMASR, pending);
+            DMA_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Number of Ethernet DMA interrupts serviced by the CPU.
+pub fn dma_interrupt_count() -> u32 {
+    DMA_IRQ_COUNT.load(Ordering::Relaxed)
 }
 
 /// Whether MAC/DMA initialization completed successfully.
