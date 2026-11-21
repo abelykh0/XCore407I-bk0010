@@ -1,29 +1,84 @@
-//! Minimal STM32F407 Ethernet-PHY management access for CDC diagnostics.
+//! STM32F407 RMII Ethernet MAC/DMA driver for the XCore407I.
 //!
-//! This deliberately stops at MDIO/PHY identification. It does not start the
-//! Ethernet MAC data path, allocate DMA descriptors, or add network buffers.
+//! DMA descriptors and packet buffers are ordinary statics in SRAM (.bss).
+//! Do not move them to CCM: the STM32F407 Ethernet DMA cannot access CCM.
+//! The driver is polled from the foreground; it does not install an IRQ.
 
-use core::ptr::{read_volatile, write_volatile};
+use core::marker::PhantomData;
+use core::ptr::{addr_of_mut, read_volatile, write_volatile};
+use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::time::Instant;
 
 const RCC_BASE: usize = 0x4002_3800;
 const RCC_AHB1ENR: *mut u32 = (RCC_BASE + 0x30) as *mut u32;
+const RCC_AHB1RSTR: *mut u32 = (RCC_BASE + 0x10) as *mut u32;
 const RCC_APB2ENR: *mut u32 = (RCC_BASE + 0x44) as *mut u32;
 const SYSCFG_PMC: *mut u32 = 0x4001_3804 as *mut u32;
 
 const ETH_MAC_BASE: usize = 0x4002_8000;
+const ETH_DMA_BASE: usize = 0x4002_9000;
+const ETH_MACCR: *mut u32 = ETH_MAC_BASE as *mut u32;
+const ETH_MACFFR: *mut u32 = (ETH_MAC_BASE + 0x04) as *mut u32;
 const ETH_MACMIIAR: *mut u32 = (ETH_MAC_BASE + 0x10) as *mut u32;
 const ETH_MACMIIDR: *mut u32 = (ETH_MAC_BASE + 0x14) as *mut u32;
+const ETH_MACA0HR: *mut u32 = (ETH_MAC_BASE + 0x40) as *mut u32;
+const ETH_MACA0LR: *mut u32 = (ETH_MAC_BASE + 0x44) as *mut u32;
+const ETH_DMABMR: *mut u32 = ETH_DMA_BASE as *mut u32;
+const ETH_DMATPDR: *mut u32 = (ETH_DMA_BASE + 0x04) as *mut u32;
+const ETH_DMARPDR: *mut u32 = (ETH_DMA_BASE + 0x08) as *mut u32;
+const ETH_DMARDLAR: *mut u32 = (ETH_DMA_BASE + 0x0c) as *mut u32;
+const ETH_DMATDLAR: *mut u32 = (ETH_DMA_BASE + 0x10) as *mut u32;
+const ETH_DMASR: *mut u32 = (ETH_DMA_BASE + 0x14) as *mut u32;
+const ETH_DMAOMR: *mut u32 = (ETH_DMA_BASE + 0x18) as *mut u32;
+const ETH_DMAIER: *mut u32 = (ETH_DMA_BASE + 0x1c) as *mut u32;
 
 const ETHMACEN: u32 = 1 << 25;
+const ETHMACTXEN: u32 = 1 << 26;
+const ETHMACRXEN: u32 = 1 << 27;
+const ETHMACRST: u32 = 1 << 25;
 const SYSCFGEN: u32 = 1 << 14;
 const MII_RMII_SEL: u32 = 1 << 23;
 const MII_BUSY: u32 = 1;
 const MII_CR_DIV_102: u32 = 0b100 << 2;
 const MDIO_TIMEOUT: u32 = 1_000_000;
 
+const RX_COUNT: usize = 2;
+const FRAME_CAPACITY: usize = 1536;
+const DESC_OWN: u32 = 1 << 31;
+const RX_DESC_FS: u32 = 1 << 9;
+const RX_DESC_LS: u32 = 1 << 8;
+const RX_DESC_ES: u32 = 1 << 15;
+const RX_DESC_FL_SHIFT: u32 = 16;
+const RX_DESC_RCH: u32 = 1 << 14;
+const TX_DESC_TCH: u32 = 1 << 20;
+const TX_DESC_FS: u32 = 1 << 28;
+const TX_DESC_LS: u32 = 1 << 29;
+const TX_DESC_CIC: u32 = 0b11 << 22;
+const TX_DESC_IC: u32 = 1 << 30;
+
 const DP83848_ID1: u16 = 0x2000;
 const DP83848_ID2_MASK: u16 = 0xfff0;
 const DP83848_ID2: u16 = 0x5c90;
+
+#[repr(C, align(8))]
+struct DmaDescriptor {
+    words: [u32; 4],
+}
+
+#[repr(C, align(4))]
+struct FrameBuffer([u8; FRAME_CAPACITY]);
+
+// These statics are deliberately not placed in the CCM section.
+static mut RX_DESCRIPTORS: [DmaDescriptor; RX_COUNT] = [
+    DmaDescriptor { words: [0; 4] },
+    DmaDescriptor { words: [0; 4] },
+];
+static mut RX_BUFFERS: [FrameBuffer; RX_COUNT] = [
+    FrameBuffer([0; FRAME_CAPACITY]),
+    FrameBuffer([0; FRAME_CAPACITY]),
+];
+static mut TX_DESCRIPTOR: DmaDescriptor = DmaDescriptor { words: [0; 4] };
+static mut TX_BUFFER: FrameBuffer = FrameBuffer([0; FRAME_CAPACITY]);
 
 #[derive(Clone, Copy)]
 pub struct PhyStatus {
@@ -36,20 +91,103 @@ pub struct PhyStatus {
     pub mdio_timeout: bool,
 }
 
+static mut MAC_DMA_READY: bool = false;
+
+/// Initialize the RMII MAC and DMA rings after board RMII pins are configured.
+/// Returns false if the expected DP83848 PHY cannot be read.
+pub fn initialize() -> bool {
+    unsafe {
+        write_volatile(RCC_APB2ENR, read_volatile(RCC_APB2ENR) | SYSCFGEN);
+        write_volatile(SYSCFG_PMC, read_volatile(SYSCFG_PMC) | MII_RMII_SEL);
+
+        write_volatile(
+            RCC_AHB1ENR,
+            read_volatile(RCC_AHB1ENR) | ETHMACEN | ETHMACTXEN | ETHMACRXEN,
+        );
+        let _ = read_volatile(RCC_AHB1ENR);
+
+        // Reset the Ethernet MAC/DMA block before programming descriptors.
+        write_volatile(RCC_AHB1RSTR, read_volatile(RCC_AHB1RSTR) | ETHMACRST);
+        write_volatile(RCC_AHB1RSTR, read_volatile(RCC_AHB1RSTR) & !ETHMACRST);
+        let _ = read_volatile(RCC_AHB1RSTR);
+
+        write_volatile(ETH_MACMIIAR, MII_CR_DIV_102);
+        let phy = probe_dp83848();
+        if !phy.found || phy.mdio_timeout || phy.bmsr & (1 << 2) == 0 {
+            return false;
+        }
+
+        // Software-owned, chained descriptor rings. Enhanced descriptors are
+        // disabled; each descriptor is the four-word basic format from RM0090.
+        let rx_desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>();
+        let rx_buf = addr_of_mut!(RX_BUFFERS).cast::<FrameBuffer>();
+        for i in 0..RX_COUNT {
+            let desc = rx_desc.add(i);
+            let next = rx_desc.add((i + 1) % RX_COUNT);
+            let buffer = rx_buf.add(i);
+            write_volatile(addr_of_mut!((*desc).words[1]), RX_DESC_RCH | FRAME_CAPACITY as u32);
+            write_volatile(addr_of_mut!((*desc).words[2]), (*buffer).0.as_mut_ptr() as u32);
+            write_volatile(addr_of_mut!((*desc).words[3]), next as u32);
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
+            write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
+        }
+
+        let tx_desc = addr_of_mut!(TX_DESCRIPTOR);
+        let tx_buf = addr_of_mut!(TX_BUFFER);
+        write_volatile(addr_of_mut!((*tx_desc).words[0]), TX_DESC_TCH);
+        write_volatile(addr_of_mut!((*tx_desc).words[1]), 0);
+        write_volatile(addr_of_mut!((*tx_desc).words[2]), (*tx_buf).0.as_mut_ptr() as u32);
+        write_volatile(addr_of_mut!((*tx_desc).words[3]), 0);
+
+        // DMA software reset, then conservative fixed-burst configuration.
+        write_volatile(ETH_DMABMR, 1);
+        let mut timeout = MDIO_TIMEOUT;
+        while read_volatile(ETH_DMABMR) & 1 != 0 {
+            if timeout == 0 { return false; }
+            timeout -= 1;
+        }
+        write_volatile(ETH_DMABMR, (1 << 25) | (1 << 16) | (32 << 8) | (32 << 17) | (1 << 23));
+        write_volatile(ETH_DMAOMR, (1 << 26) | (1 << 25) | (1 << 21));
+        write_volatile(ETH_DMARDLAR, rx_desc as u32);
+        write_volatile(ETH_DMATDLAR, tx_desc as u32);
+        write_volatile(ETH_DMAIER, 0);
+        write_volatile(ETH_DMASR, 0x1e00_01ff);
+
+        // Locally administered unicast address 02:12:09:40:70:01.
+        write_volatile(ETH_MACA0LR, 0x4009_1202);
+        write_volatile(ETH_MACA0HR, 0x0000_0170);
+
+        // Match the PHY's negotiated speed and duplex.
+        let mut maccr = (1 << 25) | (1 << 7); // strip CRC, automatic pad/CRC stripping
+        if phy.physts & (1 << 1) == 0 { maccr |= 1 << 14; } // 100 Mb/s
+        if phy.physts & (1 << 2) != 0 { maccr |= 1 << 11; } // full duplex
+        maccr |= (1 << 3) | (1 << 2); // TX and RX enable
+        write_volatile(ETH_MACCR, maccr);
+        write_volatile(ETH_MACFFR, 0); // normal destination filtering
+
+        // Start DMA receive and transmit engines, then demand descriptor fetch.
+        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | (1 << 1) | (1 << 13));
+        write_volatile(ETH_DMARPDR, 0);
+        write_volatile(ETH_DMATPDR, 0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        cortex_m::asm::dsb();
+
+        MAC_DMA_READY = true;
+    }
+    true
+}
+
+/// Whether MAC/DMA initialization completed successfully.
+pub fn is_initialized() -> bool {
+    unsafe { MAC_DMA_READY }
+}
+
 /// Result of a bounded MDIO scan for the board's DP83848 PHY.
 pub fn probe_dp83848() -> PhyStatus {
     unsafe {
-        // Enable SYSCFG and the Ethernet MAC clock. Only the MAC management
-        // interface is used here; TX, RX, and DMA clocks remain disabled.
         write_volatile(RCC_APB2ENR, read_volatile(RCC_APB2ENR) | SYSCFGEN);
         write_volatile(RCC_AHB1ENR, read_volatile(RCC_AHB1ENR) | ETHMACEN);
         let _ = read_volatile(RCC_AHB1ENR);
-
-        // Select RMII rather than MII. HCLK is 168 MHz in this firmware;
-        // CR=100 selects MDC = HCLK/102, below the 2.5 MHz MDIO limit.
-        write_volatile(SYSCFG_PMC, read_volatile(SYSCFG_PMC) | MII_RMII_SEL);
-
-        // Clear stale management-operation state and select the /102 divider.
         let initial = read_volatile(ETH_MACMIIAR);
         write_volatile(ETH_MACMIIAR, (initial & !((0b111 << 2) | MII_BUSY)) | MII_CR_DIV_102);
 
@@ -58,20 +196,12 @@ pub fn probe_dp83848() -> PhyStatus {
                 Some(value) => value,
                 None => return empty_status(true),
             };
-            if id1 != DP83848_ID1 {
-                continue;
-            }
-
+            if id1 != DP83848_ID1 { continue; }
             let id2 = match mdio_read(address, 3) {
                 Some(value) => value,
                 None => return empty_status(true),
             };
-            if id2 & DP83848_ID2_MASK != DP83848_ID2 {
-                continue;
-            }
-
-            // BMSR link status is latch-low; read twice and use the second
-            // sample to obtain the current link state.
+            if id2 & DP83848_ID2_MASK != DP83848_ID2 { continue; }
             let _ = match mdio_read(address, 1) {
                 Some(value) => value,
                 None => return empty_status(true),
@@ -80,65 +210,148 @@ pub fn probe_dp83848() -> PhyStatus {
                 Some(value) => value,
                 None => return empty_status(true),
             };
-
             let physts = match mdio_read(address, 0x10) {
                 Some(value) => value,
                 None => return empty_status(true),
             };
-
-            return PhyStatus {
-                found: true,
-                address,
-                id1,
-                id2,
-                bmsr,
-                physts,
-                mdio_timeout: false,
-            };
+            return PhyStatus { found: true, address, id1, id2, bmsr, physts, mdio_timeout: false };
         }
     }
-
     empty_status(false)
 }
 
 fn empty_status(mdio_timeout: bool) -> PhyStatus {
-    PhyStatus {
-        found: false,
-        address: 0xff,
-        id1: 0,
-        id2: 0,
-        bmsr: 0,
-        physts: 0,
-        mdio_timeout,
-    }
+    PhyStatus { found: false, address: 0xff, id1: 0, id2: 0, bmsr: 0, physts: 0, mdio_timeout }
 }
 
-/// Read one PHY register. Returns None if the MAC management-busy bit does
-/// not clear within the bounded wait, so a missing clock cannot hang CDC.
 fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
     unsafe {
         let mut remaining = MDIO_TIMEOUT;
         while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
-            if remaining == 0 {
-                return None;
-            }
+            if remaining == 0 { return None; }
             remaining -= 1;
         }
-
         let operation = ((phy_address as u32) << 11)
             | ((register as u32) << 6)
-            | MII_CR_DIV_102
-            | MII_BUSY;
+            | MII_CR_DIV_102 | MII_BUSY;
         write_volatile(ETH_MACMIIAR, operation);
-
         remaining = MDIO_TIMEOUT;
         while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
-            if remaining == 0 {
-                return None;
-            }
+            if remaining == 0 { return None; }
             remaining -= 1;
         }
-
         Some((read_volatile(ETH_MACMIIDR) & 0xffff) as u16)
+    }
+}
+
+/// Minimal polled Ethernet device for smoltcp. One TX descriptor deliberately
+/// serializes transmission; RX uses two descriptors to absorb short bursts.
+pub struct EthernetDevice {
+    rx_index: usize,
+}
+
+impl EthernetDevice {
+    pub const fn new() -> Self { Self { rx_index: 0 } }
+
+    fn rx_ready(&self) -> Option<(usize, usize)> {
+        unsafe {
+            let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.rx_index);
+            let status = read_volatile(addr_of_mut!((*desc).words[0]));
+            if status & DESC_OWN != 0 { return None; }
+            let length = ((status >> RX_DESC_FL_SHIFT) & 0x3fff) as usize;
+            if status & RX_DESC_ES != 0 || status & (RX_DESC_FS | RX_DESC_LS) != (RX_DESC_FS | RX_DESC_LS)
+                || length < 14 || length > FRAME_CAPACITY
+            {
+                write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
+                return None;
+            }
+            Some((self.rx_index, length))
+        }
+    }
+
+    fn tx_ready() -> bool {
+        unsafe { read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[0])) & DESC_OWN == 0 }
+    }
+}
+
+impl Default for EthernetDevice {
+    fn default() -> Self { Self::new() }
+}
+
+impl Device for EthernetDevice {
+    type RxToken<'a> = EthernetRxToken<'a> where Self: 'a;
+    type TxToken<'a> = EthernetTxToken<'a> where Self: 'a;
+
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        if !is_initialized() || !Self::tx_ready() { return None; }
+        let (index, length) = self.rx_ready()?;
+        self.rx_index = (index + 1) % RX_COUNT;
+        Some((
+            EthernetRxToken { index, length, _borrow: PhantomData },
+            EthernetTxToken { _borrow: PhantomData },
+        ))
+    }
+
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        if is_initialized() && Self::tx_ready() {
+            Some(EthernetTxToken { _borrow: PhantomData })
+        } else {
+            None
+        }
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut caps = DeviceCapabilities::default();
+        caps.medium = Medium::Ethernet;
+        caps.max_transmission_unit = 1514;
+        caps.max_burst_size = Some(1);
+        caps.checksum = ChecksumCapabilities::default();
+        caps
+    }
+}
+
+pub struct EthernetRxToken<'a> {
+    index: usize,
+    length: usize,
+    _borrow: PhantomData<&'a mut EthernetDevice>,
+}
+
+impl RxToken for EthernetRxToken<'_> {
+    fn consume<R, F>(self, f: F) -> R where F: FnOnce(&[u8]) -> R {
+        unsafe {
+            let buffer = addr_of_mut!(RX_BUFFERS).cast::<FrameBuffer>().add(self.index);
+            let bytes = core::slice::from_raw_parts((*buffer).0.as_ptr(), self.length);
+            let result = f(bytes);
+            let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.index);
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
+            write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
+            cortex_m::asm::dsb();
+            write_volatile(ETH_DMARPDR, 0);
+            result
+        }
+    }
+}
+
+pub struct EthernetTxToken<'a> {
+    _borrow: PhantomData<&'a mut EthernetDevice>,
+}
+
+impl TxToken for EthernetTxToken<'_> {
+    fn consume<R, F>(self, length: usize, f: F) -> R where F: FnOnce(&mut [u8]) -> R {
+        assert!(length <= FRAME_CAPACITY);
+        unsafe {
+            let buffer = addr_of_mut!(TX_BUFFER);
+            let bytes = core::slice::from_raw_parts_mut((*buffer).0.as_mut_ptr(), length);
+            let result = f(bytes);
+            write_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1]), length as u32);
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
+            cortex_m::asm::dsb();
+            write_volatile(
+                addr_of_mut!(TX_DESCRIPTOR.words[0]),
+                DESC_OWN | TX_DESC_TCH | TX_DESC_FS | TX_DESC_LS | TX_DESC_CIC | TX_DESC_IC,
+            );
+            write_volatile(ETH_DMATPDR, 0);
+            result
+        }
     }
 }
