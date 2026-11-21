@@ -390,6 +390,10 @@ fn main() -> ! {
         // from FS VBUS enable to Ethernet MDC; USB HS remains active.
         board::configure_ethernet_pins();
 
+        // Start the Ethernet MAC/DMA after the RMII pins and PHY management bus are ready.
+        // DHCP and HTTP are layered on this polled frame device in the next step.
+        let _ethernet_mac_dma_ready = xcore407i_blinker::ethernet::initialize();
+
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
         // Keep the ZMODEM state on the CCM alternate stack: it contains the reusable
