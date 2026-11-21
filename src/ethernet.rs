@@ -255,7 +255,7 @@ pub struct EthernetDevice {
 impl EthernetDevice {
     pub const fn new() -> Self { Self { rx_index: 0 } }
 
-    fn rx_ready(&self) -> Option<(usize, usize)> {
+    fn rx_ready(&mut self) -> Option<(usize, usize)> {
         unsafe {
             let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.rx_index);
             let status = read_volatile(addr_of_mut!((*desc).words[0]));
