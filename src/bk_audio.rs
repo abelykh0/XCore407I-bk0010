@@ -4,7 +4,7 @@
 //! worker converts them to 24 kHz PCM in a ring buffer. The USB completion ISR
 //! copies exactly three samples per 8 kHz microframe.
 
-use core::sync::atomic::{AtomicI32, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering};
 #[cfg(feature = "audio-underrun-diag")]
 use core::sync::atomic::{AtomicBool, AtomicU32};
 
@@ -30,7 +30,6 @@ const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
-static RESAMPLER_CORRECTION_PPM: AtomicI32 = AtomicI32::new(0);
 #[cfg(feature = "audio-underrun-diag")]
 static UNDERRUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "audio-underrun-diag")]
@@ -96,7 +95,6 @@ impl PcmResampler {
             .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM, RESAMPLER_CORRECTION_LIMIT_PPM);
         self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
             / 1_000_000) as u32;
-        RESAMPLER_CORRECTION_PPM.store(correction_ppm, Ordering::Release);
     }
 }
 
@@ -165,7 +163,6 @@ impl BkEmulatorAudio {
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new());
             }
-            RESAMPLER_CORRECTION_PPM.store(0, Ordering::Release);
             bk_audio_stop();
             PCM_TAIL.store(0, Ordering::Relaxed);
             PCM_HEAD.store(0, Ordering::Release);
@@ -232,26 +229,18 @@ impl BkEmulatorAudio {
         }
         rendered
     }
-    // Evaluate the proven compact BLEP in the source timeline, compensated
-    // for the current resampler rate. This preserves the original PDP-cycle
-    // edge fraction while making the correction's time support match the
-    // source-time interval traversed by one USB output sample.
+    // Apply the same compact polynomial BLEP used by main, using the original
+    // PDP-cycle edge timestamps and the unmodified source-sample timeline.
     #[inline(always)]
     fn blep_edge_correction(&self, sample_phase: u32) -> i32 {
         let period = AUDIO_SAMPLE_PERIOD_PHASE;
-        let correction_ppm = RESAMPLER_CORRECTION_PPM.load(Ordering::Relaxed);
-        // Convert source-time distances into output-time distances:
-        // output_age = source_age / (1 + correction).
-        let denominator = (1_000_000 + correction_ppm) as i64;
-        let scale_q16 = (((1_000_000i64) << 16) / denominator) as u32;
         let mut correction = 0i32;
 
         if let Some((edge_phase, polarity)) = self.previous_edge {
             let age = sample_phase.wrapping_sub(edge_phase) as i32;
             if age >= 0 {
-                let effective_age = ((age as u64 * scale_q16 as u64) >> 16) as u32;
-                if effective_age < period {
-                    let t = ((effective_age * 32_768) / period) as i32;
+                if (age as u32) < period {
+                    let t = (((age as u32) * 32_768) / period) as i32;
                     let q = 2 * t - ((t * t) >> 15) - 32_768;
                     correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
                 }
@@ -262,9 +251,8 @@ impl BkEmulatorAudio {
             let edge_phase = edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE);
             let ahead = edge_phase.wrapping_sub(sample_phase) as i32;
             if ahead > 0 {
-                let effective_ahead = ((ahead as u64 * scale_q16 as u64) >> 16) as u32;
-                if effective_ahead < period {
-                    let t = (((period - effective_ahead) * 32_768) / period) as i32;
+                if (ahead as u32) < period {
+                    let t = (((period - ahead as u32) * 32_768) / period) as i32;
                     let q = (t * t) >> 15;
                     let polarity = if edge_level { 1 } else { -1 };
                     correction += polarity * AUDIO_AMPLITUDE as i32 * q / 32_768;
@@ -307,9 +295,8 @@ impl BkEmulatorAudio {
 
 }
 
-/// Resample one USB microframe from the timestamp-compensated PCM ring.
+/// Resample one USB microframe from the BLEP-corrected PCM ring.
 /// USB runs at 8 kHz and always receives exactly three 24 kHz output samples.
-/// The producer scales BLEP edge distances by the same adaptive rate used here.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
