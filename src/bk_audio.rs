@@ -293,6 +293,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         // output interval. The correction has one-sample support.
         let mut sample = resampler.next_blep_correction;
         resampler.next_blep_correction = 0;
+        #[cfg(feature = "audio-underrun-diag")]
         let mut consumed = 0u32;
 
         if available >= 2 {
@@ -356,7 +357,10 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
                 resampler.next_blep_correction = next_correction;
                 resampler.phase = phase_total & 0xFFFF;
                 tail = tail.wrapping_add(advance as u16);
-                consumed = advance;
+                #[cfg(feature = "audio-underrun-diag")]
+                {
+                    consumed = advance;
+                }
             }
             // If the producer has not published enough look-ahead samples for
             // this step, hold source position and retry on the next USB packet.
