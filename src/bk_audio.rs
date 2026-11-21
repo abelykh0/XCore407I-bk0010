@@ -245,8 +245,21 @@ impl BkEmulatorAudio {
                 continue;
             }
 
-            // An edge at the interval end belongs to the next sample.
-            if offset as u32 >= period {
+            // Close this sample at an edge exactly on its end boundary,
+            // then apply the transition now. The next sample starts with the
+            // updated level; no duration is attributed to the new level here.
+            if offset as u32 == period {
+                let duration = sample_end.wrapping_sub(cursor) as i32;
+                signed_area += if self.sample_level { duration } else { -duration };
+                cursor = sample_end;
+                self.sample_level = edge_level;
+                self.pending_edge = None;
+                unsafe { bk_audio_discard_edges(1) };
+                continue;
+            }
+
+            // An edge beyond this interval belongs to a later sample.
+            if offset as u32 > period {
                 break;
             }
 
