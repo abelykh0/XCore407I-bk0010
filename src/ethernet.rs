@@ -115,7 +115,7 @@ pub fn initialize() -> bool {
 
         write_volatile(ETH_MACMIIAR, MII_CR_DIV_102);
         let phy = probe_dp83848();
-        if !phy.found || phy.mdio_timeout || phy.bmsr & (1 << 2) == 0 {
+        if !phy.found || phy.mdio_timeout {
             return false;
         }
 
