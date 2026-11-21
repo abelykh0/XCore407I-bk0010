@@ -171,11 +171,33 @@ pub fn initialize() -> bool {
         write_volatile(ETH_MACCR, maccr);
         write_volatile(ETH_MACFFR, 0); // normal destination filtering
 
-        // Start DMA before enabling MAC traffic, then demand descriptor fetch.
+        // Follow the STM32F4 MAC/DMA startup order: enable the MAC first,
+        // flush its TX FIFO, then start the DMA engines.
+        let enabled_maccr = maccr | (1 << 3) | (1 << 2);
+        write_volatile(ETH_MACCR, enabled_maccr);
+
+        // ST requires at least four TX_CLK/RX_CLK cycles after changing TE/RE.
+        // A bounded delay also avoids relying on compiler-only ordering.
+        let _ = read_volatile(ETH_MACCR);
+        for _ in 0..256 {
+            core::hint::spin_loop();
+        }
+        let _ = read_volatile(ETH_MACCR);
+
+        // Flush the transmit FIFO before enabling DMA transmission.
+        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | (1 << 20));
+        let mut flush_timeout = MDIO_TIMEOUT;
+        while read_volatile(ETH_DMAOMR) & (1 << 20) != 0 {
+            if flush_timeout == 0 {
+                return false;
+            }
+            flush_timeout -= 1;
+        }
+
+        // Start DMA only after the MAC is ready, then demand descriptor fetch.
         write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | (1 << 1) | (1 << 13));
         write_volatile(ETH_DMARPDR, 0);
         write_volatile(ETH_DMATPDR, 0);
-        write_volatile(ETH_MACCR, maccr | (1 << 3) | (1 << 2)); // TX and RX enable
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         cortex_m::asm::dsb();
 
