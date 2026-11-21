@@ -326,12 +326,20 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         let mut consumed = 0u32;
 
         if available >= 2 {
-            output = unsafe {
-                core::ptr::addr_of!(PCM_RING)
-                    .cast::<i16>()
-                    .add((tail & PCM_RING_MASK) as usize)
-                    .read()
+            let (a, b) = unsafe {
+                let ring = core::ptr::addr_of!(PCM_RING).cast::<i16>();
+                (
+                    ring.add((tail & PCM_RING_MASK) as usize).read(),
+                    ring.add((tail.wrapping_add(1) & PCM_RING_MASK) as usize).read(),
+                )
             };
+            // Linear interpolation at the fractional source position. This
+            // avoids dropping/repeating whole PCM values as the adaptive step
+            // moves away from unity.
+            let fraction = resampler.phase as i32;
+            let delta = b as i32 - a as i32;
+            output = (a as i32 + ((delta * fraction) >> 16)) as i16;
+
             let phase_total = resampler.phase.wrapping_add(resampler.step);
             let advance = phase_total >> 16;
             if advance == 0 {
