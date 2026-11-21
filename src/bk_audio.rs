@@ -56,10 +56,6 @@ static PCM_RING_FULL_EVENTS: AtomicU32 = AtomicU32::new(0);
 static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
 
 const RESAMPLER_ONE: u32 = 1 << 16;
-const RESAMPLER_TARGET_OCCUPANCY: i32 = 72; // 3 ms at 24 kHz.
-const RESAMPLER_CONTROL_PACKETS: u8 = 80; // 10 ms at 8 kHz.
-const RESAMPLER_CORRECTION_LIMIT_PPM: i32 = 5_000;
-
 /// USB-side source-position controller. The output cadence remains fixed;
 /// only the fractional source position advances slightly faster or slower.
 #[derive(Clone, Copy)]
@@ -79,27 +75,6 @@ impl PcmResampler {
             control_packets: 0,
             last_sample: 0,
         }
-    }
-
-    /// A fuller ring increases the source step, draining it faster.
-    #[inline]
-    fn update_rate(&mut self, occupancy: u16) {
-        self.control_packets += 1;
-        if self.control_packets < RESAMPLER_CONTROL_PACKETS {
-            return;
-        }
-        self.control_packets = 0;
-
-        let error = occupancy as i32 - RESAMPLER_TARGET_OCCUPANCY;
-
-        let correction_ppm = (error * 4)
-            .clamp(-RESAMPLER_CORRECTION_LIMIT_PPM, RESAMPLER_CORRECTION_LIMIT_PPM);
-
-        self.step = ((RESAMPLER_ONE as i64 * (1_000_000 + correction_ppm) as i64)
-            / 1_000_000) as u32;
-        let actual_correction_ppm = ((self.step as i64 - RESAMPLER_ONE as i64) * 1_000_000
-            / RESAMPLER_ONE as i64) as i32;
-        RESAMPLER_CORRECTION_PPM.store(actual_correction_ppm, Ordering::Release);
     }
 
 
@@ -307,7 +282,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     let mut tail = PCM_TAIL.load(Ordering::Relaxed);
     let head = PCM_HEAD.load(Ordering::Acquire);
     let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
-    resampler.update_rate(head.wrapping_sub(tail));
+    // Diagnostic experiment: hold a unity source step to isolate periodic
+    // phase/step changes from the interpolation and phase accumulator.
 
     #[cfg(feature = "audio-underrun-diag")]
     let mut missing_samples = 0u32;
