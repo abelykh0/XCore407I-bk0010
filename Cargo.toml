@@ -23,6 +23,7 @@ panic-halt = "1.0.0"
 libm = "0.2"
 littlefs2 = { path = "vendor/littlefs2", default-features = false, features = ["c-stubs"] }
 zmodem2 = { path = "vendor/zmodem2", default-features = false }
+smoltcp = { version = "0.12.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-tcp"] }
 
 [profile.release]
 codegen-units = 1
