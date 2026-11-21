@@ -393,6 +393,8 @@ fn main() -> ! {
         // Start the Ethernet MAC/DMA after the RMII pins and PHY management bus are ready.
         // DHCP and HTTP are layered on this polled frame device in the next step.
         let _ethernet_mac_dma_ready = xcore407i_blinker::ethernet::initialize();
+        let mut ethernet_socket_storage = [smoltcp::iface::SocketStorage::EMPTY];
+        let mut ethernet_network = xcore407i_blinker::ethernet::EthernetNetwork::new(&mut ethernet_socket_storage);
 
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
@@ -420,6 +422,7 @@ fn main() -> ! {
                             loop {
                                 let _ = tusb::tud_task_ext(1, false);
                                 xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+                                ethernet_network.poll(TICKS.load(Ordering::Relaxed));
                                 // Keep USB/UVC and the video producer alive inside synchronous
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
                                 FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
