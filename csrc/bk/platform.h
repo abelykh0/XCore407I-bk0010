@@ -30,8 +30,7 @@ void bk_timer_update(void);
 
 uint8_t bk_audio_start(void);
 void bk_audio_stop(void);
-uint8_t bk_audio_peek_edge(uint16_t offset, uint32_t *cycles, uint8_t *level);
-void bk_audio_discard_edges(uint16_t count);
+uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level);
 uint32_t bk_audio_take_edge_overflows(void);
 
 void bk_platform_init(const uint8_t *monitor_rom,
