@@ -1208,6 +1208,9 @@ pub fn service(
                             write_decimal(tx_frames as usize);
                             write_status(b"/");
                             write_decimal(rx_errors as usize);
+                            let irq_count = crate::ethernet::dma_interrupt_count();
+                            write_status(b" IRQ:");
+                            write_decimal(irq_count as usize);
                             let (dma_sr, dma_omr, rx0, rx1) = crate::ethernet::dma_diagnostic();
                             write_status(b"\\r\\nDMA SR/OMR: 0x");
                             write_hex_u32(dma_sr);
