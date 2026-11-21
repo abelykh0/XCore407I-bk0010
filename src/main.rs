@@ -52,6 +52,10 @@ use usb_host::{
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
+// Keep smoltcp socket storage in SRAM .bss, not the constrained main stack.
+static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 1] =
+    [smoltcp::iface::SocketStorage::EMPTY];
+
 static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
     AtomicPtr::new(ptr::null_mut());
 static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
@@ -393,8 +397,8 @@ fn main() -> ! {
         // Start the Ethernet MAC/DMA after the RMII pins and PHY management bus are ready.
         // DHCP and HTTP are layered on this polled frame device in the next step.
         let _ethernet_mac_dma_ready = xcore407i_blinker::ethernet::initialize();
-        let mut ethernet_socket_storage = [smoltcp::iface::SocketStorage::EMPTY];
-        let mut ethernet_network = xcore407i_blinker::ethernet::EthernetNetwork::new(&mut ethernet_socket_storage);
+        let ethernet_socket_storage = unsafe { &mut *ptr::addr_of_mut!(ETHERNET_SOCKET_STORAGE) };
+        let mut ethernet_network = xcore407i_blinker::ethernet::EthernetNetwork::new(ethernet_socket_storage);
 
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
