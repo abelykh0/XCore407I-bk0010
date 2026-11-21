@@ -263,7 +263,7 @@ impl BkEmulatorAudio {
 
 /// Resample one USB microframe from the PCM ring at a slowly adjusted rate.
 /// USB runs at 8 kHz and always receives exactly three 24 kHz output samples.
-/// Linear interpolation changes source position smoothly without changing USB cadence.
+/// Source steps are preserved so BLEP can be applied after resampling.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
