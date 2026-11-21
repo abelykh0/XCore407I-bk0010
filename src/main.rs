@@ -386,6 +386,10 @@ fn main() -> ! {
         USB_FS_READY.store(false, Ordering::Release);
         USB_HOST_TASK_PENDING.store(false, Ordering::Release);
 
+        // The boot keyboard is no longer needed. PC1 can now be reassigned
+        // from FS VBUS enable to Ethernet MDC; USB HS remains active.
+        board::configure_ethernet_pins();
+
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
         // Keep the ZMODEM state on the CCM alternate stack: it contains the reusable
