@@ -107,28 +107,30 @@ fn empty_status(mdio_timeout: bool) -> PhyStatus {
 
 /// Read one PHY register. Returns None if the MAC management-busy bit does
 /// not clear within the bounded wait, so a missing clock cannot hang CDC.
-unsafe fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
-    let mut remaining = MDIO_TIMEOUT;
-    while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
-        if remaining == 0 {
-            return None;
+fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
+    unsafe {
+        let mut remaining = MDIO_TIMEOUT;
+        while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
+            if remaining == 0 {
+                return None;
+            }
+            remaining -= 1;
         }
-        remaining -= 1;
-    }
 
-    let operation = ((phy_address as u32) << 11)
-        | ((register as u32) << 6)
-        | MII_CR_DIV_102
-        | MII_BUSY;
-    write_volatile(ETH_MACMIIAR, operation);
+        let operation = ((phy_address as u32) << 11)
+            | ((register as u32) << 6)
+            | MII_CR_DIV_102
+            | MII_BUSY;
+        write_volatile(ETH_MACMIIAR, operation);
 
-    remaining = MDIO_TIMEOUT;
-    while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
-        if remaining == 0 {
-            return None;
+        remaining = MDIO_TIMEOUT;
+        while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
+            if remaining == 0 {
+                return None;
+            }
+            remaining -= 1;
         }
-        remaining -= 1;
-    }
 
-    Some((read_volatile(ETH_MACMIIDR) & 0xffff) as u16)
+        Some((read_volatile(ETH_MACMIIDR) & 0xffff) as u16)
+    }
 }
