@@ -22,8 +22,8 @@ const MDIO_TIMEOUT: u32 = 1_000_000;
 const PHY_NEGOTIATION_POLLS: u32 = 5_000;
 const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
-// Keep the request buffer small. The response buffers grow by only 512 bytes
-// in total; directory output is paginated instead of buffering the whole listing.
+// HTTP uses bounded RX/TX buffers; uploads are sent in small sequential chunks.
+// Directory output is paginated instead of buffering the whole listing.
 const HTTP_RX_BUFFER_SIZE: usize = 768;
 const HTTP_TX_BUFFER_SIZE: usize = 2304;
 const HTTP_BODY_BUFFER_SIZE: usize = 768;
@@ -852,6 +852,8 @@ impl<'a> EthernetNetwork<'a> {
                 let total = fields.next().and_then(|field| field.strip_prefix(b"total="))
                     .and_then(parse_http_decimal);
                 let valid_name = !name.is_empty()
+                    && name != b"."
+                    && name != b".."
                     && name.len() <= upload_name.len()
                     && name.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'));
                 let mut content_length = None;
@@ -1001,5 +1003,4 @@ impl<'a> EthernetNetwork<'a> {
         let _ = socket.send_slice(&header[..header_len]);
         let _ = socket.send_slice(body);
     }
-}
 }
