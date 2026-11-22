@@ -11,28 +11,31 @@ use stm32f4xx_hal::pac;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
-const RCC_BASE: usize = pac::RCC::PTR as usize;
-const RCC_AHB1ENR: *mut u32 = (RCC_BASE + 0x30) as *mut u32;
-const RCC_AHB1RSTR: *mut u32 = (RCC_BASE + 0x10) as *mut u32;
-const RCC_APB2ENR: *mut u32 = (RCC_BASE + 0x44) as *mut u32;
-const SYSCFG_PMC: *mut u32 = (pac::SYSCFG::PTR as usize + 0x04) as *mut u32;
+// Build register pointers from PAC peripheral pointers. Pointer arithmetic stays
+// in pointer space; converting PAC pointers to integers is not const-evaluable.
+const fn register(base: *const u8, offset: usize) -> *mut u32 {
+    base.wrapping_add(offset) as *mut u32
+}
 
-const ETH_MAC_BASE: usize = pac::ETHERNET_MAC::PTR as usize;
-const ETH_DMA_BASE: usize = pac::ETHERNET_DMA::PTR as usize;
-const ETH_MACCR: *mut u32 = ETH_MAC_BASE as *mut u32;
-const ETH_MACFFR: *mut u32 = (ETH_MAC_BASE + 0x04) as *mut u32;
-const ETH_MACMIIAR: *mut u32 = (ETH_MAC_BASE + 0x10) as *mut u32;
-const ETH_MACMIIDR: *mut u32 = (ETH_MAC_BASE + 0x14) as *mut u32;
-const ETH_MACA0HR: *mut u32 = (ETH_MAC_BASE + 0x40) as *mut u32;
-const ETH_MACA0LR: *mut u32 = (ETH_MAC_BASE + 0x44) as *mut u32;
-const ETH_DMABMR: *mut u32 = ETH_DMA_BASE as *mut u32;
-const ETH_DMATPDR: *mut u32 = (ETH_DMA_BASE + 0x04) as *mut u32;
-const ETH_DMARPDR: *mut u32 = (ETH_DMA_BASE + 0x08) as *mut u32;
-const ETH_DMARDLAR: *mut u32 = (ETH_DMA_BASE + 0x0c) as *mut u32;
-const ETH_DMATDLAR: *mut u32 = (ETH_DMA_BASE + 0x10) as *mut u32;
-const ETH_DMASR: *mut u32 = (ETH_DMA_BASE + 0x14) as *mut u32;
-const ETH_DMAOMR: *mut u32 = (ETH_DMA_BASE + 0x18) as *mut u32;
-const ETH_DMAIER: *mut u32 = (ETH_DMA_BASE + 0x1c) as *mut u32;
+const RCC_AHB1ENR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x30);
+const RCC_AHB1RSTR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x10);
+const RCC_APB2ENR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x44);
+const SYSCFG_PMC: *mut u32 = register(pac::SYSCFG::PTR as *const u8, 0x04);
+
+const ETH_MACCR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x00);
+const ETH_MACFFR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x04);
+const ETH_MACMIIAR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x10);
+const ETH_MACMIIDR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x14);
+const ETH_MACA0HR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x40);
+const ETH_MACA0LR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x44);
+const ETH_DMABMR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x00);
+const ETH_DMATPDR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x04);
+const ETH_DMARPDR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x08);
+const ETH_DMARDLAR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x0c);
+const ETH_DMATDLAR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x10);
+const ETH_DMASR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x14);
+const ETH_DMAOMR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x18);
+const ETH_DMAIER: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x1c);
 const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
 const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 
@@ -372,19 +375,17 @@ fn empty_status(mdio_timeout: bool) -> PhyStatus {
 /// indefinitely. Returns the most recent PHY status even if the wait expires.
 fn wait_for_phy_negotiation(mut phy: PhyStatus) -> PhyStatus {
     for _ in 0..PHY_NEGOTIATION_POLLS {
-        unsafe {
-            // BMSR link and autoneg-complete bits are latch-low; read twice.
-            let _ = mdio_read(phy.address, MII_REG_BMSR);
-            if let Some(bmsr) = mdio_read(phy.address, MII_REG_BMSR) {
-                phy.bmsr = bmsr;
-            } else {
-                break;
-            }
-            if let Some(physts) = mdio_read(phy.address, DP83848_REG_PHYSTS) {
-                phy.physts = physts;
-            } else {
-                break;
-            }
+        // BMSR link and autoneg-complete bits are latch-low; read twice.
+        let _ = mdio_read(phy.address, MII_REG_BMSR);
+        if let Some(bmsr) = mdio_read(phy.address, MII_REG_BMSR) {
+            phy.bmsr = bmsr;
+        } else {
+            break;
+        }
+        if let Some(physts) = mdio_read(phy.address, DP83848_REG_PHYSTS) {
+            phy.physts = physts;
+        } else {
+            break;
         }
         if phy.bmsr & PHY_BMSR_AUTONEG_COMPLETE != 0
             && phy.physts & (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK) == (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK)
