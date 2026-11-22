@@ -501,6 +501,7 @@ pub struct HttpDownloadState {
     offset: usize,
     chunk_len: usize,
     chunk_pos: usize,
+    header_offset: usize,
     content_type: &'static [u8],
     header_sent: bool,
     active: bool,
@@ -513,6 +514,7 @@ impl HttpDownloadState {
             offset: 0,
             chunk_len: 0,
             chunk_pos: 0,
+            header_offset: 0,
             content_type: b"image/jpeg",
             header_sent: false,
             active: false,
@@ -542,6 +544,7 @@ impl HttpDownloadState {
         self.offset = 0;
         self.chunk_len = 0;
         self.chunk_pos = 0;
+        self.header_offset = 0;
         self.header_sent = false;
         self.active = true;
         true
@@ -1412,8 +1415,15 @@ impl<'a> EthernetNetwork<'a> {
             append_http_bytes(&mut header, &mut len, b"\r\nContent-Length: ");
             append_http_decimal(&mut header, &mut len, state.size);
             append_http_bytes(&mut header, &mut len, b"\r\nContent-Disposition: inline\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n");
-            if socket.send_slice(&header[..len]).is_err() { return; }
-            state.header_sent = true;
+            match socket.send_slice(&header[state.header_offset..len]) {
+                Ok(sent) => {
+                    state.header_offset += sent;
+                    if state.header_offset == len {
+                        state.header_sent = true;
+                    }
+                }
+                Err(_) => return,
+            }
             return;
         }
         if state.offset >= state.size {
@@ -1434,10 +1444,12 @@ impl<'a> EthernetNetwork<'a> {
         // HTTP byte offset to diverge.
         if state.chunk_pos < state.chunk_len {
             let pending = &buffer[state.chunk_pos..state.chunk_len];
-            if socket.send_slice(pending).is_ok() {
-                let sent = pending.len();
-                state.chunk_pos = state.chunk_len;
-                state.offset += sent;
+            match socket.send_slice(pending) {
+                Ok(sent) => {
+                    state.chunk_pos += sent;
+                    state.offset += sent;
+                }
+                Err(_) => return,
             }
             return;
         }
