@@ -53,8 +53,8 @@ use usb_host::{
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
 // Keep smoltcp socket storage in SRAM .bss, not the constrained main stack.
-static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 1] =
-    [smoltcp::iface::SocketStorage::EMPTY];
+static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 2] =
+    [smoltcp::iface::SocketStorage::EMPTY; 2];
 
 static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
     AtomicPtr::new(ptr::null_mut());
@@ -395,7 +395,7 @@ fn main() -> ! {
         board::configure_ethernet_pins();
 
         // Start the Ethernet MAC/DMA after the RMII pins and PHY management bus are ready.
-        // DHCP and HTTP are layered on this polled frame device in the next step.
+        // The polled network stack provides DHCP and the embedded HTTP test page.
         let _ethernet_mac_dma_ready = xcore407i_blinker::ethernet::initialize();
         if _ethernet_mac_dma_ready {
             xcore407i_blinker::ethernet::enable_dma_interrupts();
