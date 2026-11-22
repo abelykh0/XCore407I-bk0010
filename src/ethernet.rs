@@ -44,6 +44,30 @@ const SYSCFGEN: u32 = 1 << 14;
 const MII_RMII_SEL: u32 = 1 << 23;
 const MII_BUSY: u32 = 1;
 const MII_CR_DIV_102: u32 = 0b100 << 2;
+const MII_CR_DIV_MASK: u32 = 0b111 << 2;
+
+const DMA_BMR_FIXED_BURST: u32 = 1 << 25;
+const DMA_BMR_TX_BURST_32: u32 = 32 << 8;
+const DMA_BMR_RX_BURST_32: u32 = 32 << 17;
+const DMA_BMR_SEPARATE_PBL: u32 = 1 << 23;
+const DMA_BMR_ADDRESS_ALIGNED_BEATS: u32 = 1 << 16;
+const DMA_OMR_INIT: u32 = DMA_OMR_INIT;
+const DMA_OMR_FLUSH_TX_FIFO: u32 = 1 << 20;
+const DMA_OMR_START_TX: u32 = 1 << 13;
+const DMA_OMR_START_RX: u32 = 1 << 1;
+
+const MACCR_CRC_STRIP: u32 = 1 << 25;
+const MACCR_AUTOMATIC_PAD_CRC_STRIP: u32 = 1 << 7;
+const MACCR_SPEED_100_MBPS: u32 = 1 << 14;
+const MACCR_FULL_DUPLEX: u32 = 1 << 11;
+const MACCR_TRANSMIT_ENABLE: u32 = 1 << 3;
+const MACCR_RECEIVE_ENABLE: u32 = 1 << 2;
+
+const DP83848_PHYSTS_LINK: u16 = 1 << 0;
+const DP83848_PHYSTS_SPEED_10_MBPS: u16 = 1 << 1;
+const DP83848_PHYSTS_FULL_DUPLEX: u16 = 1 << 2;
+const DP83848_PHYSTS_AUTONEG_COMPLETE: u16 = 1 << 4;
+const PHY_BMSR_AUTONEG_COMPLETE: u16 = 1 << 5;
 const MDIO_TIMEOUT: u32 = 1_000_000;
 const PHY_NEGOTIATION_POLLS: u32 = 5_000;
 const PHY_NEGOTIATION_DELAY: u32 = 50_000;
@@ -192,7 +216,7 @@ pub fn initialize() -> bool {
             if timeout == 0 { return false; }
             timeout -= 1;
         }
-        write_volatile(ETH_DMABMR, (1 << 25) | (1 << 16) | (32 << 8) | (32 << 17) | (1 << 23));
+        write_volatile(ETH_DMABMR, DMA_BMR_FIXED_BURST | DMA_BMR_ADDRESS_ALIGNED_BEATS | DMA_BMR_TX_BURST_32 | DMA_BMR_RX_BURST_32 | DMA_BMR_SEPARATE_PBL);
         write_volatile(ETH_DMAOMR, (1 << 26) | (1 << 25) | (1 << 21));
         write_volatile(ETH_DMARDLAR, rx_desc as u32);
         write_volatile(ETH_DMATDLAR, tx_desc as u32);
@@ -206,10 +230,10 @@ pub fn initialize() -> bool {
         // Match the PHY only after link and autonegotiation are both valid.
         // If there is no negotiated link, use the conservative 10 Mb/s half-
         // duplex mode until a later link-state update is implemented.
-        let negotiated = phy.physts & ((1 << 4) | (1 << 0)) == ((1 << 4) | (1 << 0));
-        let mut maccr = (1 << 25) | (1 << 7); // strip CRC, automatic pad/CRC stripping
-        if negotiated && phy.physts & (1 << 1) == 0 { maccr |= 1 << 14; } // 100 Mb/s
-        if negotiated && phy.physts & (1 << 2) != 0 { maccr |= 1 << 11; } // full duplex
+        let negotiated = phy.physts & (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK) == (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK);
+        let mut maccr = MACCR_CRC_STRIP | MACCR_AUTOMATIC_PAD_CRC_STRIP; // strip CRC, automatic pad/CRC stripping
+        if negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0 { maccr |= MACCR_SPEED_100_MBPS; } // 100 Mb/s
+        if negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0 { maccr |= MACCR_FULL_DUPLEX; } // full duplex
         // Match the STM32F4 HAL register synchronization sequence. The MAC
         // configuration crosses into the TX_CLK/RX_CLK clock domain; ST waits
         // at least four clock cycles after each MAC register write.
@@ -219,13 +243,13 @@ pub fn initialize() -> bool {
         mac_register_sync(ETH_MACFFR);
 
         // Enable TE and RE in separate synchronized writes, as in HAL_ETH_Start.
-        write_volatile(ETH_MACCR, maccr | (1 << 3));
+        write_volatile(ETH_MACCR, maccr | MACCR_TRANSMIT_ENABLE);
         mac_register_sync(ETH_MACCR);
-        write_volatile(ETH_MACCR, maccr | (1 << 3) | (1 << 2));
+        write_volatile(ETH_MACCR, maccr | MACCR_TRANSMIT_ENABLE | MACCR_RECEIVE_ENABLE);
         mac_register_sync(ETH_MACCR);
 
         // Flush the transmit FIFO before enabling DMA transmission.
-        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | (1 << 20));
+        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | DMA_OMR_FLUSH_TX_FIFO);
         let mut flush_timeout = MDIO_TIMEOUT;
         while read_volatile(ETH_DMAOMR) & (1 << 20) != 0 {
             if flush_timeout == 0 {
@@ -235,7 +259,7 @@ pub fn initialize() -> bool {
         }
 
         // Start DMA only after the MAC is ready, then demand descriptor fetch.
-        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | (1 << 1) | (1 << 13));
+        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | DMA_OMR_START_RX | DMA_OMR_START_TX);
         write_volatile(ETH_DMARPDR, 0);
         write_volatile(ETH_DMATPDR, 0);
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -309,7 +333,7 @@ pub fn probe_dp83848() -> PhyStatus {
         write_volatile(RCC_AHB1ENR, read_volatile(RCC_AHB1ENR) | ETHMACEN);
         let _ = read_volatile(RCC_AHB1ENR);
         let initial = read_volatile(ETH_MACMIIAR);
-        write_volatile(ETH_MACMIIAR, (initial & !((0b111 << 2) | MII_BUSY)) | MII_CR_DIV_102);
+        write_volatile(ETH_MACMIIAR, (initial & !(MII_CR_DIV_MASK | MII_BUSY)) | MII_CR_DIV_102);
 
         for address in 0u8..32 {
             let id1 = match mdio_read(address, MII_REG_PHY_ID1) {
@@ -362,8 +386,8 @@ fn wait_for_phy_negotiation(mut phy: PhyStatus) -> PhyStatus {
                 break;
             }
         }
-        if phy.bmsr & (1 << 5) != 0
-            && phy.physts & ((1 << 4) | (1 << 0)) == ((1 << 4) | (1 << 0))
+        if phy.bmsr & PHY_BMSR_AUTONEG_COMPLETE != 0
+            && phy.physts & (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK) == (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK)
         {
             break;
         }
