@@ -933,7 +933,21 @@ impl<'a> EthernetNetwork<'a> {
         }
 
         let timestamp = Instant::from_millis(now_ms as i64);
-        let _ = self.iface.poll(timestamp, &mut self.device, &mut self.sockets);
+
+        // Process ingress one frame at a time and give the HTTP application a
+        // chance to consume request data before a following TCP FIN is handled.
+        // smoltcp's TCP recv API reports Finished in CloseWait, even when the
+        // receive queue still contains bytes, so draining after FIN is too late.
+        self.iface.poll_maintenance(timestamp);
+        loop {
+            match self.iface.poll_ingress_single(timestamp, &mut self.device, &mut self.sockets) {
+                smoltcp::iface::PollIngressSingleResult::None => break,
+                smoltcp::iface::PollIngressSingleResult::PacketProcessed
+                | smoltcp::iface::PollIngressSingleResult::SocketStateChanged => {
+                    self.poll_http(filesystem, http_upload);
+                }
+            }
+        }
 
         use smoltcp::socket::dhcpv4::Event as DhcpEvent;
         if let Some(event) = self.sockets.get_mut::<smoltcp::socket::dhcpv4::Socket>(self.dhcp_handle).poll() {
@@ -962,6 +976,7 @@ impl<'a> EthernetNetwork<'a> {
         }
 
         self.poll_http(filesystem, http_upload);
+        let _ = self.iface.poll_egress(timestamp, &mut self.device, &mut self.sockets);
     }
 
     /// Serve a small page shell and an AJAX-paginated LittleFS directory listing.
