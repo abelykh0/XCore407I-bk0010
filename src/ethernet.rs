@@ -488,6 +488,64 @@ fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) 
 
 const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 
+pub struct HttpDownloadState {
+    allocation: littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
+    path: [u8; 66],
+    path_len: usize,
+    size: usize,
+    offset: usize,
+    buffer: [u8; 1024],
+    content_type: &'static [u8],
+    header_sent: bool,
+    active: bool,
+}
+
+impl HttpDownloadState {
+    pub fn new() -> Self {
+        Self {
+            allocation: littlefs2::fs::FileAllocation::new(),
+            path: [0; 66],
+            path_len: 0,
+            size: 0,
+            offset: 0,
+            buffer: [0; 1024],
+            content_type: b"image/jpeg",
+            header_sent: false,
+            active: false,
+        }
+    }
+
+    fn start(
+        &mut self,
+        filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+        name: &[u8],
+    ) -> bool {
+        use littlefs2::path::Path;
+        if self.active || self.allocation.is_open() || name.is_empty() || name.len() > 64 { return false; }
+        let mut path_len = 0usize;
+        self.path[path_len] = b'/';
+        path_len += 1;
+        self.path[path_len..path_len + name.len()].copy_from_slice(name);
+        path_len += name.len();
+        self.path[path_len] = 0;
+        path_len += 1;
+        let Ok(path) = Path::from_bytes_with_nul(&self.path[..path_len]) else { return false; };
+        let Ok(metadata) = filesystem.metadata(path) else { return false; };
+        let Ok(size) = usize::try_from(metadata.len()) else { return false; };
+        let lower = name.iter().map(|byte| byte.to_ascii_lowercase()).collect::<heapless::Vec<u8, 64>>();
+        self.content_type = if lower.ends_with(b".png") { b"image/png" } else { b"image/jpeg" };
+        if unsafe { self.allocation.open_with_options(filesystem, |options| options.read(true), path) }.is_err() {
+            return false;
+        }
+        self.path_len = path_len;
+        self.size = size;
+        self.offset = 0;
+        self.header_sent = false;
+        self.active = true;
+        true
+    }
+}
+
 pub struct HttpUploadState {
     allocation: littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
     temp_path: [u8; 80],
@@ -928,6 +986,7 @@ impl<'a> EthernetNetwork<'a> {
         now_ms: u32,
         filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
         http_upload: &mut HttpUploadState,
+        http_download: &mut HttpDownloadState,
     ) {
         if !is_initialized() {
             return;
@@ -945,7 +1004,7 @@ impl<'a> EthernetNetwork<'a> {
                 smoltcp::iface::PollIngressSingleResult::None => break,
                 smoltcp::iface::PollIngressSingleResult::PacketProcessed
                 | smoltcp::iface::PollIngressSingleResult::SocketStateChanged => {
-                    self.poll_http(filesystem, http_upload);
+                    self.poll_http(filesystem, http_upload, http_download);
                 }
             }
         }
@@ -985,6 +1044,7 @@ impl<'a> EthernetNetwork<'a> {
         &mut self,
         filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
         http_upload: &mut HttpUploadState,
+        http_download: &mut HttpDownloadState,
     ) {
         use smoltcp::socket::tcp::Socket as TcpSocket;
 
@@ -1000,6 +1060,11 @@ impl<'a> EthernetNetwork<'a> {
         // CLOSE-WAIT, is_open() and can_send() can still be true, but the
         // receive half is finished. Close our transmit half so smoltcp can
         // complete the TCP teardown and the listening socket can be reused.
+        if http_download.active {
+            Self::poll_http_download(socket, filesystem, http_download);
+            return;
+        }
+
         if !socket.may_recv() {
             HTTP_POLL_DIAG_STAGE.store(2, Ordering::Release);
             HTTP_POLL_DIAG_NO_RECV.fetch_add(1, Ordering::Relaxed);
@@ -1023,6 +1088,8 @@ impl<'a> EthernetNetwork<'a> {
         let mut upload_total = 0usize;
         let mut upload_len = 0usize;
         let mut upload_body_offset = 0usize;
+        let mut image_name = [0u8; 64];
+        let mut image_name_len = 0usize;
         let upload_body = unsafe {
             core::slice::from_raw_parts_mut(
                 addr_of_mut!((*http_storage_ptr()).body).cast::<u8>(),
@@ -1043,6 +1110,29 @@ impl<'a> EthernetNetwork<'a> {
                 return (0, false);
             };
             let line = &data[..line_end];
+
+            if let Some(rest) = line.strip_prefix(b"GET /file/") {
+                let Some(http_pos) = rest.windows(9).position(|window| window == b" HTTP/1.1") else {
+                    request_kind = 3;
+                    request_ready = true;
+                    return (header_len, true);
+                };
+                let name = &rest[..http_pos];
+                let valid_name = !name.is_empty() && name.len() <= image_name.len()
+                    && name != b"." && name != b".."
+                    && name.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'));
+                let lower_ext = name.iter().rev().take_while(|&&b| b != b'.').map(|b| b.to_ascii_lowercase()).collect::<heapless::Vec<u8, 5>>();
+                let is_image = lower_ext.as_slice() == b"gpj" || lower_ext.as_slice() == b"gepj" || lower_ext.as_slice() == b"gnp";
+                if valid_name && is_image {
+                    image_name[..name.len()].copy_from_slice(name);
+                    image_name_len = name.len();
+                    request_kind = 4;
+                } else {
+                    request_kind = 3;
+                }
+                request_ready = true;
+                return (header_len, true);
+            }
 
             if let Some(rest) = line.strip_prefix(b"GET /api/files?offset=") {
                 request_kind = 1;
@@ -1167,6 +1257,17 @@ impl<'a> EthernetNetwork<'a> {
         }
         HTTP_POLL_DIAG_STAGE.store(9, Ordering::Release);
 
+        if request_kind == 4 {
+            http_upload.rx_len = 0;
+            if http_download.start(filesystem, &image_name[..image_name_len]) {
+                Self::poll_http_download(socket, filesystem, http_download);
+            } else {
+                let _ = socket.send_slice(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot found");
+                socket.close();
+            }
+            return;
+        }
+
         let mut status_code = 200u16;
         let body: &[u8] = match request_kind {
             0 => HTTP_PAGE,
@@ -1200,6 +1301,16 @@ impl<'a> EthernetNetwork<'a> {
                             name_len -= 1;
                         }
                         append_http_bytes(body, &mut length, b"<li>");
+                        let safe_image_name = name_len == name.len()
+                            && !name.is_empty()
+                            && name.len() <= 64
+                            && name != b"."
+                            && name != b".."
+                            && name.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'));
+                        let lower_name = name.iter().map(|byte| byte.to_ascii_lowercase()).collect::<heapless::Vec<u8, 64>>();
+                        let image_file = !is_dir && safe_image_name
+                            && (lower_name.ends_with(b".jpg") || lower_name.ends_with(b".jpeg") || lower_name.ends_with(b".png"));
+                        if image_file { append_http_bytes(body, &mut length, b"<a target=\"_blank\" rel=\"noopener\" href=\"/file/"); }
                         for &byte in &name[..name_len] {
                             let escaped = match byte {
                                 b'&' => b"&amp;" as &[u8],
@@ -1210,7 +1321,9 @@ impl<'a> EthernetNetwork<'a> {
                             };
                             append_http_bytes(body, &mut length, escaped);
                         }
+                        if image_file { append_http_bytes(body, &mut length, b"\">"); }
                         if name_len < name.len() { append_http_bytes(body, &mut length, b"... "); }
+                        if image_file { append_http_bytes(body, &mut length, b"</a>"); }
                         if is_dir {
                             append_http_bytes(body, &mut length, b"/");
                         } else {
@@ -1275,5 +1388,46 @@ impl<'a> EthernetNetwork<'a> {
         }
         HTTP_POLL_DIAG_STAGE.store(10, Ordering::Release);
         http_upload.rx_len = 0;
+    }
+
+    fn poll_http_download(
+        socket: &mut smoltcp::socket::tcp::Socket<'_>,
+        filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+        state: &mut HttpDownloadState,
+    ) {
+        if !state.active || !socket.can_send() { return; }
+        if !state.header_sent {
+            let mut header = [0u8; 192];
+            let mut len = 0usize;
+            append_http_bytes(&mut header, &mut len, b"HTTP/1.1 200 OK\r\nContent-Type: ");
+            append_http_bytes(&mut header, &mut len, state.content_type);
+            append_http_bytes(&mut header, &mut len, b"\r\nContent-Length: ");
+            append_http_decimal(&mut header, &mut len, state.size);
+            append_http_bytes(&mut header, &mut len, b"\r\nContent-Disposition: inline\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n");
+            if socket.send_slice(&header[..len]).is_err() { return; }
+            state.header_sent = true;
+            return;
+        }
+        if state.offset >= state.size {
+            if state.allocation.is_open() { let _ = unsafe { state.allocation.close(filesystem) }; }
+            state.active = false;
+            socket.close();
+            return;
+        }
+        let count = core::cmp::min(state.buffer.len(), state.size - state.offset);
+        let read_result = unsafe {
+            state.allocation.seek(filesystem, littlefs2::io::SeekFrom::Start(state.offset as u32))
+                .and_then(|_| state.allocation.read(filesystem, &mut state.buffer[..count]))
+        };
+        match read_result {
+            Ok(read) if read != 0 => {
+                if socket.send_slice(&state.buffer[..read]).is_ok() { state.offset += read; }
+            }
+            _ => {
+                if state.allocation.is_open() { let _ = unsafe { state.allocation.close(filesystem) }; }
+                state.active = false;
+                socket.close();
+            }
+        }
     }
 }
