@@ -632,18 +632,27 @@ impl<'a> EthernetNetwork<'a> {
                     )
                 };
                 let mut length = 0;
+                let mut truncated = false;
                 append_http_bytes(body, &mut length, HTTP_PAGE_PREFIX);
 
                 let _ = crate::nand_fs::read_root_directory(
                     filesystem,
                     true,
                     |path, is_dir, size| {
-                        if length >= body.len() {
+                        if truncated {
+                            return Ok(());
+                        }
+                        let name = path.strip_prefix(b"/").unwrap_or(path);
+                        let name = name.strip_suffix(b"\\0").unwrap_or(name);
+                        // Reserve enough space for worst-case HTML escaping, the
+                        // size suffix, and the closing page tags.
+                        let required = name.len().saturating_mul(6).saturating_add(64);
+                        if required > body.len().saturating_sub(length) {
+                            append_http_bytes(body, &mut length, b"<li>... listing truncated ...</li>");
+                            truncated = true;
                             return Ok(());
                         }
                         append_http_bytes(body, &mut length, b"<li>");
-                        let name = path.strip_prefix(b"/").unwrap_or(path);
-                        let name = name.strip_suffix(b"\\0").unwrap_or(name);
                         for &byte in name {
                             let escaped = match byte {
                                 b'&' => b"&amp;" as &[u8],
@@ -652,9 +661,7 @@ impl<'a> EthernetNetwork<'a> {
                                 b'"' => b"&quot;",
                                 _ => core::slice::from_ref(&byte),
                             };
-                            if !append_http_bytes(body, &mut length, escaped) {
-                                break;
-                            }
+                            append_http_bytes(body, &mut length, escaped);
                         }
                         if is_dir {
                             append_http_bytes(body, &mut length, b"/");
