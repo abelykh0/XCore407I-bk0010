@@ -1211,7 +1211,7 @@ pub fn service(
                             let irq_count = crate::ethernet::dma_interrupt_count();
                             write_status(b" IRQ:");
                             write_decimal(irq_count as usize);
-                            let (dma_sr, dma_omr, rx0, rx1, tx0, tx_current, dmaier, maccr, syscfg_pmc, macdbgr) = crate::ethernet::dma_diagnostic();
+                            let (dma_sr, dma_omr, rx0, rx1, tx0, tx1, tx2, tx3, tx_current, dmaier, maccr, syscfg_pmc, macdbgr) = crate::ethernet::dma_diagnostic();
                             write_status(b"\\r\\nDMA SR/OMR: 0x");
                             write_hex_u32(dma_sr);
                             write_status(b"/0x");
@@ -1220,8 +1220,14 @@ pub fn service(
                             write_hex_u32(rx0);
                             write_status(b"/0x");
                             write_hex_u32(rx1);
-                            write_status(b" TXD:0x");
+                            write_status(b" TXD0..3:0x");
                             write_hex_u32(tx0);
+                            write_status(b"/0x");
+                            write_hex_u32(tx1);
+                            write_status(b"/0x");
+                            write_hex_u32(tx2);
+                            write_status(b"/0x");
+                            write_hex_u32(tx3);
                             write_status(b" TXCUR:0x");
                             write_hex_u32(tx_current);
                             write_status(b" IER:0x");
