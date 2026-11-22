@@ -243,6 +243,7 @@ static mut DEMO_CANVAS: DmaAlignedCanvas<CANVAS_MAIN_BYTES> = DmaAlignedCanvas([
 #[repr(C, align(8))]
 union CanvasTailStorage {
     canvas: AlignedCanvas<CANVAS_TAIL_BYTES>,
+    cpu: [u8; CANVAS_TAIL_BYTES],
 }
 
 // The CCM tail is the video canvas in normal mode and CPU-only Ethernet/TCP
@@ -278,7 +279,7 @@ pub(crate) fn cdc_ethernet_dma_storage_ptr() -> *mut u8 {
 
 pub(crate) fn cdc_ethernet_cpu_storage_ptr() -> *mut u8 {
     unsafe {
-        core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>()
+        core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.cpu).cast::<u8>()
     }
 }
 
