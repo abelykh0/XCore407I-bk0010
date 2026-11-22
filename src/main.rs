@@ -28,15 +28,10 @@ use board::enable_cycle_counter;
 #[cfg(feature = "cpu-cycle-diag")]
 use board::{read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
 use file_browser::{
-    build_save_path, draw_file_browser, draw_save_dialog, list_root_files,
-    load_tetris_from_path, save_file_exists, save_ram_to_path,
-    BROWSER_FILES,
+    draw_file_browser, load_tetris_from_path, BROWSER_FILES,
     FILE_BROWSER_ACTION, FILE_BROWSER_ACTIVE, FILE_BROWSER_OPEN, FILE_BROWSER_UP,
     FILE_BROWSER_DOWN, FILE_BROWSER_ENTER, FILE_BROWSER_ESCAPE,
-    MAX_BROWSER_PATH,
-    SAVE_DIALOG_IDLE, SAVE_DIALOG_INPUT, SAVE_DIALOG_STATE, SAVE_DIALOG_CHECK, SAVE_DIALOG_CONFIRM, SAVE_DIALOG_WRITE,
-    SAVE_DIALOG_DIRTY, SAVE_DIALOG_RESULT, SAVE_OVERWRITE,
-    SAVE_RESULT_CANCELLED, SAVE_RESULT_OK, SAVE_RESULT_ERROR, reset_emulator_ui,
+    SAVE_DIALOG_IDLE, SAVE_DIALOG_STATE, reset_emulator_ui,
     FORMAT_STATE, FORMAT_ERROR, FORMAT_IDLE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL,
     FORMAT_REQUEST, FORMAT_CANCELLED, FORMAT_DONE, FORMAT_FAILED,
     draw_format_confirmation,
@@ -743,190 +738,25 @@ fn main() -> ! {
             format_screen_state = current_format_state;
         }
 
-        let save_state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
-        if save_state == SAVE_DIALOG_CHECK {
-            show_file_browser_line(27, b"F3: BUILDING SAVE PATH", false);
-            let mut path = [0u8; MAX_BROWSER_PATH];
-            let path_len = unsafe { build_save_path(&mut path) };
-            if path_len == 0 {
-                show_file_browser_line(27, b"F3: INVALID SAVE PATH", false);
-                SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
-                SAVE_DIALOG_RESULT.store(SAVE_RESULT_ERROR, Ordering::Release);
-            } else {
-                show_file_browser_line(27, b"F3: CHECKING FILE ON NAND", false);
-                let exists = save_file_exists(&path[..path_len]);
-                show_file_browser_line(27, b"F3: FILE CHECK COMPLETE", false);
-                if exists {
-                    SAVE_DIALOG_STATE.store(SAVE_DIALOG_CONFIRM, Ordering::Release);
-                    SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
-                } else {
-                    SAVE_OVERWRITE.store(false, Ordering::Release);
-                    SAVE_DIALOG_STATE.store(SAVE_DIALOG_WRITE, Ordering::Release);
-                }
-            }
-        }
+        file_browser::process_save_dialog();
 
-        if SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_WRITE {
-            show_file_browser_line(27, b"F3: PREPARING NAND WRITE", false);
-            let mut path = [0u8; MAX_BROWSER_PATH];
-            let path_len = unsafe { build_save_path(&mut path) };
-            let overwrite = SAVE_OVERWRITE.load(Ordering::Acquire);
-            show_file_browser_line(27, b"F3: WRITING RAM TO NAND", false);
-            let extended_mode = xcore407i_blinker::bk_screen::extended_memory_enabled();
-            let saved = extended_mode
-                && path_len != 0
-                && save_ram_to_path(&path[..path_len], overwrite).is_ok();
-            show_file_browser_line(
-                27,
-                if saved {
-                    b"F3: NAND WRITE COMPLETE"
-                } else if !extended_mode {
-                    b"F3: SWITCH TO EXTENDED MODE"
-                } else {
-                    b"F3: NAND WRITE FAILED"
-                },
-                false,
-            );
-            SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
-            SAVE_DIALOG_RESULT.store(
-                if saved { SAVE_RESULT_OK } else { SAVE_RESULT_ERROR },
-                Ordering::Release,
-            );
-        }
-
-        if SAVE_DIALOG_DIRTY.swap(false, Ordering::AcqRel) {
-            let state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
-            if state == SAVE_DIALOG_INPUT || state == SAVE_DIALOG_CONFIRM {
-                unsafe { draw_save_dialog(state); }
-            }
-        }
-
-        match SAVE_DIALOG_RESULT.swap(0, Ordering::AcqRel) {
-            SAVE_RESULT_CANCELLED => {
-                clear_demo_canvas(0x10);
-                show_usb_status(b"SAVE CANCELLED");
-            }
-            SAVE_RESULT_OK => {
-                clear_demo_canvas(0x10);
-                show_usb_status(b"RAM SAVED");
-            }
-            SAVE_RESULT_ERROR => {
-                clear_demo_canvas(0x10);
-                show_usb_status(b"RAM SAVE FAILED");
-            }
-            _ => {}
-        }
-
-        if browser_action == FILE_BROWSER_OPEN && !browser_open {
+        let opening_browser = browser_action == FILE_BROWSER_OPEN && !browser_open;
+        if opening_browser {
             keyboard_queue_discard();
-
-            // Enter the browser visibly before any NAND/Dhara/LittleFS work.
-            // If mounting stalls or faults, the user can distinguish that
-            // from a failure to receive F2.
-            clear_demo_canvas(0);
-            show_file_browser_line(0, b"NAND FILES - SELECT PROGRAM", false);
-            show_file_browser_line(3, b"OPENING NAND STORAGE...", true);
-            show_file_browser_line(5, b"MOUNTING LITTLEFS", false);
-            show_file_browser_line(27, b"PLEASE WAIT", false);
-
-
-            // NAND/LittleFS operations are synchronous. Install a narrowly
-            // scoped hook so USB and the UVC producer continue running even
-            // inside NAND ready/FSMC wait loops and ECC page processing.
             FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
             xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
-            let listing_result = list_root_files(
-                &mut *browser_files,
-                |done, total| {
-                    if done == u32::MAX {
-                        show_file_browser_line(
-                            27,
-                            if total == 0 {
-                                b"F2: LITTLEFS MOUNT" as &[u8]
-                            } else {
-                                b"F2: ROOT DIRECTORY"
-                            },
-                            false,
-                        );
-                    } else if total == 0 {
-                        show_file_browser_line(27, b"F2: NAND INIT", false);
-                    } else if done == 1 || done % 32 == 0 || done == total {
-                        let percent = done.saturating_mul(100) / total;
-                        let mut line = [b' '; 32];
-                        line[..13].copy_from_slice(b"F2: NAND SCAN");
-                        line[13] = b'0' + ((percent / 100) % 10) as u8;
-                        line[14] = b'0' + ((percent / 10) % 10) as u8;
-                        line[15] = b'0' + (percent % 10) as u8;
-                        line[16] = b'%';
-                        show_file_browser_line(27, &line, false);
-                    }
-                    service_file_browser_io();
-                },
-            );
+        }
+        file_browser::process_open_action(
+            browser_action,
+            &mut browser_open,
+            &mut browser_count,
+            &mut browser_selected,
+            &mut *browser_files,
+            service_file_browser_io,
+        );
+        if opening_browser {
             xcore407i_blinker::nand_fs::set_io_service_hook(None);
             FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
-
-            match listing_result {
-                Ok(count) => {
-                    browser_count = count;
-                    browser_selected = 0;
-                    browser_open = true;
-                    FILE_BROWSER_ACTIVE.store(true, Ordering::Release);
-                    draw_file_browser(
-                        &*browser_files,
-                        browser_count,
-                        browser_selected,
-                    );
-                }
-                Err(error) => {
-                    browser_open = false;
-                    FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
-                    if matches!(
-                        error,
-                        xcore407i_blinker::nand_fs::FsAccessError::Init(
-                            xcore407i_blinker::nand_fs::InitError::DharaNoJournal
-                        )
-                    ) {
-                        INIT_STATE.store(INIT_CONFIRM, Ordering::Release);
-                    } else if matches!(
-                        error,
-                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_)
-                    ) {
-                        let detail = match error {
-                            xcore407i_blinker::nand_fs::FsAccessError::Mount(code) => code,
-                            _ => 0,
-                        };
-                        FORMAT_ERROR.store(detail, Ordering::Release);
-                        FORMAT_STATE.store(FORMAT_CONFIRM, Ordering::Release);
-                    } else {
-                    let message: &[u8] = match error {
-                        xcore407i_blinker::nand_fs::FsAccessError::Init(error) => {
-                            match error {
-                                xcore407i_blinker::nand_fs::InitError::Timeout =>
-                                    b"NAND TIMEOUT",
-                                xcore407i_blinker::nand_fs::InitError::WrongDevice =>
-                                    b"NAND WRONG DEVICE",
-                                xcore407i_blinker::nand_fs::InitError::MarkerRead =>
-                                    b"NAND MARKER READ",
-                                xcore407i_blinker::nand_fs::InitError::MountFailed =>
-                                    b"NAND INIT MOUNT FAIL",
-                                xcore407i_blinker::nand_fs::InitError::DharaNoJournal =>
-                                    b"DHARA JOURNAL MISSING",
-                                xcore407i_blinker::nand_fs::InitError::DharaCapacity =>
-                                    b"DHARA CAPACITY LOW",
-                                xcore407i_blinker::nand_fs::InitError::ProvisionFailed =>
-                                    b"DHARA PROVISION FAILED",
-                            }
-                        },
-                        xcore407i_blinker::nand_fs::FsAccessError::Mount(_) =>
-                            b"LFS MOUNT FAILED",
-                        xcore407i_blinker::nand_fs::FsAccessError::Operation =>
-                            b"LFS ROOT READ FAILED",
-                    };
-                    show_usb_status(message);
-                    }
-                }
-            }
         }
 
         if browser_open {

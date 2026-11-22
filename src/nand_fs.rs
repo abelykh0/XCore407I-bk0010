@@ -1274,7 +1274,7 @@ pub(crate) fn read_data_page(page: u32, buffer: &mut [u8]) -> bool {
 pub enum FsAccessError {
     Init(InitError),
     Mount(i32),
-    Operation,
+    Operation(i32),
 }
 
 /// Mount the active volume and preserve whether failure occurred during NAND
@@ -1304,7 +1304,7 @@ pub fn with_mounted_detailed_with_progress<R>(
         progress(u32::MAX, 1);
         Ok(service(fs))
     }).map_err(|error| FsAccessError::Mount(error.code()))?;
-    mounted.map_err(|_| FsAccessError::Operation)
+    mounted.map_err(|error| FsAccessError::Operation(error.code()))
 }
 
 

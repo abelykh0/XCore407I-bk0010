@@ -337,8 +337,10 @@ pub fn report_storage_error(error: crate::nand_fs::FsAccessError) {
             }
             write_status(b"NAND was not modified by this diagnostic.\r\n");
         }
-        FsAccessError::Operation => {
-            write_status(b"\r\nStorage service operation failed. NAND state was not verified.\r\n");
+        FsAccessError::Operation(code) => {
+            write_status(b"\r\nStorage service operation failed; LittleFS error code 0x");
+            write_hex_u32(code as u32);
+            write_status(b". NAND state was not verified.\r\n");
         }
     }
 }
