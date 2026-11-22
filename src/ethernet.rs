@@ -497,10 +497,8 @@ fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) 
 const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 
 pub struct HttpDownloadState {
-    allocation: littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
     size: usize,
     offset: usize,
-    buffer: [u8; 1024],
     content_type: &'static [u8],
     header_sent: bool,
     active: bool,
@@ -509,10 +507,8 @@ pub struct HttpDownloadState {
 impl HttpDownloadState {
     pub fn new() -> Self {
         Self {
-            allocation: littlefs2::fs::FileAllocation::new(),
             size: 0,
             offset: 0,
-            buffer: [0; 1024],
             content_type: b"image/jpeg",
             header_sent: false,
             active: false,
@@ -523,9 +519,10 @@ impl HttpDownloadState {
         &mut self,
         filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
         name: &[u8],
+        allocation: &mut littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
     ) -> bool {
         use littlefs2::path::Path;
-        if self.active || self.allocation.is_open() || name.is_empty() || name.len() > 64 { return false; }
+        if self.active || allocation.is_open() || name.is_empty() || name.len() > 64 { return false; }
         let mut path_bytes = [0u8; 66];
         path_bytes[0] = b'/';
         path_bytes[1..1 + name.len()].copy_from_slice(name);
@@ -534,7 +531,7 @@ impl HttpDownloadState {
         let Ok(metadata) = filesystem.metadata(path) else { return false; };
         let Ok(size) = usize::try_from(metadata.len()) else { return false; };
         self.content_type = if http_name_ends_with(name, b".png") { b"image/png" } else { b"image/jpeg" };
-        if unsafe { self.allocation.open_with_options(filesystem, |options| options.read(true), path) }.is_err() {
+        if unsafe { allocation.open_with_options(filesystem, |options| options.read(true), path) }.is_err() {
             return false;
         }
         self.size = size;
@@ -1060,7 +1057,7 @@ impl<'a> EthernetNetwork<'a> {
         // receive half is finished. Close our transmit half so smoltcp can
         // complete the TCP teardown and the listening socket can be reused.
         if http_download.active {
-            Self::poll_http_download(socket, filesystem, http_download);
+            Self::poll_http_download(socket, filesystem, http_download, &mut http_upload.allocation);
             return;
         }
 
@@ -1259,8 +1256,8 @@ impl<'a> EthernetNetwork<'a> {
 
         if request_kind == 4 {
             http_upload.rx_len = 0;
-            if http_download.start(filesystem, &image_name[..image_name_len]) {
-                Self::poll_http_download(socket, filesystem, http_download);
+            if http_download.start(filesystem, &image_name[..image_name_len], &mut http_upload.allocation) {
+                Self::poll_http_download(socket, filesystem, http_download, &mut http_upload.allocation);
             } else {
                 let _ = socket.send_slice(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot found");
                 socket.close();
@@ -1395,6 +1392,7 @@ impl<'a> EthernetNetwork<'a> {
         socket: &mut smoltcp::socket::tcp::Socket<'_>,
         filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
         state: &mut HttpDownloadState,
+        allocation: &mut littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
     ) {
         if !state.active || !socket.can_send() { return; }
         if !state.header_sent {
@@ -1410,22 +1408,28 @@ impl<'a> EthernetNetwork<'a> {
             return;
         }
         if state.offset >= state.size {
-            if state.allocation.is_open() { let _ = unsafe { state.allocation.close(filesystem) }; }
+            if allocation.is_open() { let _ = unsafe { allocation.close(filesystem) }; }
             state.active = false;
             socket.close();
             return;
         }
-        let count = core::cmp::min(state.buffer.len(), state.size - state.offset);
+        let buffer = unsafe {
+            core::slice::from_raw_parts_mut(
+                addr_of_mut!((*http_storage_ptr()).body).cast::<u8>(),
+                1024,
+            )
+        };
+        let count = core::cmp::min(buffer.len(), state.size - state.offset);
         let read_result = unsafe {
-            state.allocation.seek(filesystem, littlefs2::io::SeekFrom::Start(state.offset as u32))
-                .and_then(|_| state.allocation.read(filesystem, &mut state.buffer[..count]))
+            allocation.seek(filesystem, littlefs2::io::SeekFrom::Start(state.offset as u32))
+                .and_then(|_| allocation.read(filesystem, &mut buffer[..count]))
         };
         match read_result {
             Ok(read) if read != 0 => {
-                if socket.send_slice(&state.buffer[..read]).is_ok() { state.offset += read; }
+                if socket.send_slice(&buffer[..read]).is_ok() { state.offset += read; }
             }
             _ => {
-                if state.allocation.is_open() { let _ = unsafe { state.allocation.close(filesystem) }; }
+                if allocation.is_open() { let _ = unsafe { allocation.close(filesystem) }; }
                 state.active = false;
                 socket.close();
             }
