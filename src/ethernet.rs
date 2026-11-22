@@ -19,7 +19,6 @@ const SYSCFG_PMC: *mut u32 = 0x4001_3804 as *mut u32;
 const ETH_MAC_BASE: usize = 0x4002_8000;
 const ETH_DMA_BASE: usize = 0x4002_9000;
 const ETH_MACCR: *mut u32 = ETH_MAC_BASE as *mut u32;
-const ETH_MACDBGR: *mut u32 = (ETH_MAC_BASE + 0x34) as *mut u32;
 const ETH_MACFFR: *mut u32 = (ETH_MAC_BASE + 0x04) as *mut u32;
 const ETH_MACMIIAR: *mut u32 = (ETH_MAC_BASE + 0x10) as *mut u32;
 const ETH_MACMIIDR: *mut u32 = (ETH_MAC_BASE + 0x14) as *mut u32;
