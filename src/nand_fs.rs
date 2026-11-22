@@ -131,9 +131,8 @@ pub(crate) fn configure_fsmc() {
     }
 }
 
-/// Run one synchronous operation on the CCM canvas-tail region. The region is
-/// reserved for the stack only in CDC mode; normal mode continues to use it as
-/// part of the video canvas.
+/// Run one synchronous CDC filesystem operation on the reserved main-SRAM
+/// canvas stack. The CCM tail is used for CPU-only Ethernet/TCP buffers.
 pub unsafe fn with_cdc_alternate_stack<F, R>(function: F) -> R
 where
     F: FnOnce() -> R,
@@ -143,7 +142,8 @@ where
         result: MaybeUninit::uninit(),
     };
     let stack_top = crate::camera::cdc_alternate_stack_top();
-    // The tail storage is 8-byte aligned and its size is a multiple of 8.
+    // The canvas stack top is 8-byte aligned; its reserved range is disjoint
+    // from the CDC receiver and Ethernet DMA allocations.
     unsafe {
         __xcore_call_on_stack(
             invoke_on_alternate_stack::<F, R>,
