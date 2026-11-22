@@ -217,7 +217,6 @@ pub fn initialize() -> bool {
                 .etie().clear_bit()
                 .erie().clear_bit()
                 .fbeie().clear_bit()
-                .ebeie().clear_bit()
                 .aise().clear_bit()
                 .nise().clear_bit()
         });
@@ -332,7 +331,6 @@ pub fn enable_dma_interrupts() {
                 .etie().clear_bit()
                 .erie().clear_bit()
                 .fbeie().set_bit()
-                .ebeie().clear_bit()
                 .aise().set_bit()
                 .nise().set_bit()
         });
