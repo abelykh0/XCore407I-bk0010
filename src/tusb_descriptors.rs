@@ -58,24 +58,50 @@ const fn push_uvc_descriptors<const N: usize>(
     frame_bit_rate: u32,
     frame_interval_100ns: u32,
 ) {
-    // UVC IAD, VideoControl, and VideoStreaming alternate setting 0.
+    // Interface Association Descriptor: UVC function, interfaces 0–1.
     push_bytes(descriptor, offset, &[
         8, 0x0b, 0, 2, 0x0e, 0x03, 0, 4,
+    ]);
+
+    // VideoControl interface 0 (no endpoints).
+    push_bytes(descriptor, offset, &[
         9, 0x04, 0, 0, 0, 0x0e, 0x01, 0, 0,
+    ]);
+
+    // Class-specific VC header: UVC 1.1, 48 MHz clock, one streaming interface.
+    push_bytes(descriptor, offset, &[
         13, 0x24, 0x01, 0x10, 0x01, 30, 0, 0, 0x6c, 0xdc, 0x02, 1, 1,
+    ]);
+
+    // Camera Input Terminal (ID 1) and Processing Unit (ID 2).
+    push_bytes(descriptor, offset, &[
         8, 0x24, 0x02, 1, 0, 2, 0, 0,
         9, 0x24, 0x03, 2, 1, 1, 0, 1, 0,
+    ]);
+
+    // VideoStreaming interface 1, alternate setting 0 (zero-bandwidth).
+    push_bytes(descriptor, offset, &[
         9, 0x04, 1, 0, 0, 0x0e, 0x02, 0, 4,
+    ]);
+
+    // VS input header: one format, endpoint address, terminal link.
+    push_bytes(descriptor, offset, &[
         14, 0x24, 0x01, 1, 77, 0, ENDPOINT_IN, 0, 2, 0, 0, 0, 1, 0,
+    ]);
+
+    // Uncompressed format descriptor (format index 1), followed by the NV12 GUID.
+    push_bytes(descriptor, offset, &[
         27, 0x24, 0x04, 1, 1,
     ]);
     push_bytes(descriptor, offset, &NV12_GUID);
-    push_bytes(descriptor, offset, &[
-        12, 1, 0, 0, 0, 0,
-        30, 0x24, 0x05, 1, 0,
-    ]);
+    // Remaining format fields: 12 bits per pixel, frame index 1, no aspect
+    // ratio, no interlacing, and no copy protection.
+    push_bytes(descriptor, offset, &[12, 1, 0, 0, 0, 0]);
 
-    // Frame descriptor: dimensions, bitrates, frame size, and interval.
+    // Uncompressed frame descriptor (frame index 1).
+    push_bytes(descriptor, offset, &[30, 0x24, 0x05, 1, 0]);
+
+    // Frame fields: dimensions, bitrates, frame size, and interval.
     push_u16(descriptor, offset, WIDTH as u16);
     push_u16(descriptor, offset, HEIGHT as u16);
     push_u32(descriptor, offset, frame_bit_rate);
@@ -113,18 +139,54 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
         10_000_000,
     );
 
-    // CDC ACM function: interfaces 2 (control) and 3 (data).
-    // EP4 IN notification; EP3 OUT/IN bulk. HS bulk endpoints use 512-byte MPS.
+    // CDC ACM Interface Association Descriptor (IAD).
+    // Groups control interface 2 with data interface 3.
     push_bytes(&mut descriptor, &mut offset, &[
         8, 0x0b, 2, 2, 0x02, 0x02, 0x01, 0,
+    ]);
+
+    // CDC ACM control interface 2: one interrupt notification endpoint.
+    push_bytes(&mut descriptor, &mut offset, &[
         9, 0x04, 2, 0, 1, 0x02, 0x02, 0x01, 0,
+    ]);
+
+    // CDC Header Functional Descriptor: CDC specification version 1.10.
+    push_bytes(&mut descriptor, &mut offset, &[
         5, 0x24, 0x00, 0x10, 0x01,
+    ]);
+
+    // CDC Call Management Functional Descriptor: data interface 3.
+    push_bytes(&mut descriptor, &mut offset, &[
         5, 0x24, 0x01, 0x00, 3,
+    ]);
+
+    // CDC Abstract Control Management Functional Descriptor.
+    push_bytes(&mut descriptor, &mut offset, &[
         4, 0x24, 0x02, 0x02,
+    ]);
+
+    // CDC Union Functional Descriptor: master 2 (control), slave 3 (data).
+    push_bytes(&mut descriptor, &mut offset, &[
         5, 0x24, 0x06, 2, 3,
+    ]);
+
+    // Interrupt IN notification endpoint EP4; 8-byte packets, 16-ms interval.
+    push_bytes(&mut descriptor, &mut offset, &[
         7, 0x05, 0x84, 0x03, 8, 0, 16,
+    ]);
+
+    // CDC data interface 3: bulk OUT and bulk IN endpoints.
+    push_bytes(&mut descriptor, &mut offset, &[
         9, 0x04, 3, 0, 2, 0x0a, 0, 0, 0,
+    ]);
+
+    // Bulk OUT endpoint EP3; 512-byte maximum packet size at high speed.
+    push_bytes(&mut descriptor, &mut offset, &[
         7, 0x05, 0x03, 0x02, 0x00, 0x02, 0,
+    ]);
+
+    // Bulk IN endpoint EP3; 512-byte maximum packet size at high speed.
+    push_bytes(&mut descriptor, &mut offset, &[
         7, 0x05, 0x83, 0x02, 0x00, 0x02, 0,
     ]);
 
@@ -155,18 +217,55 @@ const fn build_normal_configuration_descriptor() -> [u8; NORMAL_CONFIGURATION_DE
     // UAC2 IAD, AudioControl interface, and class-specific AC descriptors.
     // The fixed sample rate is reported by the Clock Source GET_CUR/GET_RANGE callback,
     // which reads the shared AUDIO_KHZ constant from the Rust application.
+    // AudioControl function association: interfaces 2 (control) and 3 (streaming).
     push_bytes(&mut descriptor, &mut offset, &[
         8, 0x0b, 2, 2, 1, 1, 0x20, 0,
+    ]);
+
+    // AudioControl interface 2 and class-specific AC header (UAC2, category 7).
+    push_bytes(&mut descriptor, &mut offset, &[
         9, 0x04, 2, 0, 0, 1, 1, 0x20, 0,
         9, 0x24, 1, 0, 2, 7, 60, 0, 0,
+    ]);
+
+    // Clock Source entity ID 1: internal fixed clock.
+    push_bytes(&mut descriptor, &mut offset, &[
         8, 0x24, 0x0a, 1, 1, 5, 0, 0,
+    ]);
+
+    // Input Terminal ID 2: USB streaming input, linked to Clock Source 1.
+    push_bytes(&mut descriptor, &mut offset, &[
         17, 0x24, 0x02, 2, 0x03, 0x06, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+    ]);
+
+    // Feature Unit ID 3, sourced from Input Terminal 2.
+    push_bytes(&mut descriptor, &mut offset, &[
         14, 0x24, 0x06, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]);
+
+    // Output Terminal ID 4: USB streaming output, sourced from Feature Unit 3.
+    push_bytes(&mut descriptor, &mut offset, &[
         12, 0x24, 0x03, 4, 0x01, 0x01, 0, 3, 1, 0, 0, 0,
+    ]);
+
+    // AudioStreaming interface 3: alternate 0 is idle; alternate 1 carries audio.
+    push_bytes(&mut descriptor, &mut offset, &[
         9, 0x04, 3, 0, 0, 1, 2, 0x20, 0,
         9, 0x04, 3, 1, 1, 1, 2, 0x20, 0,
+    ]);
+
+    // AS General descriptor: terminal link 4, PCM format, two-channel stream.
+    push_bytes(&mut descriptor, &mut offset, &[
         16, 0x24, 1, 4, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0,
+    ]);
+
+    // Type I format: two-byte subslot, 16-bit PCM samples.
+    push_bytes(&mut descriptor, &mut offset, &[
         6, 0x24, 2, 1, 2, 16,
+    ]);
+
+    // Isochronous OUT endpoint EP2 and its class-specific endpoint descriptor.
+    push_bytes(&mut descriptor, &mut offset, &[
         7, 0x05, 0x82, 0x05, 10, 0, 1,
         8, 0x25, 1, 0, 0, 0, 0, 0,
     ]);
