@@ -174,7 +174,7 @@ pub fn initialize() -> bool {
         (*pac::RCC::PTR).ahb1rstr().modify(|_, w| w.ethmacrst().clear_bit());
         let _ = read_volatile((*pac::RCC::PTR).ahb1rstr().as_ptr());
 
-        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| unsafe { w.bits(MII_CR_DIV_102) });
+        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| w.bits(MII_CR_DIV_102));
         let phy = probe_dp83848();
         if !phy.found || phy.mdio_timeout {
             return false;
@@ -211,13 +211,13 @@ pub fn initialize() -> bool {
         write_volatile(addr_of_mut!((*tx_desc).words[3]), tx_desc as u32);
 
         // DMA software reset, then conservative fixed-burst configuration.
-        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| unsafe { w.bits(1) });
+        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| w.bits(1));
         let mut timeout = MDIO_TIMEOUT;
         while (*pac::ETHERNET_DMA::PTR).dmabmr().read().sr().bit_is_set() {
             if timeout == 0 { return false; }
             timeout -= 1;
         }
-        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| unsafe {
+        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| {
             w.sr().clear_bit()
                 .da().clear_bit()
                 .dsl().bits(0)
@@ -231,7 +231,7 @@ pub fn initialize() -> bool {
                 .aab().set_bit()
                 .mb().clear_bit()
         });
-        (*pac::ETHERNET_DMA::PTR).dmaomr().write(|w| unsafe {
+        (*pac::ETHERNET_DMA::PTR).dmaomr().write(|w| {
             w.sr().clear_bit()
                 .osf().clear_bit()
                 .rtc().bits(0)
@@ -305,10 +305,8 @@ pub fn initialize() -> bool {
                 .jd().clear_bit()
                 .wd().clear_bit()
                 .cstf().set_bit();
-            unsafe {
-                w.bl().bits(0);
-                w.ifg().bits(0)
-            }
+            w.bl().bits(0);
+            w.ifg().bits(0)
         });
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
         write_volatile((*pac::ETHERNET_MAC::PTR).macffr().as_ptr(), 0); // normal destination filtering
@@ -464,7 +462,7 @@ fn write_http_upload(
     total: usize,
     data: &[u8],
 ) -> bool {
-    use littlefs2::io::prelude::{Seek, Write};
+    use littlefs2::io::prelude::Write;
     use littlefs2::io::SeekFrom;
     use littlefs2::path::Path;
 
