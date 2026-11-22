@@ -499,6 +499,8 @@ const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 pub struct HttpDownloadState {
     size: usize,
     offset: usize,
+    chunk_len: usize,
+    chunk_pos: usize,
     content_type: &'static [u8],
     header_sent: bool,
     active: bool,
@@ -509,6 +511,8 @@ impl HttpDownloadState {
         Self {
             size: 0,
             offset: 0,
+            chunk_len: 0,
+            chunk_pos: 0,
             content_type: b"image/jpeg",
             header_sent: false,
             active: false,
@@ -536,6 +540,8 @@ impl HttpDownloadState {
         }
         self.size = size;
         self.offset = 0;
+        self.chunk_len = 0;
+        self.chunk_pos = 0;
         self.header_sent = false;
         self.active = true;
         true
@@ -1422,14 +1428,25 @@ impl<'a> EthernetNetwork<'a> {
                 1024,
             )
         };
+        // Match the ZMODEM sender's buffered file-read pattern: keep the
+        // allocation open and read forward. Retain a chunk until TCP accepts
+        // it, so a temporarily full TX queue never causes the file cursor and
+        // HTTP byte offset to diverge.
+        if state.chunk_pos < state.chunk_len {
+            let pending = &buffer[state.chunk_pos..state.chunk_len];
+            if socket.send_slice(pending).is_ok() {
+                let sent = pending.len();
+                state.chunk_pos = state.chunk_len;
+                state.offset += sent;
+            }
+            return;
+        }
+
         let count = core::cmp::min(buffer.len(), state.size - state.offset);
-        let read_result = unsafe {
-            allocation.seek(filesystem, littlefs2::io::SeekFrom::Start(state.offset as u32))
-                .and_then(|_| allocation.read(filesystem, &mut buffer[..count]))
-        };
-        match read_result {
+        match unsafe { allocation.read(filesystem, &mut buffer[..count]) } {
             Ok(read) if read != 0 => {
-                if socket.send_slice(&buffer[..read]).is_ok() { state.offset += read; }
+                state.chunk_len = read;
+                state.chunk_pos = 0;
             }
             _ => {
                 if allocation.is_open() { let _ = unsafe { allocation.close(filesystem) }; }
