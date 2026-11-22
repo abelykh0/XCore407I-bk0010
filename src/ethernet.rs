@@ -560,9 +560,8 @@ impl HttpUploadState {
             self.final_path[final_len] = 0;
             final_len += 1;
 
-            let mut temp_len = 0usize;
+            let mut temp_len = 9usize;
             self.temp_path[..9].copy_from_slice(b"/.upload-");
-            temp_len = 9;
             self.temp_path[temp_len..temp_len + name.len()].copy_from_slice(name);
             temp_len += name.len();
             self.temp_path[temp_len] = 0;
@@ -1031,6 +1030,7 @@ impl<'a> EthernetNetwork<'a> {
             )
         };
 
+        let mut request_ready = false;
         let mut parse_request = |data: &[u8]| {
             HTTP_POLL_DIAG_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
             HTTP_POLL_DIAG_RECV_BYTES.store(data.len() as u32, Ordering::Release);
