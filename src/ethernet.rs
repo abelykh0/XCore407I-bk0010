@@ -25,16 +25,16 @@ const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 // Keep the request buffer small. The response buffers grow by only 512 bytes
 // in total; directory output is paginated instead of buffering the whole listing.
 const HTTP_RX_BUFFER_SIZE: usize = 256;
-const HTTP_TX_BUFFER_SIZE: usize = 768;
-const HTTP_BODY_BUFFER_SIZE: usize = 640;
-const HTTP_DIRECTORY_PAGE_SIZE: usize = 2;
+const HTTP_TX_BUFFER_SIZE: usize = 896;
+const HTTP_BODY_BUFFER_SIZE: usize = 768;
+const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
 static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
 static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
 static mut HTTP_BODY_BUFFER: [u8; HTTP_BODY_BUFFER_SIZE] = [0; HTTP_BODY_BUFFER_SIZE];
 const HTTP_RESPONSE_HEADER: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
-const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><title>LittleFS</title><h1>LittleFS files</h1><ul id=f></ul><button id=b hidden>More</button><script>
-let o=0,f=document.getElementById('f'),b=document.getElementById('b');async function l(){b.disabled=1;try{let r=await fetch('/api/files?offset='+o),d=new DOMParser().parseFromString(await r.text(),'text/html');f.insertAdjacentHTML('beforeend',d.querySelector('ul').innerHTML);let n=d.querySelector('[data-next]');if(n){o=+n.dataset.next;b.hidden=0}else b.hidden=1}catch(e){b.hidden=0;b.textContent='Retry'}b.disabled=0}b.onclick=l;l()</script>"#;
+const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><ul id=f></ul><script>
+let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s');async function load(){try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),u=d.querySelector('ul');if(!u)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',u.innerHTML);count+=u.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded). Refresh the page to retry.';}}load()</script>"#;
 
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
