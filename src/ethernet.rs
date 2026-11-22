@@ -46,6 +46,8 @@ const MII_RMII_SEL: u32 = 1 << 23;
 const MII_BUSY: u32 = 1;
 const MII_CR_DIV_102: u32 = 0b100 << 2;
 const MDIO_TIMEOUT: u32 = 1_000_000;
+const PHY_NEGOTIATION_POLLS: u32 = 5_000;
+const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
@@ -123,6 +125,11 @@ pub fn initialize() -> bool {
         if !phy.found || phy.mdio_timeout {
             return false;
         }
+        // PHYSTS speed/duplex bits are not valid until autonegotiation completes.
+        // Wait a bounded interval so a late link negotiation cannot leave MACCR
+        // configured differently from the PHY. A disconnected cable must not
+        // prevent the Ethernet stack from starting.
+        let phy = wait_for_phy_negotiation(phy);
 
         // Software-owned, chained descriptor rings. Enhanced descriptors are
         // disabled; each descriptor is the four-word basic format from RM0090.
@@ -164,10 +171,13 @@ pub fn initialize() -> bool {
         write_volatile(ETH_MACA0LR, 0x4009_1202);
         write_volatile(ETH_MACA0HR, 0x0000_0170);
 
-        // Match the PHY's negotiated speed and duplex.
+        // Match the PHY only after link and autonegotiation are both valid.
+        // If there is no negotiated link, use the conservative 10 Mb/s half-
+        // duplex mode until a later link-state update is implemented.
+        let negotiated = phy.physts & ((1 << 4) | (1 << 0)) == ((1 << 4) | (1 << 0));
         let mut maccr = (1 << 25) | (1 << 7); // strip CRC, automatic pad/CRC stripping
-        if phy.physts & (1 << 1) == 0 { maccr |= 1 << 14; } // 100 Mb/s
-        if phy.physts & (1 << 2) != 0 { maccr |= 1 << 11; } // full duplex
+        if negotiated && phy.physts & (1 << 1) == 0 { maccr |= 1 << 14; } // 100 Mb/s
+        if negotiated && phy.physts & (1 << 2) != 0 { maccr |= 1 << 11; } // full duplex
         write_volatile(ETH_MACCR, maccr);
         write_volatile(ETH_MACFFR, 0); // normal destination filtering
 
@@ -280,6 +290,36 @@ pub fn probe_dp83848() -> PhyStatus {
 
 fn empty_status(mdio_timeout: bool) -> PhyStatus {
     PhyStatus { found: false, address: 0xff, id1: 0, id2: 0, bmsr: 0, physts: 0, mdio_timeout }
+}
+
+/// Wait for DP83848 link and autonegotiation completion without blocking startup
+/// indefinitely. Returns the most recent PHY status even if the wait expires.
+fn wait_for_phy_negotiation(mut phy: PhyStatus) -> PhyStatus {
+    for _ in 0..PHY_NEGOTIATION_POLLS {
+        unsafe {
+            // BMSR link and autoneg-complete bits are latch-low; read twice.
+            let _ = mdio_read(phy.address, 1);
+            if let Some(bmsr) = mdio_read(phy.address, 1) {
+                phy.bmsr = bmsr;
+            } else {
+                break;
+            }
+            if let Some(physts) = mdio_read(phy.address, 0x10) {
+                phy.physts = physts;
+            } else {
+                break;
+            }
+        }
+        if phy.bmsr & (1 << 5) != 0
+            && phy.physts & ((1 << 4) | (1 << 0)) == ((1 << 4) | (1 << 0))
+        {
+            break;
+        }
+        for _ in 0..PHY_NEGOTIATION_DELAY {
+            core::hint::spin_loop();
+        }
+    }
+    phy
 }
 
 fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
