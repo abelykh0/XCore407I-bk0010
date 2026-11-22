@@ -1253,6 +1253,16 @@ pub fn service(
                                 if index != 0 { write_status(b" "); }
                                 write_hex_u8(crate::ethernet::tx_packet_byte(index));
                             }
+                            let (mmc_control, mmc_tx_gb, mmc_underflow, mmc_late, mmc_excess, mmc_carrier, mmc_good) =
+                                crate::ethernet::mmc_tx_diagnostic();
+                            write_status(b" MMC C/TXGB/UF/LATE/EXCESS/CARR/GOOD:");
+                            for (index, value) in [
+                                mmc_control, mmc_tx_gb, mmc_underflow, mmc_late,
+                                mmc_excess, mmc_carrier, mmc_good,
+                            ].iter().enumerate() {
+                                if index != 0 { write_status(b"/"); }
+                                write_hex_u32(*value);
+                            }
                             write_status(b" IER:0x");
                             write_hex_u32(dmaier);
                             write_status(b" MACCR:0x");
