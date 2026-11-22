@@ -257,7 +257,7 @@ static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
 pub(crate) const CDC_RECEIVER_STORAGE_BYTES: usize = 4096;
 pub(crate) const CDC_ETHERNET_DMA_STORAGE_BYTES: usize = 2 * 16 + 2 * 1536 + 16 + 1536;
 pub(crate) const CDC_HTTP_RX_BYTES: usize = 4096;
-pub(crate) const CDC_HTTP_BODY_BYTES: usize = 24_528;
+pub(crate) const CDC_HTTP_BODY_BYTES: usize = 63_184;
 pub(crate) const CDC_HTTP_STORAGE_BYTES: usize =
     CDC_HTTP_RX_BYTES + CDC_HTTP_BODY_BYTES;
 const CDC_ALT_STACK_BYTES: usize = 8 * 1024;
