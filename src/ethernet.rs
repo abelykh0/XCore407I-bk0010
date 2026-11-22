@@ -1,7 +1,8 @@
 //! STM32F407 RMII Ethernet MAC/DMA driver for the XCore407I.
 //!
-//! DMA descriptors and packet buffers are ordinary statics in SRAM (.bss).
+//! DMA descriptors and packet buffers are carved from DEMO_CANVAS in main SRAM.
 //! Do not move them to CCM: the STM32F407 Ethernet DMA cannot access CCM.
+//! CPU-only TCP/HTTP storage is carved from DEMO_CANVAS_TAIL in CCM.
 //! DMA interrupts acknowledge hardware events; smoltcp remains foreground-polled.
 
 use core::marker::PhantomData;
