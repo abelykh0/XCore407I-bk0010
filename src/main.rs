@@ -434,7 +434,11 @@ fn main() -> ! {
                             loop {
                                 let _ = tusb::tud_task_ext(1, false);
                                 xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
-                                ethernet_network.poll(TICKS.load(Ordering::Relaxed));
+                                // The HTTP directory listing reads LittleFS synchronously.
+                                // Keep USB/UVC serviced during NAND page reads.
+                                xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+                                ethernet_network.poll(TICKS.load(Ordering::Relaxed), fs);
+                                xcore407i_blinker::nand_fs::set_io_service_hook(None);
                                 // Keep USB/UVC and the video producer alive inside synchronous
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
                                 FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
