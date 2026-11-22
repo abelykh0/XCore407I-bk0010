@@ -4,7 +4,7 @@ version = "0.6.0"
 edition = "2024"
 
 [build-dependencies]
-cc = "1.11.2"
+cc = "1.11.3"
 bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 glob = "0.3"
 
@@ -23,7 +23,7 @@ panic-halt = "1.0.0"
 libm = "0.2"
 littlefs2 = { path = "vendor/littlefs2", default-features = false, features = ["c-stubs"] }
 zmodem2 = { path = "vendor/zmodem2", default-features = false }
-smoltcp = { version = "0.12.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-tcp"] }
+smoltcp = { version = "0.14.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-tcp"] }
 
 [profile.release]
 codegen-units = 1

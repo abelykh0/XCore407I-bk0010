@@ -11,11 +11,6 @@ use stm32f4xx_hal::pac;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
-
-
-
-
-
 const MII_CR_DIV_102: u32 = 0b100 << 2;
 
 const DP83848_PHYSTS_LINK: u16 = 1 << 0;
