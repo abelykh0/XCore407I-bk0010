@@ -455,7 +455,7 @@ struct HttpUploadState {
 }
 
 impl HttpUploadState {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             allocation: littlefs2::fs::FileAllocation::new(),
             temp_path: [0; 80],
@@ -544,7 +544,7 @@ impl HttpUploadState {
             || self.final_path_len == 0
             || self.total != total
             || self.received != offset
-            || self.final_path[1..self.final_path_len - 1] != *name
+            || &self.final_path[1..self.final_path_len - 1] != name
             || !self.allocation.is_open()
         {
             return false;
