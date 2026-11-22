@@ -1219,6 +1219,17 @@ pub fn service(
                             write_decimal(dhcp_configured as usize);
                             write_status(b"/");
                             write_decimal(dhcp_deconfigured as usize);
+                            let (dma_sr, dma_omr, rx0, rx1, _, _, _, _, _, _, _, _, _) = crate::ethernet::dma_diagnostic();
+                            write_status(b"\\r\\nDMA SR/OMR: 0x");
+                            write_hex_u32(dma_sr);
+                            write_status(b"/0x");
+                            write_hex_u32(dma_omr);
+                            write_status(b" RXD0/1: 0x");
+                            write_hex_u32(rx0);
+                            write_status(b"/0x");
+                            write_hex_u32(rx1);
+                            write_status(b" IRQ:");
+                            write_decimal(crate::ethernet::dma_interrupt_count() as usize);
                             write_status(b"\r\nIPv4: ");
                             if let Some((address, prefix)) = crate::ethernet::ipv4_config() {
                                 for (index, octet) in address.iter().enumerate() {
