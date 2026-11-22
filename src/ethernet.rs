@@ -11,13 +11,6 @@ use stm32f4xx_hal::pac;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
-// Build register pointers from PAC peripheral pointers. Pointer arithmetic stays
-// in pointer space; converting PAC pointers to integers is not const-evaluable.
-const fn register(base: *const u8, offset: usize) -> *mut u32 {
-    base.wrapping_add(offset) as *mut u32
-}
-
-const RCC_AHB1ENR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x30);
 const RCC_AHB1RSTR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x10);
 const RCC_APB2ENR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x44);
 const SYSCFG_PMC: *mut u32 = register(pac::SYSCFG::PTR as *const u8, 0x04);
@@ -39,9 +32,6 @@ const ETH_DMAIER: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x1c)
 const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
 const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 
-const ETHMACEN: u32 = 1 << 25;
-const ETHMACTXEN: u32 = 1 << 26;
-const ETHMACRXEN: u32 = 1 << 27;
 const ETHMACRST: u32 = 1 << 25;
 const SYSCFGEN: u32 = 1 << 14;
 const MII_RMII_SEL: u32 = 1 << 23;
@@ -166,11 +156,13 @@ pub fn initialize() -> bool {
         write_volatile(RCC_APB2ENR, read_volatile(RCC_APB2ENR) | SYSCFGEN);
         write_volatile(SYSCFG_PMC, read_volatile(SYSCFG_PMC) | MII_RMII_SEL);
 
-        write_volatile(
-            RCC_AHB1ENR,
-            read_volatile(RCC_AHB1ENR) | ETHMACEN | ETHMACTXEN | ETHMACRXEN,
-        );
-        let _ = read_volatile(RCC_AHB1ENR);
+        // Enable the MAC, TX, and RX clocks through the typed RCC PAC accessor.
+        (*pac::RCC::PTR).ahb1enr().modify(|_, w| {
+            w.ethmacen().set_bit()
+                .ethmactxen().set_bit()
+                .ethmacrxen().set_bit()
+        });
+        let _ = (*pac::RCC::PTR).ahb1enr().read();
 
         // Reset the Ethernet MAC/DMA block before programming descriptors.
         write_volatile(RCC_AHB1RSTR, read_volatile(RCC_AHB1RSTR) | ETHMACRST);
@@ -333,8 +325,8 @@ pub fn is_initialized() -> bool {
 pub fn probe_dp83848() -> PhyStatus {
     unsafe {
         write_volatile(RCC_APB2ENR, read_volatile(RCC_APB2ENR) | SYSCFGEN);
-        write_volatile(RCC_AHB1ENR, read_volatile(RCC_AHB1ENR) | ETHMACEN);
-        let _ = read_volatile(RCC_AHB1ENR);
+        (*pac::RCC::PTR).ahb1enr().modify(|_, w| w.ethmacen().set_bit());
+        let _ = (*pac::RCC::PTR).ahb1enr().read();
         let initial = read_volatile(ETH_MACMIIAR);
         write_volatile(ETH_MACMIIAR, (initial & !(MII_CR_DIV_MASK | MII_BUSY)) | MII_CR_DIV_102);
 
