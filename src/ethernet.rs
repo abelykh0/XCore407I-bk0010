@@ -196,11 +196,24 @@ pub fn initialize() -> bool {
         // Match the STM32F4 HAL register synchronization sequence. The MAC
         // configuration crosses into the TX_CLK/RX_CLK clock domain; ST waits
         // at least four clock cycles after each MAC register write.
-        let maccr = (1 << 25) // CSTF: strip CRC from received frames
-            | (1 << 7) // APCS: strip padding and CRC
-            | (if negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0 { 1 << 14 } else { 0 })
-            | (if negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0 { 1 << 11 } else { 0 });
-        (*pac::ETHERNET_MAC::PTR).maccr().write(|w| unsafe { w.bits(maccr) });
+        (*pac::ETHERNET_MAC::PTR).maccr().write(|w| {
+            w.re().clear_bit()
+                .te().clear_bit()
+                .dc().clear_bit()
+                .bl().bits(0)
+                .apcs().set_bit()
+                .rd().clear_bit()
+                .ipco().clear_bit()
+                .dm().bit(negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0)
+                .lm().clear_bit()
+                .rod().clear_bit()
+                .fes().bit(negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0)
+                .csd().clear_bit()
+                .ifg().bits(0)
+                .jd().clear_bit()
+                .wd().clear_bit()
+                .cstf().set_bit()
+        });
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
         write_volatile((*pac::ETHERNET_MAC::PTR).macffr().as_ptr(), 0); // normal destination filtering
         mac_register_sync((*pac::ETHERNET_MAC::PTR).macffr().as_ptr());
