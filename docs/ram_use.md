@@ -27,7 +27,7 @@ Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES =
 | USB host/device state | Various | Not measured | TinyUSB state, descriptors, endpoint buffers, host state and class state |
 | Emulator/audio/keyboard state | Various | Not measured | Other C and Rust globals, queues and state |
 
-The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment. The two canvas figures above are linker-reserved capacities, not proof that every byte is actively used by the emulator. In particular, the backing store is shared with the BK extended-memory layout; the active framebuffer extent depends on the selected BK display mode. Do not count the entire 131,072-byte reservation as live emulator video data.
+The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment. DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of the same logical canvas backing store; the split reflects the available main-SRAM and CCM regions. The UVC image is generated and packetized from this backing store on the fly. The firmware does not allocate or retain a complete 512 × 512 NV12 frame (384 KiB) in RAM.
 
 ## CDC mode — UVC static page + CDC + Ethernet HTTP
 
