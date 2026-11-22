@@ -64,9 +64,6 @@ const TX_DESC_IC: u32 = 1 << 30;
 
 const MAC_ADDRESS: [u8; 6] = [0x02, 0x12, 0x09, 0x40, 0x70, 0x01];
 
-const HTTP_PAGE: &[u8] = include_bytes!("../resources/index.html");
-const HTTP_RESPONSE_HEADER: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 219\r\nConnection: close\r\n\r\n";
-
 const DP83848_ID1: u16 = 0x2000;
 const DP83848_ID2_MASK: u16 = 0xfff0;
 const DP83848_ID2: u16 = 0x5c90;
@@ -560,20 +557,13 @@ pub struct EthernetNetwork<'a> {
     iface: smoltcp::iface::Interface,
     sockets: smoltcp::iface::SocketSet<'a>,
     dhcp_handle: smoltcp::iface::SocketHandle,
-    http_handle: smoltcp::iface::SocketHandle,
-    http_header_match: u8,
 }
 
 impl<'a> EthernetNetwork<'a> {
     /// Create a network interface using caller-provided fixed socket storage.
-    pub fn new(
-        storage: &'a mut [smoltcp::iface::SocketStorage<'a>],
-        tcp_rx_buffer: &'a mut [u8],
-        tcp_tx_buffer: &'a mut [u8],
-    ) -> Self {
+    pub fn new(storage: &'a mut [smoltcp::iface::SocketStorage<'a>]) -> Self {
         use smoltcp::iface::{Config, Interface, SocketSet};
         use smoltcp::socket::dhcpv4::Socket as Dhcpv4Socket;
-        use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer};
         use smoltcp::wire::{EthernetAddress, HardwareAddress};
 
         let mut device = EthernetDevice::new();
@@ -582,18 +572,8 @@ impl<'a> EthernetNetwork<'a> {
         let iface = Interface::new(config, &mut device, Instant::from_millis(0));
         let mut sockets = SocketSet::new(storage);
         let dhcp_handle = sockets.add(Dhcpv4Socket::new());
-        let tcp_rx_buffer = TcpSocketBuffer::new(tcp_rx_buffer);
-        let tcp_tx_buffer = TcpSocketBuffer::new(tcp_tx_buffer);
-        let http_handle = sockets.add(TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer));
 
-        Self {
-            device,
-            iface,
-            sockets,
-            dhcp_handle,
-            http_handle,
-            http_header_match: 0,
-        }
+        Self { device, iface, sockets, dhcp_handle }
     }
 
     /// Advance Ethernet, DHCP, and interface timers. Call frequently from the
@@ -634,52 +614,5 @@ impl<'a> EthernetNetwork<'a> {
             }
         }
 
-        self.poll_http();
     }
-
-    /// Serve the embedded Hello World page on TCP port 80.
-    fn poll_http(&mut self) {
-        use smoltcp::socket::tcp::Socket as TcpSocket;
-
-        let mut header_match = self.http_header_match;
-        let mut request_complete = false;
-        {
-            let socket = self.sockets.get_mut::<TcpSocket>(self.http_handle);
-            if !socket.is_open() {
-                let _ = socket.listen(80);
-                header_match = 0;
-            }
-
-            if socket.can_recv() {
-                request_complete = socket
-                    .recv(|data| {
-                        let complete = http_header_complete(data, &mut header_match);
-                        (data.len(), complete)
-                    })
-                    .unwrap_or(false);
-            }
-
-            if request_complete {
-                let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
-                let _ = socket.send_slice(HTTP_PAGE);
-                socket.close();
-            }
-        }
-        self.http_header_match = header_match;
-    }
-}
-
-fn http_header_complete(data: &[u8], matched: &mut u8) -> bool {
-    const END: &[u8; 4] = b"\r\n\r\n";
-    for byte in data {
-        if *byte == END[*matched as usize] {
-            *matched += 1;
-            if *matched == END.len() as u8 {
-                return true;
-            }
-        } else {
-            *matched = if *byte == b'\r' { 1 } else { 0 };
-        }
-    }
-    false
 }
