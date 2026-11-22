@@ -43,8 +43,8 @@ const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS  
 const HELP_WRITE_PROFILE: &[u8] = b"  WRITE PROFILE Show last ZMODEM receive timing breakdown\r\n";
 #[cfg(feature = "nand-diagnostics")]
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
-const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
-const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
+const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nStorage: LittleFS mounted for CDC session\r\n";
+const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
 /// TinyUSB reports DTR changes while processing SET_CONTROL_LINE_STATE.
@@ -1237,6 +1237,21 @@ pub fn service(
                         write_decimal(written as usize);
                         write_status(b" send=");
                         write_decimal(sends as usize);
+                        write_status(b"\r\n");
+                        let (poll_stage, polls, receives, rx_bytes, no_send, no_recv) =
+                            crate::ethernet::http_poll_diagnostics();
+                        write_status(b"HTTP socket: stage=");
+                        write_decimal(poll_stage as usize);
+                        write_status(b" polls=");
+                        write_decimal(polls as usize);
+                        write_status(b" recv_calls=");
+                        write_decimal(receives as usize);
+                        write_status(b" rx_bytes=");
+                        write_decimal(rx_bytes as usize);
+                        write_status(b" no_send=");
+                        write_decimal(no_send as usize);
+                        write_status(b" no_recv=");
+                        write_decimal(no_recv as usize);
                         write_status(b"\r\n");
                         write_status(if ZMODEM_START_FAILED {
                             b"ZMODEM startup: header detected, receiver did not start.\r\n"
