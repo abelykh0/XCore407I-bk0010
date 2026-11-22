@@ -1244,13 +1244,14 @@ pub fn service(
                             write_hex_u32(tx3);
                             write_status(b" TXCUR:0x");
                             write_hex_u32(txcur);
-                            let (tx_length, tx_bytes) = crate::ethernet::tx_packet_diagnostic();
+                            let tx_length = crate::ethernet::tx_packet_length();
                             write_status(b" TXLEN:");
                             write_decimal(tx_length as usize);
                             write_status(b" TXDATA:");
-                            for (index, byte) in tx_bytes.iter().enumerate() {
+                            let dump_length = (tx_length as usize).min(304);
+                            for index in 0..dump_length {
                                 if index != 0 { write_status(b" "); }
-                                write_hex_u8(*byte);
+                                write_hex_u8(crate::ethernet::tx_packet_byte(index));
                             }
                             write_status(b" IER:0x");
                             write_hex_u32(dmaier);
