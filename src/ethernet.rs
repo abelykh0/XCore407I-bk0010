@@ -24,15 +24,15 @@ const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
 // Keep the request buffer small. The response buffers grow by only 512 bytes
 // in total; directory output is paginated instead of buffering the whole listing.
-const HTTP_RX_BUFFER_SIZE: usize = 256;
+const HTTP_RX_BUFFER_SIZE: usize = 768;
 const HTTP_TX_BUFFER_SIZE: usize = 1280;
 const HTTP_BODY_BUFFER_SIZE: usize = 768;
 const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
 static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
 static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
 static mut HTTP_BODY_BUFFER: [u8; HTTP_BODY_BUFFER_SIZE] = [0; HTTP_BODY_BUFFER_SIZE];
-const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><ul id=f></ul><script>
-let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s');async function load(){try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),u=d.querySelector('ul');if(!u)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',u.innerHTML);count+=u.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded). Refresh the page to retry.';}}load()</script>"#;
+const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><input id=u type=file><button id=b type=button>Upload</button><p id=p role=status></p><ul id=f></ul><script>
+let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s'),u=document.getElementById('u'),p=document.getElementById('p');async function load(){o=0;count=0;f.textContent='';try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),ul=d.querySelector('ul');if(!ul)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',ul.innerHTML);count+=ul.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded).';}}document.getElementById('b').onclick=async()=>{let file=u.files[0];if(!file){p.textContent='Choose a file first.';return;}if(!/^[A-Za-z0-9._-]{1,64}$/.test(file.name)){p.textContent='Use a filename with 1-64 letters, digits, dot, underscore or hyphen.';return;}try{let chunk=256;for(let offset=0;offset<file.size||offset===0;){let part=file.slice(offset,Math.min(offset+chunk,file.size));p.textContent='Uploading '+file.name+': '+Math.min(offset+part.size,file.size)+' / '+file.size+' bytes';let r=await fetch('/api/upload?name='+encodeURIComponent(file.name)+'&offset='+offset+'&total='+file.size,{method:'POST',body:part});if(!r.ok)throw Error(await r.text());offset+=part.size;if(file.size===0)break;}p.textContent='Upload complete: '+file.name;await load();}catch(e){p.textContent='Upload failed: '+e.message;}};load()</script>"#;
 
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
@@ -392,6 +392,86 @@ fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) 
     }
 }
 
+
+const HTTP_UPLOAD_CHUNK_SIZE: usize = 256;
+
+fn parse_http_decimal(bytes: &[u8]) -> Option<usize> {
+    let bytes = bytes.trim_ascii();
+    if bytes.is_empty() { return None; }
+    let mut value = 0usize;
+    for &byte in bytes {
+        if !byte.is_ascii_digit() { return None; }
+        value = value.checked_mul(10)?.checked_add((byte - b'0') as usize)?;
+    }
+    Some(value)
+}
+
+fn write_http_upload(
+    filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+    name: &[u8],
+    offset: usize,
+    total: usize,
+    data: &[u8],
+) -> bool {
+    use littlefs2::io::prelude::{Seek, Write};
+    use littlefs2::io::SeekFrom;
+    use littlefs2::path::Path;
+
+    if name.is_empty() || name.len() > 64
+        || offset > total || data.len() > total.saturating_sub(offset)
+    {
+        return false;
+    }
+
+    let mut final_path_bytes = [0u8; 66];
+    final_path_bytes[0] = b'/';
+    final_path_bytes[1..1 + name.len()].copy_from_slice(name);
+    final_path_bytes[1 + name.len()] = 0;
+    let final_path = match Path::from_bytes_with_nul(&final_path_bytes[..name.len() + 2]) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+
+    let mut temp_path_bytes = [0u8; 80];
+    let mut temp_len = 0usize;
+    if !append_http_bytes(&mut temp_path_bytes, &mut temp_len, b"/.upload-")
+        || !append_http_bytes(&mut temp_path_bytes, &mut temp_len, name)
+        || !append_http_bytes(&mut temp_path_bytes, &mut temp_len, b"\0")
+    {
+        return false;
+    }
+    let temp_path = match Path::from_bytes_with_nul(&temp_path_bytes[..temp_len]) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+
+    let written = if offset == 0 {
+        if filesystem.exists(temp_path) && filesystem.remove(temp_path).is_err() {
+            return false;
+        }
+        filesystem.create_file_and_then(temp_path, |file| file.write_all(data)).is_ok()
+    } else {
+        filesystem.open_file_and_then(temp_path, |file| {
+            if file.len()? != offset {
+                return Ok(false);
+            }
+            file.seek(SeekFrom::End(0))?;
+            file.write_all(data)?;
+            Ok(true)
+        }).unwrap_or(false)
+    };
+    if !written {
+        return false;
+    }
+
+    if offset + data.len() == total {
+        if filesystem.exists(final_path) && filesystem.remove(final_path).is_err() {
+            return false;
+        }
+        return filesystem.rename(temp_path, final_path).is_ok();
+    }
+    true
+}
 /// Whether MAC/DMA initialization completed successfully.
 pub fn is_initialized() -> bool {
     MAC_DMA_READY.load(Ordering::Acquire)
@@ -721,116 +801,199 @@ impl<'a> EthernetNetwork<'a> {
             return;
         }
 
-        if socket.can_recv() {
-            let mut api_request = false;
-            let mut offset = 0usize;
-            let received = socket.recv(|data| {
-                const API_PREFIX: &[u8] = b"GET /api/files?offset=";
-                if let Some(line_end) = data.iter().position(|&byte| byte == b'\n') {
-                    let line = &data[..line_end];
-                    if let Some(rest) = line.strip_prefix(API_PREFIX) {
-                        api_request = true;
-                        for &byte in rest {
-                            if !byte.is_ascii_digit() { break; }
-                            offset = offset.saturating_mul(10)
-                                .saturating_add((byte - b'0') as usize)
-                                .min(1_000_000);
-                        }
+        let mut request_kind = 0u8; // 0=page, 1=directory, 2=upload, 3=bad request
+        let mut request_ready = false;
+        let mut listing_offset = 0usize;
+        let mut upload_name = [0u8; 64];
+        let mut upload_name_len = 0usize;
+        let mut upload_offset = 0usize;
+        let mut upload_total = 0usize;
+        let mut upload_len = 0usize;
+        let upload_body = unsafe {
+            core::slice::from_raw_parts_mut(
+                addr_of_mut!(HTTP_BODY_BUFFER).cast::<u8>(),
+                HTTP_BODY_BUFFER_SIZE,
+            )
+        };
+
+        let _ = socket.recv(|data| {
+            let Some(separator) = data.windows(4).position(|window| window == b"\r\n\r\n") else {
+                return (0, false);
+            };
+            let header_len = separator + 4;
+            let Some(line_end) = data.windows(2).position(|window| window == b"\r\n") else {
+                return (0, false);
+            };
+            let line = &data[..line_end];
+
+            if let Some(rest) = line.strip_prefix(b"GET /api/files?offset=") {
+                request_kind = 1;
+                for &byte in rest {
+                    if !byte.is_ascii_digit() { break; }
+                    listing_offset = listing_offset.saturating_mul(10)
+                        .saturating_add((byte - b'0') as usize)
+                        .min(1_000_000);
+                }
+                request_ready = true;
+                return (header_len, true);
+            }
+
+            if let Some(rest) = line.strip_prefix(b"POST /api/upload?name=") {
+                let Some(http_pos) = rest.windows(9).position(|window| window == b" HTTP/1.1") else {
+                    request_kind = 3;
+                    request_ready = true;
+                    return (header_len, true);
+                };
+                let query = &rest[..http_pos];
+                let mut fields = query.split(|&byte| byte == b'&');
+                let name = fields.next().unwrap_or(&[]);
+                let offset = fields.next().and_then(|field| field.strip_prefix(b"offset="))
+                    .and_then(parse_http_decimal);
+                let total = fields.next().and_then(|field| field.strip_prefix(b"total="))
+                    .and_then(parse_http_decimal);
+                let valid_name = !name.is_empty()
+                    && name.len() <= upload_name.len()
+                    && name.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'));
+                let mut content_length = None;
+                for header in data[..separator].split(|&byte| byte == b'\n').skip(1) {
+                    let header = header.strip_suffix(b"\r").unwrap_or(header);
+                    if header.len() >= 15 && header[..15].eq_ignore_ascii_case(b"Content-Length:") {
+                        content_length = parse_http_decimal(header[15..].trim_ascii());
                     }
                 }
-                (data.len(), !data.is_empty())
-            }).unwrap_or(false);
-
-            if received && socket.can_send() {
-                let body: &[u8] = if !api_request {
-                    HTTP_PAGE
-                } else {
-                    let body = unsafe {
-                        core::slice::from_raw_parts_mut(
-                            addr_of_mut!(HTTP_BODY_BUFFER).cast::<u8>(),
-                            HTTP_BODY_BUFFER_SIZE,
-                        )
-                    };
-                    let mut length = 0usize;
-                    let mut seen = 0usize;
-                    let mut emitted = 0usize;
-                    let mut has_more = false;
-                    append_http_bytes(body, &mut length, b"<ul>");
-
-                    let _ = crate::nand_fs::read_root_directory(
-                        filesystem,
-                        true,
-                        |path, is_dir, size| {
-                            if seen < offset {
-                                seen += 1;
-                                return Ok(());
-                            }
-                            if emitted >= HTTP_DIRECTORY_PAGE_SIZE {
-                                has_more = true;
-                                return Ok(());
-                            }
-                            seen += 1;
-                            emitted += 1;
-
-                            let name = path.strip_prefix(b"/").unwrap_or(path);
-                            let name = name.strip_suffix(b"\0").unwrap_or(name);
-                            // Bound worst-case HTML expansion while retaining useful names.
-                            let mut name_len = core::cmp::min(name.len(), 32);
-                            while name_len > 0 && name_len < name.len()
-                                && name[name_len] & 0xc0 == 0x80
-                            {
-                                name_len -= 1;
-                            }
-                            append_http_bytes(body, &mut length, b"<li>");
-                            for &byte in &name[..name_len] {
-                                let escaped = match byte {
-                                    b'&' => b"&amp;" as &[u8],
-                                    b'<' => b"&lt;",
-                                    b'>' => b"&gt;",
-                                    b'"' => b"&quot;",
-                                    _ => core::slice::from_ref(&byte),
-                                };
-                                append_http_bytes(body, &mut length, escaped);
-                            }
-                            if name_len < name.len() {
-                                append_http_bytes(body, &mut length, b"... ");
-                            }
-                            if is_dir {
-                                append_http_bytes(body, &mut length, b"/");
-                            } else {
-                                append_http_bytes(body, &mut length, b" (");
-                                append_http_decimal(body, &mut length, size);
-                                append_http_bytes(body, &mut length, b" bytes)");
-                            }
-                            append_http_bytes(body, &mut length, b"</li>");
-                            Ok(())
-                        },
-                    );
-
-                    append_http_bytes(body, &mut length, b"</ul>");
-                    if has_more {
-                        append_http_bytes(body, &mut length, b"<span data-next=\"");
-                        append_http_decimal(body, &mut length, offset.saturating_add(emitted));
-                        append_http_bytes(body, &mut length, b"\"></span>");
-                    }
-                    &body[..length]
+                let Some(content_length) = content_length else {
+                    request_kind = 3;
+                    request_ready = true;
+                    return (header_len, true);
                 };
-
-                // Keep this single TCP socket alive so the browser can issue
-                // successive paginated requests without waiting for TIME-WAIT.
-                // Content-Length delimits each response on the persistent stream.
-                let mut header = [0u8; 128];
-                let mut header_len = 0usize;
-                append_http_bytes(
-                    &mut header,
-                    &mut header_len,
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: ",
-                );
-                append_http_decimal(&mut header, &mut header_len, body.len());
-                append_http_bytes(&mut header, &mut header_len, b"\r\n\r\n");
-                let _ = socket.send_slice(&header[..header_len]);
-                let _ = socket.send_slice(body);
+                if !valid_name || offset.is_none() || total.is_none()
+                    || content_length > HTTP_UPLOAD_CHUNK_SIZE
+                    || content_length > upload_body.len()
+                {
+                    request_kind = 3;
+                    request_ready = true;
+                    return (header_len, true);
+                }
+                if data.len() < header_len + content_length {
+                    return (0, false);
+                }
+                upload_name[..name.len()].copy_from_slice(name);
+                upload_name_len = name.len();
+                upload_offset = offset.unwrap();
+                upload_total = total.unwrap();
+                upload_len = content_length;
+                if upload_offset > upload_total
+                    || upload_len > upload_total.saturating_sub(upload_offset)
+                {
+                    request_kind = 3;
+                } else {
+                    upload_body[..upload_len].copy_from_slice(&data[header_len..header_len + upload_len]);
+                    request_kind = 2;
+                }
+                request_ready = true;
+                return (header_len + content_length, true);
             }
+
+            request_kind = if line.starts_with(b"GET / ") { 0 } else { 3 };
+            request_ready = true;
+            (header_len, true)
+        });
+
+        if !request_ready || !socket.can_send() {
+            return;
         }
+
+        let mut status_code = 200u16;
+        let body: &[u8] = match request_kind {
+            0 => HTTP_PAGE,
+            1 => {
+                let body = upload_body;
+                let mut length = 0usize;
+                let mut seen = 0usize;
+                let mut emitted = 0usize;
+                let mut has_more = false;
+                append_http_bytes(body, &mut length, b"<ul>");
+                let _ = crate::nand_fs::read_root_directory(
+                    filesystem,
+                    true,
+                    |path, is_dir, size| {
+                        if seen < listing_offset {
+                            seen += 1;
+                            return Ok(());
+                        }
+                        if emitted >= HTTP_DIRECTORY_PAGE_SIZE {
+                            has_more = true;
+                            return Ok(());
+                        }
+                        seen += 1;
+                        emitted += 1;
+                        let name = path.strip_prefix(b"/").unwrap_or(path);
+                        let name = name.strip_suffix(b"\0").unwrap_or(name);
+                        let mut name_len = core::cmp::min(name.len(), 32);
+                        while name_len > 0 && name_len < name.len()
+                            && name[name_len] & 0xc0 == 0x80
+                        {
+                            name_len -= 1;
+                        }
+                        append_http_bytes(body, &mut length, b"<li>");
+                        for &byte in &name[..name_len] {
+                            let escaped = match byte {
+                                b'&' => b"&amp;" as &[u8],
+                                b'<' => b"&lt;",
+                                b'>' => b"&gt;",
+                                b'"' => b"&quot;",
+                                _ => core::slice::from_ref(&byte),
+                            };
+                            append_http_bytes(body, &mut length, escaped);
+                        }
+                        if name_len < name.len() { append_http_bytes(body, &mut length, b"... "); }
+                        if is_dir {
+                            append_http_bytes(body, &mut length, b"/");
+                        } else {
+                            append_http_bytes(body, &mut length, b" (");
+                            append_http_decimal(body, &mut length, size);
+                            append_http_bytes(body, &mut length, b" bytes)");
+                        }
+                        append_http_bytes(body, &mut length, b"</li>");
+                        Ok(())
+                    },
+                );
+                append_http_bytes(body, &mut length, b"</ul>");
+                if has_more {
+                    append_http_bytes(body, &mut length, b"<span data-next=\"");
+                    append_http_decimal(body, &mut length, listing_offset.saturating_add(emitted));
+                    append_http_bytes(body, &mut length, b"\"></span>");
+                }
+                &body[..length]
+            }
+            2 => {
+                let name = &upload_name[..upload_name_len];
+                if write_http_upload(filesystem, name, upload_offset, upload_total, &upload_body[..upload_len]) {
+                    b"OK"
+                } else {
+                    status_code = 500;
+                    b"Upload failed"
+                }
+            }
+            _ => {
+                status_code = 400;
+                b"Bad request"
+            }
+        };
+
+        let mut header = [0u8; 160];
+        let mut header_len = 0usize;
+        let status = match status_code {
+            200 => b"HTTP/1.1 200 OK\r\n" as &[u8],
+            400 => b"HTTP/1.1 400 Bad Request\r\n",
+            _ => b"HTTP/1.1 500 Internal Server Error\r\n",
+        };
+        append_http_bytes(&mut header, &mut header_len, status);
+        append_http_bytes(&mut header, &mut header_len, b"Content-Type: text/plain; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: ");
+        append_http_decimal(&mut header, &mut header_len, body.len());
+        append_http_bytes(&mut header, &mut header_len, b"\r\n\r\n");
+        let _ = socket.send_slice(&header[..header_len]);
+        let _ = socket.send_slice(body);
     }
+}
 }
