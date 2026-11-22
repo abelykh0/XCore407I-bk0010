@@ -11,7 +11,6 @@ use stm32f4xx_hal::pac;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
-use smoltcp::time::Instant;
 
 // Build raw MAC/DMA register pointers from PAC peripheral pointers. Pointer
 // arithmetic stays in pointer space; converting PAC pointers to integers is
