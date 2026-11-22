@@ -198,8 +198,8 @@ pub fn initialize() -> bool {
         // at least four clock cycles after each MAC register write.
         let maccr = (1 << 25) // CSTF: strip CRC from received frames
             | (1 << 7) // APCS: strip padding and CRC
-            | if negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0 { 1 << 14 } else { 0 }
-            | if negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0 { 1 << 11 } else { 0 };
+            | (if negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0 { 1 << 14 } else { 0 })
+            | (if negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0 { 1 << 11 } else { 0 });
         (*pac::ETHERNET_MAC::PTR).maccr().write(|w| unsafe { w.bits(maccr) });
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
         write_volatile((*pac::ETHERNET_MAC::PTR).macffr().as_ptr(), 0); // normal destination filtering
