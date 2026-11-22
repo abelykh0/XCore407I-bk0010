@@ -53,8 +53,10 @@ use usb_host::{
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
 // Keep smoltcp socket storage in SRAM .bss, not the constrained main stack.
-static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 1] =
-    [smoltcp::iface::SocketStorage::EMPTY];
+static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 2] =
+    [smoltcp::iface::SocketStorage::EMPTY; 2];
+static mut ETHERNET_HTTP_RX_BUFFER: [u8; 512] = [0; 512];
+static mut ETHERNET_HTTP_TX_BUFFER: [u8; 512] = [0; 512];
 
 static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
     AtomicPtr::new(ptr::null_mut());
@@ -406,7 +408,13 @@ fn main() -> ! {
             }
         }
         let ethernet_socket_storage = unsafe { &mut *ptr::addr_of_mut!(ETHERNET_SOCKET_STORAGE) };
-        let mut ethernet_network = xcore407i_blinker::ethernet::EthernetNetwork::new(ethernet_socket_storage);
+        let ethernet_http_rx_buffer = unsafe { &mut *ptr::addr_of_mut!(ETHERNET_HTTP_RX_BUFFER) };
+        let ethernet_http_tx_buffer = unsafe { &mut *ptr::addr_of_mut!(ETHERNET_HTTP_TX_BUFFER) };
+        let mut ethernet_network = xcore407i_blinker::ethernet::EthernetNetwork::new(
+            ethernet_socket_storage,
+            ethernet_http_rx_buffer,
+            ethernet_http_tx_buffer,
+        );
 
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
