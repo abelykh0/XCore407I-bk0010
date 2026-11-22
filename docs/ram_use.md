@@ -24,10 +24,11 @@ Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES =
 | ROW_BUFFERS | Main SRAM, .bss | 1,024 B | Two 512-byte row-conversion scratch buffers |
 | RamBuffer | CCM, .ccmram | 16,384 B | BK-0010 emulated RAM |
 | BK audio edge arrays | Main SRAM, .bss | 2,560 B | 512 32-bit cycle timestamps + 512 8-bit levels |
+| F2 browser file table | Main SRAM, .bss | 990 B | 30 entries × 33 B (`BrowserFile` path + length); shared with CDC mode |
 | USB host/device state | Various | Not measured | TinyUSB state, descriptors, endpoint buffers, host state and class state |
 | Emulator/audio/keyboard state | Various | Not measured | Other C and Rust globals, queues and state |
 
-The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment. DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of the same logical canvas backing store; the split reflects the available main-SRAM and CCM regions. The UVC image is generated and packetized from this backing store on the fly. The firmware does not allocate or retain a complete 512 × 512 NV12 frame (384 KiB) in RAM.
+The F2 browser table is a static allocation shared by emulator and CDC modes. It holds 30 root-level `.bin` paths; each `BrowserFile` occupies 33 bytes (32-byte path plus one-byte length), for 990 bytes total. The previous 17-entry table occupied 561 bytes, so increasing the visible list to 30 costs 429 additional bytes of main SRAM. The display has 32 text rows: row 0 is the title, rows 1–30 show files, and row 31 holds the controls. The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment. DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of the same logical canvas backing store; the split reflects the available main-SRAM and CCM regions. The UVC image is generated and packetized from this backing store on the fly. The firmware does not allocate or retain a complete 512 × 512 NV12 frame (384 KiB) in RAM.
 
 ## CDC mode — UVC static page + CDC + Ethernet HTTP
 
@@ -67,6 +68,7 @@ All Ethernet packet, descriptor, socket and HTTP buffers are carved from the reu
 | Dhara C page buffer | 2,048 B |
 | BK emulator RAM | 16,384 B |
 | BK audio edge arrays | 2,560 B |
+| F2 browser file table (30 entries) | 990 B |
 
 These values are not summed into per-mode totals: some are mutually exclusive, some are embedded in reused canvas regions, and others omit build-dependent state, USB allocations, alignment, and stack usage.
 

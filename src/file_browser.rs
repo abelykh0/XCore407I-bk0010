@@ -37,7 +37,7 @@ pub(crate) const SAVE_RAM_NORMAL_LENGTH: usize = 0x3E00; // 0x0200..0x3FFF
 pub(crate) const SAVE_RAM_EXTENDED_LENGTH: usize = 0x6E00; // 0x0200..0x6FFF
 pub(crate) const MAX_BROWSER_FILENAME: usize = 30; // includes the .bin extension
 pub(crate) const SAVE_NAME_CAPACITY: usize = MAX_BROWSER_FILENAME - 4;
-pub(crate) const MAX_BROWSER_FILES: usize = 17;
+pub(crate) const MAX_BROWSER_FILES: usize = 30;
 pub(crate) const MAX_BROWSER_PATH: usize = MAX_BROWSER_FILENAME + 2; // '/' + name + NUL
 
 // Keep the browser's file table in ordinary .bss, not on the limited stack.
