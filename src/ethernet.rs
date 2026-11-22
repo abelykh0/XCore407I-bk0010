@@ -459,6 +459,14 @@ pub fn on_dma_interrupt() {
 
 
 /// Append bytes to the bounded HTTP response body.
+fn http_name_ends_with(name: &[u8], suffix: &[u8]) -> bool {
+    name.len() >= suffix.len()
+        && name[name.len() - suffix.len()..]
+            .iter()
+            .zip(suffix)
+            .all(|(left, right)| left.to_ascii_lowercase() == *right)
+}
+
 fn append_http_bytes(buffer: &mut [u8], length: &mut usize, bytes: &[u8]) -> bool {
     if bytes.len() > buffer.len().saturating_sub(*length) {
         return false;
@@ -532,8 +540,7 @@ impl HttpDownloadState {
         let Ok(path) = Path::from_bytes_with_nul(&self.path[..path_len]) else { return false; };
         let Ok(metadata) = filesystem.metadata(path) else { return false; };
         let Ok(size) = usize::try_from(metadata.len()) else { return false; };
-        let lower = name.iter().map(|byte| byte.to_ascii_lowercase()).collect::<heapless::Vec<u8, 64>>();
-        self.content_type = if lower.ends_with(b".png") { b"image/png" } else { b"image/jpeg" };
+        self.content_type = if http_name_ends_with(name, b".png") { b"image/png" } else { b"image/jpeg" };
         if unsafe { self.allocation.open_with_options(filesystem, |options| options.read(true), path) }.is_err() {
             return false;
         }
@@ -1121,8 +1128,9 @@ impl<'a> EthernetNetwork<'a> {
                 let valid_name = !name.is_empty() && name.len() <= image_name.len()
                     && name != b"." && name != b".."
                     && name.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'));
-                let lower_ext = name.iter().rev().take_while(|&&b| b != b'.').map(|b| b.to_ascii_lowercase()).collect::<heapless::Vec<u8, 5>>();
-                let is_image = lower_ext.as_slice() == b"gpj" || lower_ext.as_slice() == b"gepj" || lower_ext.as_slice() == b"gnp";
+                let is_image = http_name_ends_with(name, b".jpg")
+                    || http_name_ends_with(name, b".jpeg")
+                    || http_name_ends_with(name, b".png");
                 if valid_name && is_image {
                     image_name[..name.len()].copy_from_slice(name);
                     image_name_len = name.len();
@@ -1307,9 +1315,10 @@ impl<'a> EthernetNetwork<'a> {
                             && name != b"."
                             && name != b".."
                             && name.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'));
-                        let lower_name = name.iter().map(|byte| byte.to_ascii_lowercase()).collect::<heapless::Vec<u8, 64>>();
                         let image_file = !is_dir && safe_image_name
-                            && (lower_name.ends_with(b".jpg") || lower_name.ends_with(b".jpeg") || lower_name.ends_with(b".png"));
+                            && (http_name_ends_with(name, b".jpg")
+                                || http_name_ends_with(name, b".jpeg")
+                                || http_name_ends_with(name, b".png"));
                         if image_file { append_http_bytes(body, &mut length, b"<a target=\"_blank\" rel=\"noopener\" href=\"/file/"); }
                         for &byte in &name[..name_len] {
                             let escaped = match byte {
