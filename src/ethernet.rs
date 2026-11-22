@@ -19,6 +19,8 @@ use smoltcp::time::Instant;
 const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
 const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 const DMA_OMR_INIT: u32 = (1 << 26) | (1 << 25) | (1 << 21);
+const DMA_BMR_INIT: u32 = (1 << 25) | (32 << 8) | (32 << 17) | (1 << 23) | (1 << 16);
+const MII_CR_DIV_102: u32 = 0b100 << 2;
 
 const DP83848_PHYSTS_LINK: u16 = 1 << 0;
 const DP83848_PHYSTS_SPEED_10_MBPS: u16 = 1 << 1;
@@ -133,7 +135,7 @@ pub fn initialize() -> bool {
         (*pac::RCC::PTR).ahb1rstr().modify(|_, w| w.ethmacrst().clear_bit());
         let _ = read_volatile((*pac::RCC::PTR).ahb1rstr().as_ptr());
 
-        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| w.cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168));
+        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| unsafe { w.bits(MII_CR_DIV_102) });
         let phy = probe_dp83848();
         if !phy.found || phy.mdio_timeout {
             return false;
@@ -169,19 +171,13 @@ pub fn initialize() -> bool {
         write_volatile(addr_of_mut!((*tx_desc).words[3]), tx_desc as u32);
 
         // DMA software reset, then conservative fixed-burst configuration.
-        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| w.sr().set_bit());
+        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| unsafe { w.bits(1) });
         let mut timeout = MDIO_TIMEOUT;
         while (*pac::ETHERNET_DMA::PTR).dmabmr().read().sr().bit_is_set() {
             if timeout == 0 { return false; }
             timeout -= 1;
         }
-        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| {
-            w.fb().set_bit();
-            unsafe { w.pbl().bits(32); }
-            unsafe { w.rdp().bits(32); }
-            w.usp().set_bit();
-            w.aab().set_bit()
-        });
+        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| unsafe { w.bits(DMA_BMR_INIT) });
         (*pac::ETHERNET_DMA::PTR).dmaomr().write(|w| unsafe { w.bits(DMA_OMR_INIT) });
         write_volatile((*pac::ETHERNET_DMA::PTR).dmardlar().as_ptr(), rx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr(), tx_desc as u32);
@@ -200,12 +196,11 @@ pub fn initialize() -> bool {
         // Match the STM32F4 HAL register synchronization sequence. The MAC
         // configuration crosses into the TX_CLK/RX_CLK clock domain; ST waits
         // at least four clock cycles after each MAC register write.
-        (*pac::ETHERNET_MAC::PTR).maccr().write(|w| {
-            w.cstf().set_bit()
-                .apcs().set_bit()
-                .fes().bit(negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0)
-                .dm().bit(negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0)
-        });
+        let maccr = (1 << 25) // CSTF: strip CRC from received frames
+            | (1 << 7) // APCS: strip padding and CRC
+            | if negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0 { 1 << 14 } else { 0 }
+            | if negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0 { 1 << 11 } else { 0 };
+        (*pac::ETHERNET_MAC::PTR).maccr().write(|w| unsafe { w.bits(maccr) });
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
         write_volatile((*pac::ETHERNET_MAC::PTR).macffr().as_ptr(), 0); // normal destination filtering
         mac_register_sync((*pac::ETHERNET_MAC::PTR).macffr().as_ptr());
@@ -369,10 +364,11 @@ fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
             if remaining == 0 { return None; }
             remaining -= 1;
         }
-        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| {
-            unsafe { w.pa().bits(phy_address).mr().bits(register); }
-            w.cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168).mb().set_bit()
-        });
+        let operation = ((phy_address as u32) << 11)
+            | ((register as u32) << 6)
+            | MII_CR_DIV_102
+            | 1;
+        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| unsafe { w.bits(operation) });
         remaining = MDIO_TIMEOUT;
         while (*pac::ETHERNET_MAC::PTR).macmiiar().read().mb().bit_is_set() {
             if remaining == 0 { return None; }
