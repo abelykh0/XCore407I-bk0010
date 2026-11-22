@@ -23,15 +23,15 @@ const MDIO_TIMEOUT: u32 = 1_000_000;
 const PHY_NEGOTIATION_POLLS: u32 = 5_000;
 const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
-// HTTP uses bounded RX/TX buffers; uploads are sent in small sequential chunks.
-// Directory output is paginated instead of buffering the whole listing.
-const HTTP_RX_BUFFER_SIZE: usize = 768;
-const HTTP_TX_BUFFER_SIZE: usize = 2304;
-const HTTP_BODY_BUFFER_SIZE: usize = 768;
+// HTTP buffers consume the remaining DEMO_CANVAS space after the receiver
+// and Ethernet DMA ring, up to the alternate-stack reservation.
+const HTTP_RX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_RX_BYTES;
+const HTTP_TX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_TX_BYTES;
+const HTTP_BODY_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_BODY_BYTES;
 const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
 
 const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><input id=u type=file><button id=b type=button>Upload</button><p id=p role=status></p><ul id=f></ul><script>
-let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s'),u=document.getElementById('u'),p=document.getElementById('p');async function load(){o=0;count=0;f.textContent='';try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),ul=d.querySelector('ul');if(!ul)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',ul.innerHTML);count+=ul.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded).';}}document.getElementById('b').onclick=async()=>{let file=u.files[0];if(!file){p.textContent='Choose a file first.';return;}if(!/^[A-Za-z0-9._-]{1,64}$/.test(file.name)){p.textContent='Use a filename with 1-64 letters, digits, dot, underscore or hyphen.';return;}try{let chunk=256;for(let offset=0;offset<file.size||offset===0;){let part=file.slice(offset,Math.min(offset+chunk,file.size));p.textContent='Uploading '+file.name+': '+Math.min(offset+part.size,file.size)+' / '+file.size+' bytes';let r=await fetch('/api/upload?name='+encodeURIComponent(file.name)+'&offset='+offset+'&total='+file.size,{method:'POST',body:part});if(!r.ok)throw Error(await r.text());offset+=part.size;if(file.size===0)break;}p.textContent='Upload complete: '+file.name;await load();}catch(e){p.textContent='Upload failed: '+e.message;}};load()</script>"#;
+let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s'),u=document.getElementById('u'),p=document.getElementById('p');async function load(){o=0;count=0;f.textContent='';try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),ul=d.querySelector('ul');if(!ul)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',ul.innerHTML);count+=ul.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded).';}}document.getElementById('b').onclick=async()=>{let file=u.files[0];if(!file){p.textContent='Choose a file first.';return;}if(!/^[A-Za-z0-9._-]{1,64}$/.test(file.name)){p.textContent='Use a filename with 1-64 letters, digits, dot, underscore or hyphen.';return;}try{let chunk=2048;for(let offset=0;offset<file.size||offset===0;){let part=file.slice(offset,Math.min(offset+chunk,file.size));p.textContent='Uploading '+file.name+': '+Math.min(offset+part.size,file.size)+' / '+file.size+' bytes';let r=await fetch('/api/upload?name='+encodeURIComponent(file.name)+'&offset='+offset+'&total='+file.size,{method:'POST',body:part});if(!r.ok)throw Error(await r.text());offset+=part.size;if(file.size===0)break;}p.textContent='Upload complete: '+file.name;await load();}catch(e){p.textContent='Upload failed: '+e.message;}};load()</script>"#;
 
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
@@ -65,8 +65,9 @@ struct DmaDescriptor {
 #[repr(C, align(4))]
 struct FrameBuffer([u8; FRAME_CAPACITY]);
 
-// DMA-visible descriptors and packet buffers are carved from DEMO_CANVAS
-// in main SRAM. CPU-only TCP and HTTP storage is carved from DEMO_CANVAS_TAIL.
+// DMA descriptors and packet buffers occupy DMA-accessible DEMO_CANVAS.
+// HTTP/TCP byte buffers follow them in main SRAM; only socket metadata lives
+// in CCM, which the Ethernet DMA cannot access.
 #[repr(C, align(8))]
 struct EthernetDmaStorage {
     rx_descriptors: [DmaDescriptor; RX_COUNT],
@@ -76,15 +77,20 @@ struct EthernetDmaStorage {
 }
 
 #[repr(C, align(8))]
-struct EthernetCpuStorage {
-    socket_storage: [smoltcp::iface::SocketStorage<'static>; 2],
-    http_rx: [u8; HTTP_RX_BUFFER_SIZE],
-    http_tx: [u8; HTTP_TX_BUFFER_SIZE],
-    http_body: [u8; HTTP_BODY_BUFFER_SIZE],
+struct EthernetHttpStorage {
+    rx: [u8; HTTP_RX_BUFFER_SIZE],
+    tx: [u8; HTTP_TX_BUFFER_SIZE],
+    body: [u8; HTTP_BODY_BUFFER_SIZE],
+}
+
+#[repr(C, align(8))]
+struct EthernetSocketStorage {
+    sockets: [smoltcp::iface::SocketStorage<'static>; 2],
 }
 
 const _: () = assert!(core::mem::size_of::<EthernetDmaStorage>() <= crate::camera::CDC_ETHERNET_DMA_STORAGE_BYTES);
-const _: () = assert!(core::mem::size_of::<EthernetCpuStorage>() <= crate::camera::CANVAS_TAIL_BYTES);
+const _: () = assert!(core::mem::size_of::<EthernetHttpStorage>() == crate::camera::CDC_HTTP_STORAGE_BYTES);
+const _: () = assert!(core::mem::size_of::<EthernetSocketStorage>() <= crate::camera::CANVAS_TAIL_BYTES);
 
 #[inline]
 fn dma_storage_ptr() -> *mut EthernetDmaStorage {
@@ -92,18 +98,23 @@ fn dma_storage_ptr() -> *mut EthernetDmaStorage {
 }
 
 #[inline]
-fn cpu_storage_ptr() -> *mut EthernetCpuStorage {
-    crate::camera::cdc_ethernet_cpu_storage_ptr().cast()
+fn http_storage_ptr() -> *mut EthernetHttpStorage {
+    crate::camera::cdc_ethernet_http_storage_ptr().cast()
+}
+
+#[inline]
+fn socket_storage_ptr() -> *mut EthernetSocketStorage {
+    crate::camera::cdc_ethernet_socket_storage_ptr().cast()
 }
 
 pub fn socket_storage() -> &'static mut [smoltcp::iface::SocketStorage<'static>] {
     unsafe {
-        let storage = cpu_storage_ptr();
-        core::ptr::addr_of_mut!((*storage).socket_storage).write([
+        let storage = socket_storage_ptr();
+        core::ptr::addr_of_mut!((*storage).sockets).write([
             smoltcp::iface::SocketStorage::EMPTY,
             smoltcp::iface::SocketStorage::EMPTY,
         ]);
-        &mut *core::ptr::addr_of_mut!((*storage).socket_storage)
+        &mut *core::ptr::addr_of_mut!((*storage).sockets)
     }
 }
 
@@ -423,7 +434,7 @@ fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) 
 }
 
 
-const HTTP_UPLOAD_CHUNK_SIZE: usize = 256;
+const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 
 fn parse_http_decimal(bytes: &[u8]) -> Option<usize> {
     let bytes = bytes.trim_ascii();
@@ -754,18 +765,18 @@ impl<'a> EthernetNetwork<'a> {
         let mut sockets = SocketSet::new(storage);
         let dhcp_handle = sockets.add(Dhcpv4Socket::new());
 
-        // TCP and HTTP buffers live in the CCM tail arena. They are CPU-only;
-        // only the descriptor ring and packet buffers need DMA-accessible SRAM.
-        let cpu = cpu_storage_ptr();
+        // HTTP byte buffers are in the free DEMO_CANVAS range, after the
+        // DMA ring and before the alternate-stack reservation.
+        let http_storage = http_storage_ptr();
         let http_rx: &'static mut [u8] = unsafe {
             core::slice::from_raw_parts_mut(
-                addr_of_mut!((*cpu).http_rx).cast::<u8>(),
+                addr_of_mut!((*http_storage).rx).cast::<u8>(),
                 HTTP_RX_BUFFER_SIZE,
             )
         };
         let http_tx: &'static mut [u8] = unsafe {
             core::slice::from_raw_parts_mut(
-                addr_of_mut!((*cpu).http_tx).cast::<u8>(),
+                addr_of_mut!((*http_storage).tx).cast::<u8>(),
                 HTTP_TX_BUFFER_SIZE,
             )
         };
@@ -847,7 +858,7 @@ impl<'a> EthernetNetwork<'a> {
         let mut upload_len = 0usize;
         let upload_body = unsafe {
             core::slice::from_raw_parts_mut(
-                addr_of_mut!((*cpu_storage_ptr()).http_body).cast::<u8>(),
+                addr_of_mut!((*http_storage_ptr()).body).cast::<u8>(),
                 HTTP_BODY_BUFFER_SIZE,
             )
         };
