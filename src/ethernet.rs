@@ -11,6 +11,15 @@ use stm32f4xx_hal::pac;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
+use smoltcp::time::Instant;
+
+// Build raw MAC/DMA register pointers from PAC peripheral pointers. Pointer
+// arithmetic stays in pointer space; converting PAC pointers to integers is
+// not const-evaluable.
+const fn register(base: *const u8, offset: usize) -> *mut u32 {
+    base.wrapping_add(offset) as *mut u32
+}
+
 const RCC_AHB1RSTR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x10);
 const RCC_APB2ENR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x44);
 const SYSCFG_PMC: *mut u32 = register(pac::SYSCFG::PTR as *const u8, 0x04);
