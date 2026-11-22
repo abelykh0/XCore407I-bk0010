@@ -245,17 +245,17 @@ pub fn enable_dma_interrupts() {
     unsafe {
         // Clear stale write-one-to-clear events before enabling sources.
         (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
-            w.ts().set_bit().tus().set_bit().tjts().set_bit().ros().set_bit()
-                .ets().set_bit().rs().set_bit().rbus().set_bit().fbes().set_bit()
-                .ers().set_bit().ais().set_bit().nis().set_bit()
+            w.ts().set_bit().tpss().set_bit().tus().set_bit().tjts().set_bit()
+                .ros().set_bit().ets().set_bit().rs().set_bit().rbus().set_bit()
+                .rpss().set_bit().fbes().set_bit().ers().set_bit().ais().set_bit().nis().set_bit()
         });
         (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| {
             w.tie().set_bit()
                 .tbuie().set_bit()
                 .rie().set_bit()
                 .fbeie().set_bit()
-                .aie().set_bit()
-                .nie().set_bit()
+                .aise().set_bit()
+                .nise().set_bit()
         });
     }
 }
@@ -400,7 +400,7 @@ fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
             w.cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168).mb().set_bit()
         });
         remaining = MDIO_TIMEOUT;
-        while read_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr()) & MII_BUSY != 0 {
+        while (*pac::ETHERNET_MAC::PTR).macmiiar().read().mb().bit_is_set() {
             if remaining == 0 { return None; }
             remaining -= 1;
         }
