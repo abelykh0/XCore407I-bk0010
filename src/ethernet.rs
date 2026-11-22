@@ -540,16 +540,17 @@ pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u3
     }
 }
 
-/// Copy the current TX descriptor length and first 64 bytes for IPCONFIG diagnostics.
-pub fn tx_packet_diagnostic() -> (u32, [u8; 64]) {
+/// Return the current TX descriptor length for IPCONFIG diagnostics.
+pub fn tx_packet_length() -> u32 {
+    unsafe { read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1])) & 0x1fff }
+}
+
+/// Read one byte from the TX buffer for bounded, no-allocation diagnostics.
+pub fn tx_packet_byte(index: usize) -> u8 {
+    if index >= FRAME_CAPACITY { return 0; }
     unsafe {
-        let length = read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1])) & 0x1fff;
-        let mut bytes = [0u8; 64];
         let source = addr_of_mut!(TX_BUFFER).cast::<u8>();
-        for (index, byte) in bytes.iter_mut().enumerate() {
-            *byte = read_volatile(source.add(index));
-        }
-        (length, bytes)
+        read_volatile(source.add(index))
     }
 }
 
