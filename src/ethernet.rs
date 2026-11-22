@@ -540,6 +540,19 @@ pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u3
     }
 }
 
+/// Copy the current TX descriptor length and first 64 bytes for IPCONFIG diagnostics.
+pub fn tx_packet_diagnostic() -> (u32, [u8; 64]) {
+    unsafe {
+        let length = read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1])) & 0x1fff;
+        let mut bytes = [0u8; 64];
+        let source = addr_of_mut!(TX_BUFFER).cast::<u8>();
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = read_volatile(source.add(index));
+        }
+        (length, bytes)
+    }
+}
+
 /// Ethernet frames accepted by the stack, transmitted, and rejected by RX.
 pub fn frame_counts() -> (u32, u32, u32) {
     (
