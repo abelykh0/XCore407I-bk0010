@@ -7,17 +7,18 @@
 use core::marker::PhantomData;
 use core::ptr::{addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use stm32f4xx_hal::pac;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
-const RCC_BASE: usize = 0x4002_3800;
+const RCC_BASE: usize = pac::RCC::PTR as usize;
 const RCC_AHB1ENR: *mut u32 = (RCC_BASE + 0x30) as *mut u32;
 const RCC_AHB1RSTR: *mut u32 = (RCC_BASE + 0x10) as *mut u32;
 const RCC_APB2ENR: *mut u32 = (RCC_BASE + 0x44) as *mut u32;
-const SYSCFG_PMC: *mut u32 = 0x4001_3804 as *mut u32;
+const SYSCFG_PMC: *mut u32 = (pac::SYSCFG::PTR as usize + 0x04) as *mut u32;
 
-const ETH_MAC_BASE: usize = 0x4002_8000;
-const ETH_DMA_BASE: usize = 0x4002_9000;
+const ETH_MAC_BASE: usize = pac::ETHERNET_MAC::PTR as usize;
+const ETH_DMA_BASE: usize = pac::ETHERNET_DMA::PTR as usize;
 const ETH_MACCR: *mut u32 = ETH_MAC_BASE as *mut u32;
 const ETH_MACFFR: *mut u32 = (ETH_MAC_BASE + 0x04) as *mut u32;
 const ETH_MACMIIAR: *mut u32 = (ETH_MAC_BASE + 0x10) as *mut u32;
@@ -32,7 +33,6 @@ const ETH_DMATDLAR: *mut u32 = (ETH_DMA_BASE + 0x10) as *mut u32;
 const ETH_DMASR: *mut u32 = (ETH_DMA_BASE + 0x14) as *mut u32;
 const ETH_DMAOMR: *mut u32 = (ETH_DMA_BASE + 0x18) as *mut u32;
 const ETH_DMAIER: *mut u32 = (ETH_DMA_BASE + 0x1c) as *mut u32;
-const ETH_DMACHTDR: *mut u32 = (ETH_DMA_BASE + 0x48) as *mut u32;
 const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
 const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 
@@ -76,6 +76,11 @@ const TX_DESC_LS: u32 = 1 << 29;
 const TX_DESC_IC: u32 = 1 << 30;
 
 const MAC_ADDRESS: [u8; 6] = [0x02, 0x12, 0x09, 0x40, 0x70, 0x01];
+
+const MII_REG_BMSR: u8 = 0x01;
+const MII_REG_PHY_ID1: u8 = 0x02;
+const MII_REG_PHY_ID2: u8 = 0x03;
+const DP83848_REG_PHYSTS: u8 = 0x10;
 
 const DP83848_ID1: u16 = 0x2000;
 const DP83848_ID2_MASK: u16 = 0xfff0;
@@ -307,17 +312,17 @@ pub fn probe_dp83848() -> PhyStatus {
         write_volatile(ETH_MACMIIAR, (initial & !((0b111 << 2) | MII_BUSY)) | MII_CR_DIV_102);
 
         for address in 0u8..32 {
-            let id1 = match mdio_read(address, 2) {
+            let id1 = match mdio_read(address, MII_REG_PHY_ID1) {
                 Some(value) => value,
                 None => return empty_status(true),
             };
             if id1 != DP83848_ID1 { continue; }
-            let id2 = match mdio_read(address, 3) {
+            let id2 = match mdio_read(address, MII_REG_PHY_ID2) {
                 Some(value) => value,
                 None => return empty_status(true),
             };
             if id2 & DP83848_ID2_MASK != DP83848_ID2 { continue; }
-            let _ = match mdio_read(address, 1) {
+            let _ = match mdio_read(address, MII_REG_BMSR) {
                 Some(value) => value,
                 None => return empty_status(true),
             };
@@ -325,7 +330,7 @@ pub fn probe_dp83848() -> PhyStatus {
                 Some(value) => value,
                 None => return empty_status(true),
             };
-            let physts = match mdio_read(address, 0x10) {
+            let physts = match mdio_read(address, DP83848_REG_PHYSTS) {
                 Some(value) => value,
                 None => return empty_status(true),
             };
@@ -345,13 +350,13 @@ fn wait_for_phy_negotiation(mut phy: PhyStatus) -> PhyStatus {
     for _ in 0..PHY_NEGOTIATION_POLLS {
         unsafe {
             // BMSR link and autoneg-complete bits are latch-low; read twice.
-            let _ = mdio_read(phy.address, 1);
+            let _ = mdio_read(phy.address, MII_REG_BMSR);
             if let Some(bmsr) = mdio_read(phy.address, 1) {
                 phy.bmsr = bmsr;
             } else {
                 break;
             }
-            if let Some(physts) = mdio_read(phy.address, 0x10) {
+            if let Some(physts) = mdio_read(phy.address, DP83848_REG_PHYSTS) {
                 phy.physts = physts;
             } else {
                 break;
