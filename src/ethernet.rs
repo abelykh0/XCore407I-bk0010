@@ -498,8 +498,6 @@ const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 
 pub struct HttpDownloadState {
     allocation: littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
-    path: [u8; 66],
-    path_len: usize,
     size: usize,
     offset: usize,
     buffer: [u8; 1024],
@@ -512,8 +510,6 @@ impl HttpDownloadState {
     pub fn new() -> Self {
         Self {
             allocation: littlefs2::fs::FileAllocation::new(),
-            path: [0; 66],
-            path_len: 0,
             size: 0,
             offset: 0,
             buffer: [0; 1024],
@@ -530,21 +526,17 @@ impl HttpDownloadState {
     ) -> bool {
         use littlefs2::path::Path;
         if self.active || self.allocation.is_open() || name.is_empty() || name.len() > 64 { return false; }
-        let mut path_len = 0usize;
-        self.path[path_len] = b'/';
-        path_len += 1;
-        self.path[path_len..path_len + name.len()].copy_from_slice(name);
-        path_len += name.len();
-        self.path[path_len] = 0;
-        path_len += 1;
-        let Ok(path) = Path::from_bytes_with_nul(&self.path[..path_len]) else { return false; };
+        let mut path_bytes = [0u8; 66];
+        path_bytes[0] = b'/';
+        path_bytes[1..1 + name.len()].copy_from_slice(name);
+        path_bytes[1 + name.len()] = 0;
+        let Ok(path) = Path::from_bytes_with_nul(&path_bytes[..name.len() + 2]) else { return false; };
         let Ok(metadata) = filesystem.metadata(path) else { return false; };
         let Ok(size) = usize::try_from(metadata.len()) else { return false; };
         self.content_type = if http_name_ends_with(name, b".png") { b"image/png" } else { b"image/jpeg" };
         if unsafe { self.allocation.open_with_options(filesystem, |options| options.read(true), path) }.is_err() {
             return false;
         }
-        self.path_len = path_len;
         self.size = size;
         self.offset = 0;
         self.header_sent = false;
@@ -1042,7 +1034,7 @@ impl<'a> EthernetNetwork<'a> {
             }
         }
 
-        self.poll_http(filesystem, http_upload);
+        self.poll_http(filesystem, http_upload, http_download);
         let _ = self.iface.poll_egress(timestamp, &mut self.device, &mut self.sockets);
     }
 
