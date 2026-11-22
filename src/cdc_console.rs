@@ -1219,7 +1219,7 @@ pub fn service(
                             write_decimal(dhcp_configured as usize);
                             write_status(b"/");
                             write_decimal(dhcp_deconfigured as usize);
-                            let (dma_sr, dma_omr, rx0, rx1, tx0, _, _, _, txcur, dmaier, maccr, pmc, macdbg) = crate::ethernet::dma_diagnostic();
+                            let (dma_sr, dma_omr, rx0, rx1, tx0, tx1, tx2, tx3, txcur, dmaier, maccr, pmc, macdbg) = crate::ethernet::dma_diagnostic();
                             write_status(b"\r\nDMA SR/OMR: 0x");
                             write_hex_u32(dma_sr);
                             write_status(b"/0x");
@@ -1228,8 +1228,14 @@ pub fn service(
                             write_hex_u32(rx0);
                             write_status(b"/0x");
                             write_hex_u32(rx1);
-                            write_status(b" TXD0:0x");
+                            write_status(b" TXD0..3:0x");
                             write_hex_u32(tx0);
+                            write_status(b"/0x");
+                            write_hex_u32(tx1);
+                            write_status(b"/0x");
+                            write_hex_u32(tx2);
+                            write_status(b"/0x");
+                            write_hex_u32(tx3);
                             write_status(b" TXCUR:0x");
                             write_hex_u32(txcur);
                             write_status(b" IER:0x");
