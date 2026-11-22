@@ -201,10 +201,6 @@ impl UvcClass {
         matches!(self.state, StreamState::Streaming)
     }
 
-    pub fn set_cpu_metrics(&mut self, available: u8, generate: u8, submit: u8) {
-        let _ = (available, generate, submit);
-    }
-
     /// Handle standard SET_INTERFACE for the VideoStreaming interface.
     pub fn set_interface(&mut self, interface: u8, alternate: u8) -> Result<(), ControlError> {
         if interface != STREAMING_INTERFACE {

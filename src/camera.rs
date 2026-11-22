@@ -257,13 +257,13 @@ static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
 pub(crate) const CDC_RECEIVER_STORAGE_BYTES: usize = 4096;
 pub(crate) const CDC_ETHERNET_DMA_STORAGE_BYTES: usize = 2 * 16 + 2 * 1536 + 16 + 1536;
 pub(crate) const CDC_HTTP_RX_BYTES: usize = 4096;
-pub(crate) const CDC_HTTP_BODY_BYTES: usize = 63_184;
+pub(crate) const CDC_HTTP_BODY_BYTES: usize = 62_416;
 pub(crate) const CDC_HTTP_STORAGE_BYTES: usize =
     CDC_HTTP_RX_BYTES + CDC_HTTP_BODY_BYTES;
-const CDC_ALT_STACK_BYTES: usize = 8 * 1024;
+const CDC_ALT_STACK_BYTES: usize = 8 * 1024 + 768;
 const CDC_ALT_STACK_BOTTOM: usize = CANVAS_MAIN_BYTES - CDC_ALT_STACK_BYTES;
 
-// Receiver, DMA ring and HTTP buffers occupy the low end; the 8 KiB
+// Receiver, DMA ring and HTTP buffers occupy the low end; the enlarged
 // filesystem alternate stack grows down from the high end.
 const _: () = assert!(
     CDC_RECEIVER_STORAGE_BYTES
@@ -874,9 +874,6 @@ pub struct Packet {
 pub struct Nv12DemoImage {
     offset: usize,
     frame_id: bool,
-    cpu_available_percent: u8,
-    cpu_generate_percent: u8,
-    cpu_submit_percent: u8,
     cached_y_source_row: u16,
     cached_uv_source_row: u16,
     cached_clock_version: u32,
@@ -893,9 +890,6 @@ impl Nv12DemoImage {
         Some(Self {
             offset: 0,
             frame_id: false,
-            cpu_available_percent: 100,
-            cpu_generate_percent: 0,
-            cpu_submit_percent: 0,
             cached_y_source_row: u16::MAX,
             cached_uv_source_row: u16::MAX,
             cached_clock_version: CLOCK_VERSION.load(Ordering::Relaxed),
@@ -908,13 +902,6 @@ impl Nv12DemoImage {
         self.offset = 0;
         self.frame_id = false;
         self.pc_connect_screen = true;
-    }
-
-    /// Set the estimated CPU percentage available outside measured UVC work.
-    pub fn set_cpu_metrics(&mut self, available: u8, generate: u8, submit: u8) {
-        self.cpu_available_percent = available.min(100);
-        self.cpu_generate_percent = generate.min(100);
-        self.cpu_submit_percent = submit.min(100);
     }
 
     /// Fill one UVC payload transfer, which may span multiple USB packets in

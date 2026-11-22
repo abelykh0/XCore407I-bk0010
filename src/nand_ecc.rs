@@ -8,6 +8,7 @@ const ECC_CHUNK_SIZE: usize = 512;
 
 /// Linux FSMC driver's 512-byte NAND_ECC_SOFT_HAMMING_SM_ORDER
 /// reference algorithm, expressed without alignment-dependent word loads.
+#[cfg(feature = "nand-diagnostics")]
 pub(crate) fn ecc_software_512(data: &[u8]) -> u32 {
     if data.len() != ECC_CHUNK_SIZE {
         return 0;
@@ -147,12 +148,14 @@ pub(crate) fn ecc_software_512(data: &[u8]) -> u32 {
 
 /// Convert 512-byte Linux SM-order Hamming ECC to the STM32 FSMC ECCR layout.
 /// Hardware comparisons establish a six-bit left rotation followed by inversion.
+#[cfg(feature = "nand-diagnostics")]
 fn ecc_linux_to_fsmc(ecc: u32) -> u32 {
     let ecc = ecc & 0x00FF_FFFF;
     let rotated = ((ecc << 6) | (ecc >> 18)) & 0x00FF_FFFF;
     (!rotated) & 0x00FF_FFFF
 }
 
+#[cfg(feature = "nand-diagnostics")]
 pub(crate) fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
     ecc_linux_to_fsmc(ecc_software_512(data))
 }
@@ -220,6 +223,7 @@ pub(crate) fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -
 
 /// Reference vectors from Linux ecc_sw_hamming_calculate() using
 /// NAND_ECC_SOFT_HAMMING_SM_ORDER and 512-byte steps.
+#[cfg(feature = "nand-diagnostics")]
 pub(crate) fn ecc_software_selftest() -> [u32; 4] {
     let zero = [0u8; ECC_CHUNK_SIZE];
     let erased = [0xFFu8; ECC_CHUNK_SIZE];

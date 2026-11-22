@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>LittleFS</title>
+<h1>LittleFS files</h1>
+<p id=s role=status>Loading files...</p>
+<input id=u type=file>
+<button id=b type=button>Upload</button>
+<p id=p role=status></p>
+<ul id=f></ul>
+<script>
+let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s'),u=document.getElementById('u'),p=document.getElementById('p');async function load(){o=0;count=0;f.textContent='';try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),ul=d.querySelector('ul');if(!ul)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',ul.innerHTML);count+=ul.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded).';}}document.getElementById('b').onclick=async()=>{let file=u.files[0];if(!file){p.textContent='Choose a file first.';return;}if(!/^[A-Za-z0-9._-]{1,64}$/.test(file.name)){p.textContent='Use a filename with 1-64 letters, digits, dot, underscore or hyphen.';return;}try{let chunk=2048;for(let offset=0;offset<file.size||offset===0;){let part=file.slice(offset,Math.min(offset+chunk,file.size));p.textContent='Uploading '+file.name+': '+Math.min(offset+part.size,file.size)+' / '+file.size+' bytes';let r=await fetch('/api/upload?name='+encodeURIComponent(file.name)+'&offset='+offset+'&total='+file.size,{method:'POST',body:part});if(!r.ok)throw Error(await r.text());offset+=part.size;if(file.size===0)break;}p.textContent='Upload complete: '+file.name;await load();}catch(e){p.textContent='Upload failed: '+e.message;}};load()
+</script>

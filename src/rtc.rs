@@ -198,13 +198,6 @@ pub fn unix_time_millis(rtc: &stm32f4::stm32f407::rtc::RegisterBlock) -> u32 {
     (seconds as u64 * 1_000 + milliseconds as u64) as u32
 }
 
-/// Return whole Unix seconds from a coherent RTC calendar snapshot.
-pub fn unix_time(rtc: &stm32f4::stm32f407::rtc::RegisterBlock) -> u32 {
-    let time = rtc.tr().read().bits();
-    let date = rtc.dr().read().bits();
-    unix_seconds_from_registers(time, date)
-}
-
 fn unix_seconds_from_registers(time: u32, date: u32) -> u32 {
     let Some(seconds) = decode_bcd(time & 0x7f) else { return 0; };
     let Some(minutes) = decode_bcd((time >> 8) & 0x7f) else { return 0; };

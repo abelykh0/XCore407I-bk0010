@@ -157,7 +157,9 @@ where
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use stm32f4::stm32f407 as pac;
-use crate::nand_ecc::{correct_ecc_chunk, ecc_software_512_fsmc};
+use crate::nand_ecc::correct_ecc_chunk;
+#[cfg(feature = "nand-diagnostics")]
+use crate::nand_ecc::ecc_software_512_fsmc;
 
 use littlefs2::{
     fs::{Allocation as LittleFsAllocation, Filesystem},
@@ -683,7 +685,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     };
     let mut ecc = [0xFFu8; ECC_OOB_BYTES];
     let mut hardware_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    #[cfg(feature = "nand-diagnostics")]
     let mut input_software_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+    #[cfg(not(feature = "nand-diagnostics"))]
+    let input_software_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     let mut input_fingerprint = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
     for (chunk_index, chunk) in data.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
         if sequence_trace_enabled {
@@ -728,6 +733,7 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         hardware_ecc[chunk_index] = chunk_ecc;
         // Software ECC is diagnostic-only; it is not needed to program NAND.
         // Keep it out of the normal page-program path.
+        #[cfg(feature = "nand-diagnostics")]
         if trace_enabled || sequence_trace_enabled {
             input_software_ecc[chunk_index] = ecc_software_512_fsmc(chunk);
             if sequence_trace_enabled {
@@ -831,7 +837,8 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         if data_ok {
             trace.flags |= 1 << 1;
             for (index, chunk) in readback.chunks_exact(FSMC_ECC_CHUNK_SIZE).enumerate() {
-                trace.readback_software[index] = ecc_software_512_fsmc(chunk);
+                #[cfg(feature = "nand-diagnostics")]
+                { trace.readback_software[index] = ecc_software_512_fsmc(chunk); }
                 trace.readback_fingerprint[index] = ecc_data_fingerprint(chunk);
             }
         }
@@ -962,6 +969,7 @@ pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[
 }
 
 /// Read-only classification helpers used by the whole-device ECC scan.
+#[cfg(feature = "nand-diagnostics")]
 pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<u8> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
 
@@ -975,6 +983,7 @@ pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<u8> {
     Some(marker[0])
 }
 
+#[cfg(feature = "nand-diagnostics")]
 pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
     if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
     let mut tag = [0u8; 2];
@@ -1048,7 +1057,8 @@ pub(crate) fn ecc_software_compare_page(page: u32) -> Result<EccPageComparison, 
         result.stored[index] = u32::from_le_bytes([
             spare[offset], spare[offset + 1], spare[offset + 2], 0,
         ]);
-        result.software[index] = ecc_software_512_fsmc(chunk);
+        #[cfg(feature = "nand-diagnostics")]
+        { result.software[index] = ecc_software_512_fsmc(chunk); }
         let mut fingerprint = 0x811C_9DC5u32;
         for &byte in chunk {
             fingerprint = (fingerprint ^ byte as u32).wrapping_mul(0x0100_0193);
@@ -1136,7 +1146,8 @@ pub(crate) fn ecc_hardware_compare_page(
         result.stored[index] = u32::from_le_bytes([
             spare[offset], spare[offset + 1], spare[offset + 2], 0,
         ]);
-        result.software[index] = ecc_software_512_fsmc(chunk);
+        #[cfg(feature = "nand-diagnostics")]
+        { result.software[index] = ecc_software_512_fsmc(chunk); }
         let mut fingerprint = 0x811C_9DC5u32;
         for &byte in chunk {
             fingerprint = (fingerprint ^ byte as u32).wrapping_mul(0x0100_0193);
@@ -1167,8 +1178,10 @@ pub(crate) fn read_data_page(page: u32, buffer: &mut [u8]) -> bool {
         return false;
     }
 
-    // The hardware-ECC read path has produced inconsistent syndromes under
-    // filesystem load, so read raw NAND data and validate it with software ECC.
+    let mut hardware_ecc = [0u32; FSMC_ECC_CHUNKS_PER_PAGE];
+
+    // Only diagnostic builds may bypass ECC for raw-read comparisons.
+    #[cfg(feature = "nand-diagnostics")]
     if !NAND_ECC_CHECK_ENABLED.load(Ordering::Acquire) {
         if !read_page(page, 0, &mut buffer[..PAGE_SIZE]) {
             record_nand_read_failure(1, page);
@@ -1177,15 +1190,48 @@ pub(crate) fn read_data_page(page: u32, buffer: &mut [u8]) -> bool {
         return true;
     }
 
-    // Read page data and the ECC/tag bytes in one NAND page-read transaction.
-    // The intervening OOB bytes (including factory bad-block markers) are
-    // retained so the existing erased-page validation remains unchanged.
-    if !read_page(page, 0, &mut buffer[..PAGE_SIZE + ECC_SPARE_BYTES]) {
+    // Read the data area with FSMC ECC enabled independently for each
+    // 512-byte chunk. FSMC calculates ECC; correct_ecc_chunk() below performs
+    // the actual single-bit data correction in software.
+    command(0x00);
+    address(0);
+    address(0);
+    address(page as u8);
+    address_last((page >> 8) as u8);
+    command(0x30);
+    if !wait_ready_rb() {
         record_nand_read_failure(1, page);
         return false;
     }
 
     let (out, spare) = buffer.split_at_mut(PAGE_SIZE);
+    for (chunk_index, chunk) in out.chunks_exact_mut(FSMC_ECC_CHUNK_SIZE).enumerate() {
+        ecc_begin_chunk();
+        for byte in chunk.iter_mut() {
+            *byte = read_data();
+        }
+        let (fifo_empty, polls) = wait_fsmc_fifo_empty();
+        if !fifo_empty {
+            let status = unsafe { read_volatile(fsmc_sr2()) };
+            let _ = ecc_end_chunk();
+            record_nand_device_failure(6, page, status);
+            record_nand_read_failure(2, (chunk_index as u32) << 24 | polls);
+            return false;
+        }
+        hardware_ecc[chunk_index] = ecc_end_chunk();
+        service_io_hook();
+    }
+
+    // Read the complete OOB prefix separately with ECC disabled. This retains
+    // the factory marker and erased-page checks used by the previous path.
+    if !read_page(
+        page,
+        PAGE_SIZE as u16,
+        &mut spare[..ECC_SPARE_BYTES],
+    ) {
+        record_nand_read_failure(1, page);
+        return false;
+    }
     let spare = &spare[..ECC_SPARE_BYTES];
     let ecc_start = ECC_OOB_OFFSET as usize;
     let tag_start = ecc_start + ECC_OOB_BYTES;
@@ -1209,7 +1255,7 @@ pub(crate) fn read_data_page(page: u32, buffer: &mut [u8]) -> bool {
         let stored_ecc = u32::from_le_bytes([
             spare[offset], spare[offset + 1], spare[offset + 2], 0,
         ]);
-        let calculated_ecc = ecc_software_512_fsmc(chunk);
+        let calculated_ecc = hardware_ecc[chunk_index];
         if !correct_ecc_chunk(chunk, stored_ecc, calculated_ecc) {
             record_ecc_read_failure(page, chunk_index as u32, stored_ecc, calculated_ecc);
             return false;

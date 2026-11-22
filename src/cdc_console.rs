@@ -356,23 +356,13 @@ fn write_hex_u32(value: u32) {
 
 
 
-fn write_decimal(mut value: usize) {
-    let mut digits = [0u8; 10];
-    let mut start = digits.len();
-    loop {
-        start -= 1;
-        digits[start] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    write_status(&digits[start..]);
-}
-
-fn write_decimal_grouped(mut value: usize) {
-    // A 32-bit usize needs at most 10 digits and 3 separators.
-    let mut digits = [0u8; 13];
+/// Format a 32-bit decimal value into the supplied scratch buffer.
+/// The returned slice contains either plain digits or comma-grouped digits.
+fn format_decimal<'a>(
+    mut value: usize,
+    grouped: bool,
+    digits: &'a mut [u8; 13],
+) -> &'a [u8] {
     let mut start = digits.len();
     let mut group_digits = 0usize;
 
@@ -385,14 +375,24 @@ fn write_decimal_grouped(mut value: usize) {
         if value == 0 {
             break;
         }
-        if group_digits == 3 {
+        if grouped && group_digits == 3 {
             start -= 1;
             digits[start] = b',';
             group_digits = 0;
         }
     }
 
-    write_status(&digits[start..]);
+    &digits[start..]
+}
+
+fn write_decimal(value: usize) {
+    let mut digits = [0u8; 13];
+    write_status(format_decimal(value, false, &mut digits));
+}
+
+fn write_decimal_grouped(value: usize) {
+    let mut digits = [0u8; 13];
+    write_status(format_decimal(value, true, &mut digits));
 }
 
 fn write_transfer_duration(seconds: u32) {
@@ -422,35 +422,14 @@ fn append_receive_bytes(buffer: &mut [u8], len: &mut usize, bytes: &[u8]) {
     *len = end;
 }
 
-fn append_receive_decimal(buffer: &mut [u8], len: &mut usize, mut value: usize) {
-    let mut digits = [0u8; 10];
-    let mut start = digits.len();
-    loop {
-        start -= 1;
-        digits[start] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 { break; }
-    }
-    append_receive_bytes(buffer, len, &digits[start..]);
+fn append_receive_decimal(buffer: &mut [u8], len: &mut usize, value: usize) {
+    let mut digits = [0u8; 13];
+    append_receive_bytes(buffer, len, format_decimal(value, false, &mut digits));
 }
 
-fn append_receive_grouped(buffer: &mut [u8], len: &mut usize, mut value: usize) {
+fn append_receive_grouped(buffer: &mut [u8], len: &mut usize, value: usize) {
     let mut digits = [0u8; 13];
-    let mut start = digits.len();
-    let mut group_digits = 0usize;
-    loop {
-        start -= 1;
-        digits[start] = b'0' + (value % 10) as u8;
-        value /= 10;
-        group_digits += 1;
-        if value == 0 { break; }
-        if group_digits == 3 {
-            start -= 1;
-            digits[start] = b',';
-            group_digits = 0;
-        }
-    }
-    append_receive_bytes(buffer, len, &digits[start..]);
+    append_receive_bytes(buffer, len, format_decimal(value, true, &mut digits));
 }
 
 /// Queue one complete receive notification so the caller can retain it if
@@ -598,14 +577,14 @@ fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
 }
 
 struct ListOutput {
-    buffer: [u8; 256],
+    buffer: [u8; 1024],
     len: usize,
 }
 
 impl ListOutput {
     fn new() -> Self {
         Self {
-            buffer: [0; 256],
+            buffer: [0; 1024],
             len: 0,
         }
     }
@@ -1705,6 +1684,8 @@ pub fn service(
                             write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"ECCSCAN") {
+                        #[cfg(feature = "nand-diagnostics")]
+                        {
                         write_status(b"\r\nECCSCAN: read-only full physical NAND ECC scan. No NAND writes or erases.\r\n");
                         let vectors = crate::nand_ecc::ecc_software_selftest();
                         let vectors_ok = vectors == [0x00FF_FFFF, 0x00FF_FFFF, 0x00AA_AAAA, 0x0069_5659];
@@ -1847,6 +1828,9 @@ pub fn service(
                         } else {
                             b"ECCSCAN completed with diagnostic findings. NAND was not modified.\r\n> "
                         });
+                        }
+                        #[cfg(not(feature = "nand-diagnostics"))]
+                        write_status(b"ECCSCAN requires nand-diagnostics.\r\n> ");
                     } else if line.len() >= 7
                         && line[..7].iter().zip(b"DELETE").all(|(a, b)| a.to_ascii_uppercase() == *b)
                         && line[6] == b' '
