@@ -1238,7 +1238,7 @@ pub fn service(
                         write_status(b" send=");
                         write_decimal(sends as usize);
                         write_status(b"\r\n");
-                        let (poll_stage, polls, receives, rx_bytes, no_send, no_recv) =
+                        let (poll_stage, polls, receives, rx_bytes, no_send, no_recv, expected, queue, tcp_state) =
                             crate::ethernet::http_poll_diagnostics();
                         write_status(b"HTTP socket: stage=");
                         write_decimal(poll_stage as usize);
@@ -1252,6 +1252,12 @@ pub fn service(
                         write_decimal(no_send as usize);
                         write_status(b" no_recv=");
                         write_decimal(no_recv as usize);
+                        write_status(b" expected=");
+                        write_decimal(expected as usize);
+                        write_status(b" queue=");
+                        write_decimal(queue as usize);
+                        write_status(b" tcp_state=");
+                        write_decimal(tcp_state as usize);
                         write_status(b"\r\n");
                         write_status(if ZMODEM_START_FAILED {
                             b"ZMODEM startup: header detected, receiver did not start.\r\n"
