@@ -42,6 +42,10 @@ static HTTP_POLL_DIAG_RECV_COUNT: AtomicU32 = AtomicU32::new(0);
 static HTTP_POLL_DIAG_RECV_BYTES: AtomicU32 = AtomicU32::new(0);
 static HTTP_POLL_DIAG_NO_SEND: AtomicU32 = AtomicU32::new(0);
 static HTTP_POLL_DIAG_NO_RECV: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_EXPECTED: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_QUEUE: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_CAPACITY: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_STATE: AtomicU8 = AtomicU8::new(0);
 
 /// Snapshot of the most recent HTTP upload request and its progress.
 pub fn http_upload_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
@@ -55,7 +59,7 @@ pub fn http_upload_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
     )
 }
 
-pub fn http_poll_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
+pub fn http_poll_diagnostics() -> (u8, u32, u32, u32, u32, u32, u32, u32, u8) {
     (
         HTTP_POLL_DIAG_STAGE.load(Ordering::Acquire),
         HTTP_POLL_DIAG_COUNT.load(Ordering::Relaxed),
@@ -63,6 +67,9 @@ pub fn http_poll_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
         HTTP_POLL_DIAG_RECV_BYTES.load(Ordering::Acquire),
         HTTP_POLL_DIAG_NO_SEND.load(Ordering::Relaxed),
         HTTP_POLL_DIAG_NO_RECV.load(Ordering::Relaxed),
+        HTTP_POLL_DIAG_EXPECTED.load(Ordering::Acquire),
+        HTTP_POLL_DIAG_QUEUE.load(Ordering::Acquire),
+        HTTP_POLL_DIAG_STATE.load(Ordering::Acquire),
     )
 }
 
@@ -1071,6 +1078,7 @@ impl<'a> EthernetNetwork<'a> {
                     return (header_len, true);
                 }
                 if data.len() < header_len + content_length {
+                    HTTP_POLL_DIAG_EXPECTED.store((header_len + content_length) as u32, Ordering::Release);
                     HTTP_POLL_DIAG_STAGE.store(6, Ordering::Release);
                     return (0, false);
                 }
@@ -1102,6 +1110,22 @@ impl<'a> EthernetNetwork<'a> {
             (header_len, true)
         });
 
+        HTTP_POLL_DIAG_QUEUE.store(socket.recv_queue() as u32, Ordering::Release);
+        HTTP_POLL_DIAG_CAPACITY.store(socket.recv_capacity() as u32, Ordering::Release);
+        let tcp_state = match socket.state() {
+            smoltcp::socket::tcp::State::Closed => 0,
+            smoltcp::socket::tcp::State::Listen => 1,
+            smoltcp::socket::tcp::State::SynSent => 2,
+            smoltcp::socket::tcp::State::SynReceived => 3,
+            smoltcp::socket::tcp::State::Established => 4,
+            smoltcp::socket::tcp::State::FinWait1 => 5,
+            smoltcp::socket::tcp::State::FinWait2 => 6,
+            smoltcp::socket::tcp::State::CloseWait => 7,
+            smoltcp::socket::tcp::State::Closing => 8,
+            smoltcp::socket::tcp::State::LastAck => 9,
+            smoltcp::socket::tcp::State::TimeWait => 10,
+        };
+        HTTP_POLL_DIAG_STATE.store(tcp_state, Ordering::Release);
         if recv_result.is_err() {
             HTTP_POLL_DIAG_STAGE.store(7, Ordering::Release);
         }
