@@ -354,11 +354,7 @@ fn write_hex_u32(value: u32) {
     write_status(&digits);
 }
 
-fn write_hex_u8(value: u8) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let digits = [HEX[(value >> 4) as usize], HEX[(value & 0x0F) as usize]];
-    write_status(&digits);
-}
+
 
 fn write_decimal(mut value: usize) {
     let mut digits = [0u8; 10];
@@ -1207,77 +1203,6 @@ pub fn service(
                             }
                             write_status(b"\r\nMAC/DMA: ");
                             write_status(if crate::ethernet::is_initialized() { b"initialized" } else { b"not initialized" });
-                            let (rx_frames, tx_frames, rx_errors) = crate::ethernet::frame_counts();
-                            let (arp_rx, ipv4_rx, dhcp_rx, dhcp_configured, dhcp_deconfigured) = crate::ethernet::network_diagnostic();
-                            write_status(b"\\r\\nFrames RX/TX/errors: ");
-                            write_decimal(rx_frames as usize);
-                            write_status(b"/");
-                            write_decimal(tx_frames as usize);
-                            write_status(b"/");
-                            write_decimal(rx_errors as usize);
-                            write_status(b" NET ARP/IP/DHCP: ");
-                            write_decimal(arp_rx as usize);
-                            write_status(b"/");
-                            write_decimal(ipv4_rx as usize);
-                            write_status(b"/");
-                            write_decimal(dhcp_rx as usize);
-                            write_status(b" DHCP EVT cfg/decfg: ");
-                            write_decimal(dhcp_configured as usize);
-                            write_status(b"/");
-                            write_decimal(dhcp_deconfigured as usize);
-                            let (dma_sr, dma_omr, rx0, rx1, tx0, tx1, tx2, tx3, txcur, dmaier, maccr, pmc, macdbg) = crate::ethernet::dma_diagnostic();
-                            write_status(b"\r\nDMA SR/OMR: 0x");
-                            write_hex_u32(dma_sr);
-                            write_status(b"/0x");
-                            write_hex_u32(dma_omr);
-                            write_status(b" RXD0/1: 0x");
-                            write_hex_u32(rx0);
-                            write_status(b"/0x");
-                            write_hex_u32(rx1);
-                            write_status(b" TXD0..3:0x");
-                            write_hex_u32(tx0);
-                            write_status(b"/0x");
-                            write_hex_u32(tx1);
-                            write_status(b"/0x");
-                            write_hex_u32(tx2);
-                            write_status(b"/0x");
-                            write_hex_u32(tx3);
-                            write_status(b" TXCUR:0x");
-                            write_hex_u32(txcur);
-                            let tx_length = crate::ethernet::tx_packet_length();
-                            write_status(b" TXLEN:");
-                            write_decimal(tx_length as usize);
-                            write_status(b" TXDATA:");
-                            let dump_length = (tx_length as usize).min(304);
-                            for index in 0..dump_length {
-                                if index != 0 { write_status(b" "); }
-                                write_hex_u8(crate::ethernet::tx_packet_byte(index));
-                            }
-                            let (mmc_control, mmc_tx_gb, mmc_underflow, mmc_late, mmc_excess, mmc_carrier, mmc_good) =
-                                crate::ethernet::mmc_tx_diagnostic();
-                            write_status(b" MMC C/TXGB/UF/LATE/EXCESS/CARR/GOOD:");
-                            for (index, value) in [
-                                mmc_control, mmc_tx_gb, mmc_underflow, mmc_late,
-                                mmc_excess, mmc_carrier, mmc_good,
-                            ].iter().enumerate() {
-                                if index != 0 { write_status(b"/"); }
-                                write_hex_u32(*value);
-                            }
-                            write_status(b" IER:0x");
-                            write_hex_u32(dmaier);
-                            write_status(b" MACCR:0x");
-                            write_hex_u32(maccr);
-                            write_status(b" PMC:0x");
-                            write_hex_u32(pmc);
-                            write_status(b" MACDBG:0x");
-                            write_hex_u32(macdbg);
-                            let (dma_seen, mac_seen) = crate::ethernet::diagnostic_history();
-                            write_status(b" HIST SR/DBG:0x");
-                            write_hex_u32(dma_seen);
-                            write_status(b"/0x");
-                            write_hex_u32(mac_seen);
-                            write_status(b" IRQ:");
-                            write_decimal(crate::ethernet::dma_interrupt_count() as usize);
                             write_status(b"\r\nIPv4: ");
                             if let Some((address, prefix)) = crate::ethernet::ipv4_config() {
                                 for (index, octet) in address.iter().enumerate() {
