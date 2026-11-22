@@ -200,7 +200,6 @@ pub fn initialize() -> bool {
             w.re().clear_bit()
                 .te().clear_bit()
                 .dc().clear_bit()
-                .bl().bits(0)
                 .apcs().set_bit()
                 .rd().clear_bit()
                 .ipco().clear_bit()
@@ -209,10 +208,13 @@ pub fn initialize() -> bool {
                 .rod().clear_bit()
                 .fes().bit(negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0)
                 .csd().clear_bit()
-                .ifg().bits(0)
                 .jd().clear_bit()
                 .wd().clear_bit()
-                .cstf().set_bit()
+                .cstf().set_bit();
+            unsafe {
+                w.bl().bits(0);
+                w.ifg().bits(0);
+            }
         });
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
         write_volatile((*pac::ETHERNET_MAC::PTR).macffr().as_ptr(), 0); // normal destination filtering
