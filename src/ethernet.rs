@@ -23,12 +23,11 @@ const MDIO_TIMEOUT: u32 = 1_000_000;
 const PHY_NEGOTIATION_POLLS: u32 = 5_000;
 const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
-// HTTP buffers consume the remaining DEMO_CANVAS space after the receiver
-// and Ethernet DMA ring, up to the alternate-stack reservation.
+// HTTP RX/body storage occupies the remaining DEMO_CANVAS range. The much
+// larger TCP TX buffer shares CCM with socket metadata; neither is DMA-accessed.
 const HTTP_RX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_RX_BYTES;
-const HTTP_TX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_TX_BYTES;
 const HTTP_BODY_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_BODY_BYTES;
-const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
+const HTTP_DIRECTORY_PAGE_SIZE: usize = 32;
 
 const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><input id=u type=file><button id=b type=button>Upload</button><p id=p role=status></p><ul id=f></ul><script>
 let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s'),u=document.getElementById('u'),p=document.getElementById('p');async function load(){o=0;count=0;f.textContent='';try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),ul=d.querySelector('ul');if(!ul)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',ul.innerHTML);count+=ul.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded).';}}document.getElementById('b').onclick=async()=>{let file=u.files[0];if(!file){p.textContent='Choose a file first.';return;}if(!/^[A-Za-z0-9._-]{1,64}$/.test(file.name)){p.textContent='Use a filename with 1-64 letters, digits, dot, underscore or hyphen.';return;}try{let chunk=2048;for(let offset=0;offset<file.size||offset===0;){let part=file.slice(offset,Math.min(offset+chunk,file.size));p.textContent='Uploading '+file.name+': '+Math.min(offset+part.size,file.size)+' / '+file.size+' bytes';let r=await fetch('/api/upload?name='+encodeURIComponent(file.name)+'&offset='+offset+'&total='+file.size,{method:'POST',body:part});if(!r.ok)throw Error(await r.text());offset+=part.size;if(file.size===0)break;}p.textContent='Upload complete: '+file.name;await load();}catch(e){p.textContent='Upload failed: '+e.message;}};load()</script>"#;
@@ -79,7 +78,6 @@ struct EthernetDmaStorage {
 #[repr(C, align(8))]
 struct EthernetHttpStorage {
     rx: [u8; HTTP_RX_BUFFER_SIZE],
-    tx: [u8; HTTP_TX_BUFFER_SIZE],
     body: [u8; HTTP_BODY_BUFFER_SIZE],
 }
 
@@ -88,9 +86,12 @@ struct EthernetSocketStorage {
     sockets: [smoltcp::iface::SocketStorage<'static>; 2],
 }
 
+const HTTP_TX_BUFFER_SIZE: usize =
+    crate::camera::CANVAS_TAIL_BYTES - core::mem::size_of::<EthernetSocketStorage>();
+
 const _: () = assert!(core::mem::size_of::<EthernetDmaStorage>() <= crate::camera::CDC_ETHERNET_DMA_STORAGE_BYTES);
 const _: () = assert!(core::mem::size_of::<EthernetHttpStorage>() == crate::camera::CDC_HTTP_STORAGE_BYTES);
-const _: () = assert!(core::mem::size_of::<EthernetSocketStorage>() <= crate::camera::CANVAS_TAIL_BYTES);
+const _: () = assert!(core::mem::size_of::<EthernetSocketStorage>() + HTTP_TX_BUFFER_SIZE <= crate::camera::CANVAS_TAIL_BYTES);
 
 #[inline]
 fn dma_storage_ptr() -> *mut EthernetDmaStorage {
@@ -105,6 +106,15 @@ fn http_storage_ptr() -> *mut EthernetHttpStorage {
 #[inline]
 fn socket_storage_ptr() -> *mut EthernetSocketStorage {
     crate::camera::cdc_ethernet_socket_storage_ptr().cast()
+}
+
+#[inline]
+fn http_tx_storage_ptr() -> *mut u8 {
+    unsafe {
+        socket_storage_ptr()
+            .cast::<u8>()
+            .add(core::mem::size_of::<EthernetSocketStorage>())
+    }
 }
 
 pub fn socket_storage() -> &'static mut [smoltcp::iface::SocketStorage<'static>] {
@@ -765,8 +775,8 @@ impl<'a> EthernetNetwork<'a> {
         let mut sockets = SocketSet::new(storage);
         let dhcp_handle = sockets.add(Dhcpv4Socket::new());
 
-        // HTTP byte buffers are in the free DEMO_CANVAS range, after the
-        // DMA ring and before the alternate-stack reservation.
+        // HTTP RX/body buffers are in DEMO_CANVAS. The TCP TX buffer follows
+        // socket metadata in CCM, where CPU access is sufficient.
         let http_storage = http_storage_ptr();
         let http_rx: &'static mut [u8] = unsafe {
             core::slice::from_raw_parts_mut(
@@ -775,10 +785,7 @@ impl<'a> EthernetNetwork<'a> {
             )
         };
         let http_tx: &'static mut [u8] = unsafe {
-            core::slice::from_raw_parts_mut(
-                addr_of_mut!((*http_storage).tx).cast::<u8>(),
-                HTTP_TX_BUFFER_SIZE,
-            )
+            core::slice::from_raw_parts_mut(http_tx_storage_ptr(), HTTP_TX_BUFFER_SIZE)
         };
         let http_socket = TcpSocket::new(
             TcpSocketBuffer::new(http_rx),
