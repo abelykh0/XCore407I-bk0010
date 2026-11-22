@@ -468,7 +468,7 @@ static TX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static RX_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 /// Snapshot DMA engine and RX descriptor state without allocating memory.
-pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
+pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
     unsafe {
         let rx = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>();
         (
@@ -477,6 +477,9 @@ pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
             read_volatile(addr_of_mut!((*rx).words[0])),
             read_volatile(addr_of_mut!((*rx.add(1)).words[0])),
             read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[0])),
+            read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1])),
+            read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[2])),
+            read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[3])),
             read_volatile(ETH_DMACHTDR),
             read_volatile(ETH_DMAIER),
             read_volatile(ETH_MACCR),
