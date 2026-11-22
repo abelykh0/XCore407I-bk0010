@@ -49,12 +49,16 @@ const PHY_NEGOTIATION_POLLS: u32 = 5_000;
 const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
 const HTTP_RX_BUFFER_SIZE: usize = 256;
-const HTTP_TX_BUFFER_SIZE: usize = 384;
+const HTTP_TX_BUFFER_SIZE: usize = 512;
+const HTTP_BODY_BUFFER_SIZE: usize = 384;
 static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
 static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
-const HTTP_PAGE: &[u8] = include_bytes!("../resources/index.html");
+static mut HTTP_BODY_BUFFER: [u8; HTTP_BODY_BUFFER_SIZE] = [0; HTTP_BODY_BUFFER_SIZE];
 const HTTP_RESPONSE_HEADER: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
+const HTTP_PAGE_PREFIX: &[u8] =
+    b"<!doctype html><html><head><meta charset=utf-8><title>LittleFS</title></head><body><h1>LittleFS files</h1><ul>";
+const HTTP_PAGE_SUFFIX: &[u8] = b"</ul></body></html>";
 
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
@@ -254,6 +258,34 @@ pub fn on_dma_interrupt() {
         let pending = status & DMA_IRQ_CLEAR_MASK;
         if pending != 0 {
             write_volatile(ETH_DMASR, pending);
+        }
+    }
+}
+
+
+/// Append bytes to the bounded HTTP response body.
+fn append_http_bytes(buffer: &mut [u8], length: &mut usize, bytes: &[u8]) -> bool {
+    if bytes.len() > buffer.len().saturating_sub(*length) {
+        return false;
+    }
+    buffer[*length..*length + bytes.len()].copy_from_slice(bytes);
+    *length += bytes.len();
+    true
+}
+
+fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) {
+    let mut digits = [0u8; 10];
+    let mut count = 0;
+    loop {
+        digits[count] = b'0' + (value % 10) as u8;
+        count += 1;
+        value /= 10;
+        if value == 0 { break; }
+    }
+    while count != 0 {
+        count -= 1;
+        if !append_http_bytes(buffer, length, &digits[count..count + 1]) {
+            break;
         }
     }
 }
@@ -535,7 +567,11 @@ impl<'a> EthernetNetwork<'a> {
 
     /// Advance Ethernet, DHCP, and interface timers. Call frequently from the
     /// foreground; no interrupt or executor is required.
-    pub fn poll(&mut self, now_ms: u32) {
+    pub fn poll(
+        &mut self,
+        now_ms: u32,
+        filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+    ) {
         if !is_initialized() {
             return;
         }
@@ -569,11 +605,14 @@ impl<'a> EthernetNetwork<'a> {
             }
         }
 
-        self.poll_http();
+        self.poll_http(filesystem);
     }
 
-    /// Serve the embedded test page on TCP port 80.
-    fn poll_http(&mut self) {
+    /// Serve a live root-directory listing from the already-mounted LittleFS.
+    fn poll_http(
+        &mut self,
+        filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+    ) {
         use smoltcp::socket::tcp::Socket as TcpSocket;
 
         let socket = self.sockets.get_mut::<TcpSocket>(self.http_handle);
@@ -582,14 +621,56 @@ impl<'a> EthernetNetwork<'a> {
             return;
         }
 
-        // The test server does not need to parse the request. Once any HTTP
-        // request bytes arrive, return the single embedded page and close.
         if socket.can_recv() {
             let received = socket.recv(|data| (data.len(), !data.is_empty()))
                 .unwrap_or(false);
             if received && socket.can_send() {
+                let body = unsafe {
+                    core::slice::from_raw_parts_mut(
+                        addr_of_mut!(HTTP_BODY_BUFFER).cast::<u8>(),
+                        HTTP_BODY_BUFFER_SIZE,
+                    )
+                };
+                let mut length = 0;
+                append_http_bytes(body, &mut length, HTTP_PAGE_PREFIX);
+
+                let _ = crate::nand_fs::read_root_directory(
+                    filesystem,
+                    true,
+                    |path, is_dir, size| {
+                        if length >= body.len() {
+                            return Ok(());
+                        }
+                        append_http_bytes(body, &mut length, b"<li>");
+                        let name = path.strip_prefix(b"/").unwrap_or(path);
+                        let name = name.strip_suffix(b"\\0").unwrap_or(name);
+                        for &byte in name {
+                            let escaped = match byte {
+                                b'&' => b"&amp;" as &[u8],
+                                b'<' => b"&lt;",
+                                b'>' => b"&gt;",
+                                b'"' => b"&quot;",
+                                _ => core::slice::from_ref(&byte),
+                            };
+                            if !append_http_bytes(body, &mut length, escaped) {
+                                break;
+                            }
+                        }
+                        if is_dir {
+                            append_http_bytes(body, &mut length, b"/");
+                        } else {
+                            append_http_bytes(body, &mut length, b" (");
+                            append_http_decimal(body, &mut length, size);
+                            append_http_bytes(body, &mut length, b" bytes)");
+                        }
+                        append_http_bytes(body, &mut length, b"</li>");
+                        Ok(())
+                    },
+                );
+
+                append_http_bytes(body, &mut length, HTTP_PAGE_SUFFIX);
                 let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
-                let _ = socket.send_slice(HTTP_PAGE);
+                let _ = socket.send_slice(&body[..length]);
                 socket.close();
             }
         }
