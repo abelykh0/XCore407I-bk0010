@@ -59,11 +59,8 @@ static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
 static mut HTTP_BODY_BUFFER: [u8; HTTP_BODY_BUFFER_SIZE] = [0; HTTP_BODY_BUFFER_SIZE];
 const HTTP_RESPONSE_HEADER: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
-const HTTP_PAGE: &[u8] = br#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title></head><body><h1>LittleFS files</h1><ul id=files></ul><button id=more hidden>Load more</button><script>
-let offset=0;const list=document.getElementById('files'),more=document.getElementById('more');
-async function load(){more.disabled=true;try{const r=await fetch('/api/files?offset='+offset);if(!r.ok)throw Error(r.status);const d=new DOMParser().parseFromString(await r.text(),'text/html');list.insertAdjacentHTML('beforeend',d.querySelector('ul').innerHTML);const n=d.querySelector('[data-next]');if(n){offset=Number(n.dataset.next);more.hidden=false;}else{more.hidden=true;}}catch(e){more.hidden=false;more.textContent='Retry';}finally{more.disabled=false;}}
-more.addEventListener('click',load);load();
-</script></body></html>"#;
+const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><title>LittleFS</title><h1>LittleFS files</h1><ul id=f></ul><button id=b hidden>More</button><script>
+let o=0,f=document.getElementById('f'),b=document.getElementById('b');async function l(){b.disabled=1;try{let r=await fetch('/api/files?offset='+o),d=new DOMParser().parseFromString(await r.text(),'text/html');f.insertAdjacentHTML('beforeend',d.querySelector('ul').innerHTML);let n=d.querySelector('[data-next]');if(n){o=+n.dataset.next;b.hidden=0}else b.hidden=1}catch(e){b.hidden=0;b.textContent='Retry'}b.disabled=0}b.onclick=l;l()</script>"#;
 
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
