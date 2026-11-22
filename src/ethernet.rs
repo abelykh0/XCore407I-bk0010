@@ -51,7 +51,7 @@ const DMA_BMR_TX_BURST_32: u32 = 32 << 8;
 const DMA_BMR_RX_BURST_32: u32 = 32 << 17;
 const DMA_BMR_SEPARATE_PBL: u32 = 1 << 23;
 const DMA_BMR_ADDRESS_ALIGNED_BEATS: u32 = 1 << 16;
-const DMA_OMR_INIT: u32 = DMA_OMR_INIT;
+const DMA_OMR_INIT: u32 = (1 << 26) | (1 << 25) | (1 << 21);
 const DMA_OMR_FLUSH_TX_FIFO: u32 = 1 << 20;
 const DMA_OMR_START_TX: u32 = 1 << 13;
 const DMA_OMR_START_RX: u32 = 1 << 1;
@@ -217,7 +217,7 @@ pub fn initialize() -> bool {
             timeout -= 1;
         }
         write_volatile(ETH_DMABMR, DMA_BMR_FIXED_BURST | DMA_BMR_ADDRESS_ALIGNED_BEATS | DMA_BMR_TX_BURST_32 | DMA_BMR_RX_BURST_32 | DMA_BMR_SEPARATE_PBL);
-        write_volatile(ETH_DMAOMR, (1 << 26) | (1 << 25) | (1 << 21));
+        write_volatile(ETH_DMAOMR, DMA_OMR_INIT);
         write_volatile(ETH_DMARDLAR, rx_desc as u32);
         write_volatile(ETH_DMATDLAR, tx_desc as u32);
         write_volatile(ETH_DMAIER, 0);
@@ -251,7 +251,7 @@ pub fn initialize() -> bool {
         // Flush the transmit FIFO before enabling DMA transmission.
         write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | DMA_OMR_FLUSH_TX_FIFO);
         let mut flush_timeout = MDIO_TIMEOUT;
-        while read_volatile(ETH_DMAOMR) & (1 << 20) != 0 {
+        while read_volatile(ETH_DMAOMR) & DMA_OMR_FLUSH_TX_FIFO != 0 {
             if flush_timeout == 0 {
                 return false;
             }
@@ -350,7 +350,7 @@ pub fn probe_dp83848() -> PhyStatus {
                 Some(value) => value,
                 None => return empty_status(true),
             };
-            let bmsr = match mdio_read(address, 1) {
+            let bmsr = match mdio_read(address, MII_REG_BMSR) {
                 Some(value) => value,
                 None => return empty_status(true),
             };
@@ -375,7 +375,7 @@ fn wait_for_phy_negotiation(mut phy: PhyStatus) -> PhyStatus {
         unsafe {
             // BMSR link and autoneg-complete bits are latch-low; read twice.
             let _ = mdio_read(phy.address, MII_REG_BMSR);
-            if let Some(bmsr) = mdio_read(phy.address, 1) {
+            if let Some(bmsr) = mdio_read(phy.address, MII_REG_BMSR) {
                 phy.bmsr = bmsr;
             } else {
                 break;
