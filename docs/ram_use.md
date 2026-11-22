@@ -8,8 +8,8 @@ STM32F407 memory: 128 KiB main SRAM (DMA-accessible) and 64 KiB CCM SRAM (not Et
 
 | Allocation | Region | Size | Emulator mode | CDC mode |
 |---|---|---:|---|---|
-| DEMO_CANVAS | Main SRAM, .bss | 84,224 B reserved | Shared backing storage; not all bytes are active framebuffer data | Reused as CDC receiver backing region; currently 4,096 B is claimed, remainder unused by receiver |
-| DEMO_CANVAS_TAIL | CCM, .ccmram.canvas | 46,848 B reserved | Canvas-tail storage, partly unused or repurposed depending on BK display layout | Reused as alternate stack for synchronous filesystem operations |
+| DEMO_CANVAS | Main SRAM, .bss | 84,224 B reserved | Shared backing storage; not all bytes are active framebuffer data | CDC receiver + Ethernet DMA ring + alternate stack; 28,624 B gap remains between allocations |
+| DEMO_CANVAS_TAIL | CCM, .ccmram.canvas | 46,848 B reserved | Canvas-tail storage, partly unused or repurposed depending on BK display layout | CPU-only smoltcp socket storage and HTTP buffers |
 | Combined | Main SRAM + CCM | 131,072 B reserved | Backing-store capacity; not necessarily all live video pixels | Same physical allocation reused, not allocated again |
 
 Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES = 46,848; CANVAS_MAIN_BYTES = 84,224.
@@ -31,7 +31,7 @@ The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure 
 
 ## CDC mode — UVC static page + CDC + Ethernet HTTP
 
-CDC mode does not run the emulator. It reuses the same canvas regions above. The receiver allocation is inside DEMO_CANVAS, not an additional allocation. The alternate stack occupies DEMO_CANVAS_TAIL.
+CDC mode does not run the emulator. It reuses the same canvas regions above. The receiver, Ethernet DMA ring, and alternate stack occupy disjoint ranges in DEMO_CANVAS; the CCM tail is reused for CPU-only TCP and HTTP storage.
 
 | Block | Region | Size | Purpose |
 |---|---|---:|---|
