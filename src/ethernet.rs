@@ -48,6 +48,14 @@ const MDIO_TIMEOUT: u32 = 1_000_000;
 const PHY_NEGOTIATION_POLLS: u32 = 5_000;
 const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
+const HTTP_RX_BUFFER_SIZE: usize = 256;
+const HTTP_TX_BUFFER_SIZE: usize = 384;
+static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
+static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
+const HTTP_PAGE: &[u8] = include_bytes!("../resources/index.html");
+const HTTP_RESPONSE_HEADER: &[u8] =
+    b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
+
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
 const DESC_OWN: u32 = 1 << 31;
@@ -485,6 +493,7 @@ pub struct EthernetNetwork<'a> {
     iface: smoltcp::iface::Interface,
     sockets: smoltcp::iface::SocketSet<'a>,
     dhcp_handle: smoltcp::iface::SocketHandle,
+    http_handle: smoltcp::iface::SocketHandle,
 }
 
 impl<'a> EthernetNetwork<'a> {
@@ -492,6 +501,7 @@ impl<'a> EthernetNetwork<'a> {
     pub fn new(storage: &'a mut [smoltcp::iface::SocketStorage<'a>]) -> Self {
         use smoltcp::iface::{Config, Interface, SocketSet};
         use smoltcp::socket::dhcpv4::Socket as Dhcpv4Socket;
+        use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer};
         use smoltcp::wire::{EthernetAddress, HardwareAddress};
 
         let mut device = EthernetDevice::new();
@@ -501,7 +511,26 @@ impl<'a> EthernetNetwork<'a> {
         let mut sockets = SocketSet::new(storage);
         let dhcp_handle = sockets.add(Dhcpv4Socket::new());
 
-        Self { device, iface, sockets, dhcp_handle }
+        // The HTTP buffers are static SRAM objects, not stack allocations.
+        let http_rx: &'static mut [u8] = unsafe {
+            core::slice::from_raw_parts_mut(
+                addr_of_mut!(HTTP_RX_BUFFER).cast::<u8>(),
+                HTTP_RX_BUFFER_SIZE,
+            )
+        };
+        let http_tx: &'static mut [u8] = unsafe {
+            core::slice::from_raw_parts_mut(
+                addr_of_mut!(HTTP_TX_BUFFER).cast::<u8>(),
+                HTTP_TX_BUFFER_SIZE,
+            )
+        };
+        let http_socket = TcpSocket::new(
+            TcpSocketBuffer::new(http_rx),
+            TcpSocketBuffer::new(http_tx),
+        );
+        let http_handle = sockets.add(http_socket);
+
+        Self { device, iface, sockets, dhcp_handle, http_handle }
     }
 
     /// Advance Ethernet, DHCP, and interface timers. Call frequently from the
@@ -540,5 +569,29 @@ impl<'a> EthernetNetwork<'a> {
             }
         }
 
+        self.poll_http();
+    }
+
+    /// Serve the embedded test page on TCP port 80.
+    fn poll_http(&mut self) {
+        use smoltcp::socket::tcp::Socket as TcpSocket;
+
+        let socket = self.sockets.get_mut::<TcpSocket>(self.http_handle);
+        if !socket.is_open() {
+            let _ = socket.listen(80);
+            return;
+        }
+
+        // The test server does not need to parse the request. Once any HTTP
+        // request bytes arrive, return the single embedded page and close.
+        if socket.can_recv() {
+            let received = socket.recv(|data| (data.len(), !data.is_empty()))
+                .unwrap_or(false);
+            if received && socket.can_send() {
+                let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
+                let _ = socket.send_slice(HTTP_PAGE);
+                socket.close();
+            }
+        }
     }
 }
