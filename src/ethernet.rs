@@ -13,31 +13,9 @@ use smoltcp::time::Instant;
 
 
 const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
-const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 
-const ETHMACRST: u32 = 1 << 25;
-const SYSCFGEN: u32 = 1 << 14;
-const MII_RMII_SEL: u32 = 1 << 23;
-const MII_BUSY: u32 = 1;
-const MII_CR_DIV_102: u32 = 0b100 << 2;
-const MII_CR_DIV_MASK: u32 = 0b111 << 2;
 
-const DMA_BMR_FIXED_BURST: u32 = 1 << 25;
-const DMA_BMR_TX_BURST_32: u32 = 32 << 8;
-const DMA_BMR_RX_BURST_32: u32 = 32 << 17;
-const DMA_BMR_SEPARATE_PBL: u32 = 1 << 23;
-const DMA_BMR_ADDRESS_ALIGNED_BEATS: u32 = 1 << 16;
-const DMA_OMR_INIT: u32 = (1 << 26) | (1 << 25) | (1 << 21);
-const DMA_OMR_FLUSH_TX_FIFO: u32 = 1 << 20;
-const DMA_OMR_START_TX: u32 = 1 << 13;
-const DMA_OMR_START_RX: u32 = 1 << 1;
 
-const MACCR_CRC_STRIP: u32 = 1 << 25;
-const MACCR_AUTOMATIC_PAD_CRC_STRIP: u32 = 1 << 7;
-const MACCR_SPEED_100_MBPS: u32 = 1 << 14;
-const MACCR_FULL_DUPLEX: u32 = 1 << 11;
-const MACCR_TRANSMIT_ENABLE: u32 = 1 << 3;
-const MACCR_RECEIVE_ENABLE: u32 = 1 << 2;
 
 const DP83848_PHYSTS_LINK: u16 = 1 << 0;
 const DP83848_PHYSTS_SPEED_10_MBPS: u16 = 1 << 1;
@@ -136,8 +114,8 @@ fn mac_register_sync(register: *mut u32) {
 /// Returns false if the expected DP83848 PHY cannot be read.
 pub fn initialize() -> bool {
     unsafe {
-        write_volatile((*pac::RCC::PTR).apb2enr().as_ptr(), read_volatile((*pac::RCC::PTR).apb2enr().as_ptr()) | SYSCFGEN);
-        write_volatile((*pac::SYSCFG::PTR).pmc().as_ptr(), read_volatile((*pac::SYSCFG::PTR).pmc().as_ptr()) | MII_RMII_SEL);
+        (*pac::RCC::PTR).apb2enr().modify(|_, w| w.syscfgen().set_bit());
+        (*pac::SYSCFG::PTR).pmc().modify(|_, w| w.mii_rmii_sel().set_bit());
 
         // Enable the MAC, TX, and RX clocks through the typed RCC PAC accessor.
         (*pac::RCC::PTR).ahb1enr().modify(|_, w| {
@@ -148,11 +126,11 @@ pub fn initialize() -> bool {
         let _ = (*pac::RCC::PTR).ahb1enr().read();
 
         // Reset the Ethernet MAC/DMA block before programming descriptors.
-        write_volatile((*pac::RCC::PTR).ahb1rstr().as_ptr(), read_volatile((*pac::RCC::PTR).ahb1rstr().as_ptr()) | ETHMACRST);
-        write_volatile((*pac::RCC::PTR).ahb1rstr().as_ptr(), read_volatile((*pac::RCC::PTR).ahb1rstr().as_ptr()) & !ETHMACRST);
+        (*pac::RCC::PTR).ahb1rstr().modify(|_, w| w.ethmacrst().set_bit());
+        (*pac::RCC::PTR).ahb1rstr().modify(|_, w| w.ethmacrst().clear_bit());
         let _ = read_volatile((*pac::RCC::PTR).ahb1rstr().as_ptr());
 
-        write_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr(), MII_CR_DIV_102);
+        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| w.cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168));
         let phy = probe_dp83848();
         if !phy.found || phy.mdio_timeout {
             return false;
@@ -188,14 +166,20 @@ pub fn initialize() -> bool {
         write_volatile(addr_of_mut!((*tx_desc).words[3]), tx_desc as u32);
 
         // DMA software reset, then conservative fixed-burst configuration.
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmabmr().as_ptr(), 1);
+        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| w.sr().set_bit());
         let mut timeout = MDIO_TIMEOUT;
-        while read_volatile((*pac::ETHERNET_DMA::PTR).dmabmr().as_ptr()) & 1 != 0 {
+        while (*pac::ETHERNET_DMA::PTR).dmabmr().read().sr().bit_is_set() {
             if timeout == 0 { return false; }
             timeout -= 1;
         }
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmabmr().as_ptr(), DMA_BMR_FIXED_BURST | DMA_BMR_ADDRESS_ALIGNED_BEATS | DMA_BMR_TX_BURST_32 | DMA_BMR_RX_BURST_32 | DMA_BMR_SEPARATE_PBL);
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmaomr().as_ptr(), DMA_OMR_INIT);
+        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| {
+            w.fb().set_bit();
+            unsafe { w.pbl().bits(32); }
+            unsafe { w.rdp().bits(32); }
+            w.usp().set_bit();
+            w.aab().set_bit()
+        });
+        (*pac::ETHERNET_DMA::PTR).dmaomr().write(|w| w.dtcefd().set_bit().rsf().set_bit().tsf().set_bit());
         write_volatile((*pac::ETHERNET_DMA::PTR).dmardlar().as_ptr(), rx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr(), tx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmaier().as_ptr(), 0);
@@ -209,27 +193,30 @@ pub fn initialize() -> bool {
         // If there is no negotiated link, use the conservative 10 Mb/s half-
         // duplex mode until a later link-state update is implemented.
         let negotiated = phy.physts & (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK) == (DP83848_PHYSTS_AUTONEG_COMPLETE | DP83848_PHYSTS_LINK);
-        let mut maccr = MACCR_CRC_STRIP | MACCR_AUTOMATIC_PAD_CRC_STRIP; // strip CRC, automatic pad/CRC stripping
-        if negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0 { maccr |= MACCR_SPEED_100_MBPS; } // 100 Mb/s
-        if negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0 { maccr |= MACCR_FULL_DUPLEX; } // full duplex
+
         // Match the STM32F4 HAL register synchronization sequence. The MAC
         // configuration crosses into the TX_CLK/RX_CLK clock domain; ST waits
         // at least four clock cycles after each MAC register write.
-        write_volatile((*pac::ETHERNET_MAC::PTR).maccr().as_ptr(), maccr);
+        (*pac::ETHERNET_MAC::PTR).maccr().write(|w| {
+            w.cstf().set_bit()
+                .apcs().set_bit()
+                .fes().bit(negotiated && phy.physts & DP83848_PHYSTS_SPEED_10_MBPS == 0)
+                .dm().bit(negotiated && phy.physts & DP83848_PHYSTS_FULL_DUPLEX != 0)
+        });
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
         write_volatile((*pac::ETHERNET_MAC::PTR).macffr().as_ptr(), 0); // normal destination filtering
         mac_register_sync((*pac::ETHERNET_MAC::PTR).macffr().as_ptr());
 
         // Enable TE and RE in separate synchronized writes, as in HAL_ETH_Start.
-        write_volatile((*pac::ETHERNET_MAC::PTR).maccr().as_ptr(), maccr | MACCR_TRANSMIT_ENABLE);
+        (*pac::ETHERNET_MAC::PTR).maccr().modify(|_, w| w.te().set_bit());
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
-        write_volatile((*pac::ETHERNET_MAC::PTR).maccr().as_ptr(), maccr | MACCR_TRANSMIT_ENABLE | MACCR_RECEIVE_ENABLE);
+        (*pac::ETHERNET_MAC::PTR).maccr().modify(|_, w| w.re().set_bit());
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
 
         // Flush the transmit FIFO before enabling DMA transmission.
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmaomr().as_ptr(), read_volatile((*pac::ETHERNET_DMA::PTR).dmaomr().as_ptr()) | DMA_OMR_FLUSH_TX_FIFO);
+        (*pac::ETHERNET_DMA::PTR).dmaomr().modify(|_, w| w.ftf().set_bit());
         let mut flush_timeout = MDIO_TIMEOUT;
-        while read_volatile((*pac::ETHERNET_DMA::PTR).dmaomr().as_ptr()) & DMA_OMR_FLUSH_TX_FIFO != 0 {
+        while (*pac::ETHERNET_DMA::PTR).dmaomr().read().ftf().bit_is_set() {
             if flush_timeout == 0 {
                 return false;
             }
@@ -237,7 +224,7 @@ pub fn initialize() -> bool {
         }
 
         // Start DMA only after the MAC is ready, then demand descriptor fetch.
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmaomr().as_ptr(), read_volatile((*pac::ETHERNET_DMA::PTR).dmaomr().as_ptr()) | DMA_OMR_START_RX | DMA_OMR_START_TX);
+        (*pac::ETHERNET_DMA::PTR).dmaomr().modify(|_, w| w.sr().set_bit().st().set_bit());
         write_volatile((*pac::ETHERNET_DMA::PTR).dmarpdr().as_ptr(), 0);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatpdr().as_ptr(), 0);
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -255,7 +242,14 @@ pub fn enable_dma_interrupts() {
     unsafe {
         // Clear stale write-one-to-clear events before enabling sources.
         write_volatile((*pac::ETHERNET_DMA::PTR).dmasr().as_ptr(), DMA_IRQ_CLEAR_MASK);
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmaier().as_ptr(), DMA_IRQ_ENABLE_MASK);
+        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| {
+            w.tie().set_bit()
+                .tbuie().set_bit()
+                .rie().set_bit()
+                .fbeie().set_bit()
+                .aie().set_bit()
+                .nie().set_bit()
+        });
     }
 }
 
@@ -307,11 +301,11 @@ pub fn is_initialized() -> bool {
 /// Result of a bounded MDIO scan for the board's DP83848 PHY.
 pub fn probe_dp83848() -> PhyStatus {
     unsafe {
-        write_volatile((*pac::RCC::PTR).apb2enr().as_ptr(), read_volatile((*pac::RCC::PTR).apb2enr().as_ptr()) | SYSCFGEN);
+        (*pac::RCC::PTR).apb2enr().modify(|_, w| w.syscfgen().set_bit());
         (*pac::RCC::PTR).ahb1enr().modify(|_, w| w.ethmacen().set_bit());
         let _ = (*pac::RCC::PTR).ahb1enr().read();
         let initial = read_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr());
-        write_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr(), (initial & !(MII_CR_DIV_MASK | MII_BUSY)) | MII_CR_DIV_102);
+        (*pac::ETHERNET_MAC::PTR).macmiiar().modify(|_, w| w.cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168).mb().clear_bit());
 
         for address in 0u8..32 {
             let id1 = match mdio_read(address, MII_REG_PHY_ID1) {
@@ -377,14 +371,16 @@ fn wait_for_phy_negotiation(mut phy: PhyStatus) -> PhyStatus {
 fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
     unsafe {
         let mut remaining = MDIO_TIMEOUT;
-        while read_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr()) & MII_BUSY != 0 {
+        while (*pac::ETHERNET_MAC::PTR).macmiiar().read().mb().bit_is_set() {
             if remaining == 0 { return None; }
             remaining -= 1;
         }
-        let operation = ((phy_address as u32) << 11)
-            | ((register as u32) << 6)
-            | MII_CR_DIV_102 | MII_BUSY;
-        write_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr(), operation);
+        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| {
+            w.pa().bits(phy_address)
+                .mr().bits(register)
+                .cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168)
+                .mb().set_bit()
+        });
         remaining = MDIO_TIMEOUT;
         while read_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr()) & MII_BUSY != 0 {
             if remaining == 0 { return None; }
