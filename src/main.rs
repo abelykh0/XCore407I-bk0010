@@ -418,6 +418,7 @@ fn main() -> ! {
                         // upload allocation on the alternate stack, not in the small
                         // main-stack EthernetNetwork value.
                         let mut http_upload_state = xcore407i_blinker::ethernet::HttpUploadState::new();
+                        let mut http_download_state = xcore407i_blinker::ethernet::HttpDownloadState::new();
 
                         // NAND initialization and the initial LittleFS mount happen
                         // before the filesystem service closure is entered. Keep the
@@ -437,7 +438,7 @@ fn main() -> ! {
                                 // The HTTP directory listing reads LittleFS synchronously.
                                 // Keep USB/UVC serviced during NAND page reads.
                                 xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
-                                ethernet_network.poll(TICKS.load(Ordering::Relaxed), fs, &mut http_upload_state);
+                                ethernet_network.poll(TICKS.load(Ordering::Relaxed), fs, &mut http_upload_state, &mut http_download_state);
                                 xcore407i_blinker::nand_fs::set_io_service_hook(None);
                                 // Keep USB/UVC and the video producer alive inside synchronous
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
