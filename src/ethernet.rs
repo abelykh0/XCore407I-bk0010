@@ -1017,7 +1017,6 @@ impl<'a> EthernetNetwork<'a> {
 
         HTTP_POLL_DIAG_STAGE.store(4, Ordering::Release);
         let mut request_kind = 0u8; // 0=page, 1=directory, 2=upload, 3=bad request
-        let mut request_ready = false;
         let mut listing_offset = 0usize;
         let mut upload_name = [0u8; 64];
         let mut upload_name_len = 0usize;
@@ -1053,14 +1052,12 @@ impl<'a> EthernetNetwork<'a> {
                         .saturating_add((byte - b'0') as usize)
                         .min(1_000_000);
                 }
-                request_ready = true;
                 return (header_len, true);
             }
 
             if let Some(rest) = line.strip_prefix(b"POST /api/upload?name=") {
                 let Some(http_pos) = rest.windows(9).position(|window| window == b" HTTP/1.1") else {
                     request_kind = 3;
-                    request_ready = true;
                     return (header_len, true);
                 };
                 let query = &rest[..http_pos];
@@ -1089,7 +1086,7 @@ impl<'a> EthernetNetwork<'a> {
                 };
                 if !valid_name || offset.is_none() || total.is_none()
                     || content_length > HTTP_UPLOAD_CHUNK_SIZE
-                    || content_length > upload_body.len()
+                    || content_length > HTTP_BODY_BUFFER_SIZE
                 {
                     request_kind = 3;
                     request_ready = true;
