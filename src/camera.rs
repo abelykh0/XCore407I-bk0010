@@ -248,8 +248,8 @@ union CanvasTailStorage {
 
 // DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of one logical
 // 128 KiB BK canvas. In CDC mode, the main segment is reused for receiver,
-// Ethernet DMA and HTTP storage plus the alternate stack; the CCM tail holds
-// CPU-only smoltcp socket storage.
+// Ethernet DMA and HTTP RX/body storage plus the alternate stack; the CCM
+// tail holds CPU-only smoltcp socket metadata and the TCP transmit buffer.
 #[unsafe(link_section = ".ccmram.canvas")]
 static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
     CanvasTailStorage { canvas: AlignedCanvas([0; CANVAS_TAIL_BYTES]) };
@@ -257,10 +257,9 @@ static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
 pub(crate) const CDC_RECEIVER_STORAGE_BYTES: usize = 4096;
 pub(crate) const CDC_ETHERNET_DMA_STORAGE_BYTES: usize = 2 * 16 + 2 * 1536 + 16 + 1536;
 pub(crate) const CDC_HTTP_RX_BYTES: usize = 4096;
-pub(crate) const CDC_HTTP_TX_BYTES: usize = 20_480;
-pub(crate) const CDC_HTTP_BODY_BYTES: usize = 4048;
+pub(crate) const CDC_HTTP_BODY_BYTES: usize = 24_528;
 pub(crate) const CDC_HTTP_STORAGE_BYTES: usize =
-    CDC_HTTP_RX_BYTES + CDC_HTTP_TX_BYTES + CDC_HTTP_BODY_BYTES;
+    CDC_HTTP_RX_BYTES + CDC_HTTP_BODY_BYTES;
 const CDC_ALT_STACK_BYTES: usize = CANVAS_TAIL_BYTES;
 const CDC_ALT_STACK_BOTTOM: usize = CANVAS_MAIN_BYTES - CDC_ALT_STACK_BYTES;
 
