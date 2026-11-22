@@ -15,8 +15,6 @@ use panic_halt as _;
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, show_file_browser_line, Nv12DemoImage};
-#[cfg(feature = "cpu-cycle-diag")]
-use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 use xcore407i_blinker::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
@@ -25,8 +23,6 @@ use board::{
     configure_board_pins, configure_exception_priorities, system_clock_168mhz, TICKS,
 };
 use board::enable_cycle_counter;
-#[cfg(feature = "cpu-cycle-diag")]
-use board::{read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
 use file_browser::{
     draw_file_browser, load_tetris_from_path, BROWSER_FILES,
     FILE_BROWSER_ACTION, FILE_BROWSER_ACTIVE, FILE_BROWSER_OPEN, FILE_BROWSER_UP,
@@ -44,6 +40,11 @@ use usb_host::{
     USB_FS_RETRY_AT, USB_FS_RETRY_INTERVAL_MS, USB_HOST_TASK_PENDING, USB_FS_STATUS,
     USB_FS_LAST_ACTIVITY_TICK,
 };
+
+#[cfg(feature = "cpu-cycle-diag")]
+use xcore407i_blinker::camera::show_pdp_cycles_per_second;
+#[cfg(feature = "cpu-cycle-diag")]
+use board::{read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
