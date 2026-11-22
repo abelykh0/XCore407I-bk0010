@@ -12,31 +12,94 @@ use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxT
 use smoltcp::time::Instant;
 
 
-// Build raw MAC/DMA register pointers from PAC peripheral pointers. Pointer
-// arithmetic stays in pointer space; converting PAC pointers to integers is
-// not const-evaluable.
-const fn register(base: *const u8, offset: usize) -> *mut u32 {
-    base.wrapping_add(offset) as *mut u32
+// Obtain register addresses from the STM32F4 PAC register accessors.
+// Volatile access is retained because this driver uses the same low-level
+// read/modify/write sequences as the reference HAL implementation.
+#[inline]
+fn rcc_ahb1rstr() -> *mut u32 {
+    unsafe { (*pac::RCC::PTR).ahb1rstr().as_ptr() }
 }
 
-const RCC_AHB1RSTR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x10);
-const RCC_APB2ENR: *mut u32 = register(pac::RCC::PTR as *const u8, 0x44);
-const SYSCFG_PMC: *mut u32 = register(pac::SYSCFG::PTR as *const u8, 0x04);
+#[inline]
+fn rcc_apb2enr() -> *mut u32 {
+    unsafe { (*pac::RCC::PTR).apb2enr().as_ptr() }
+}
 
-const ETH_MACCR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x00);
-const ETH_MACFFR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x04);
-const ETH_MACMIIAR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x10);
-const ETH_MACMIIDR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x14);
-const ETH_MACA0HR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x40);
-const ETH_MACA0LR: *mut u32 = register(pac::ETHERNET_MAC::PTR as *const u8, 0x44);
-const ETH_DMABMR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x00);
-const ETH_DMATPDR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x04);
-const ETH_DMARPDR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x08);
-const ETH_DMARDLAR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x0c);
-const ETH_DMATDLAR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x10);
-const ETH_DMASR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x14);
-const ETH_DMAOMR: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x18);
-const ETH_DMAIER: *mut u32 = register(pac::ETHERNET_DMA::PTR as *const u8, 0x1c);
+#[inline]
+fn syscfg_pmc() -> *mut u32 {
+    unsafe { (*pac::SYSCFG::PTR).pmc().as_ptr() }
+}
+
+#[inline]
+fn eth_maccr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_MAC::PTR).maccr().as_ptr() }
+}
+
+#[inline]
+fn eth_macffr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_MAC::PTR).macffr().as_ptr() }
+}
+
+#[inline]
+fn eth_macmiiar() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr() }
+}
+
+#[inline]
+fn eth_macmiidr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_MAC::PTR).macmiidr().as_ptr() }
+}
+
+#[inline]
+fn eth_maca0hr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_MAC::PTR).maca0hr().as_ptr() }
+}
+
+#[inline]
+fn eth_maca0lr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_MAC::PTR).maca0lr().as_ptr() }
+}
+
+#[inline]
+fn eth_dmabmr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmabmr().as_ptr() }
+}
+
+#[inline]
+fn eth_dmatpdr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmatpdr().as_ptr() }
+}
+
+#[inline]
+fn eth_dmarpdr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmarpdr().as_ptr() }
+}
+
+#[inline]
+fn eth_dmardlar() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmardlar().as_ptr() }
+}
+
+#[inline]
+fn eth_dmatdlar() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr() }
+}
+
+#[inline]
+fn eth_dmasr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmasr().as_ptr() }
+}
+
+#[inline]
+fn eth_dmaomr() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmaomr().as_ptr() }
+}
+
+#[inline]
+fn eth_dmaier() -> *mut u32 {
+    unsafe { (*pac::ETHERNET_DMA::PTR).dmaier().as_ptr() }
+}
+
 const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
 const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
 
@@ -161,8 +224,8 @@ fn mac_register_sync(register: *mut u32) {
 /// Returns false if the expected DP83848 PHY cannot be read.
 pub fn initialize() -> bool {
     unsafe {
-        write_volatile(RCC_APB2ENR, read_volatile(RCC_APB2ENR) | SYSCFGEN);
-        write_volatile(SYSCFG_PMC, read_volatile(SYSCFG_PMC) | MII_RMII_SEL);
+        write_volatile(rcc_apb2enr(), read_volatile(rcc_apb2enr()) | SYSCFGEN);
+        write_volatile(syscfg_pmc(), read_volatile(syscfg_pmc()) | MII_RMII_SEL);
 
         // Enable the MAC, TX, and RX clocks through the typed RCC PAC accessor.
         (*pac::RCC::PTR).ahb1enr().modify(|_, w| {
@@ -173,11 +236,11 @@ pub fn initialize() -> bool {
         let _ = (*pac::RCC::PTR).ahb1enr().read();
 
         // Reset the Ethernet MAC/DMA block before programming descriptors.
-        write_volatile(RCC_AHB1RSTR, read_volatile(RCC_AHB1RSTR) | ETHMACRST);
-        write_volatile(RCC_AHB1RSTR, read_volatile(RCC_AHB1RSTR) & !ETHMACRST);
-        let _ = read_volatile(RCC_AHB1RSTR);
+        write_volatile(rcc_ahb1rstr(), read_volatile(rcc_ahb1rstr()) | ETHMACRST);
+        write_volatile(rcc_ahb1rstr(), read_volatile(rcc_ahb1rstr()) & !ETHMACRST);
+        let _ = read_volatile(rcc_ahb1rstr());
 
-        write_volatile(ETH_MACMIIAR, MII_CR_DIV_102);
+        write_volatile(eth_macmiiar(), MII_CR_DIV_102);
         let phy = probe_dp83848();
         if !phy.found || phy.mdio_timeout {
             return false;
@@ -213,22 +276,22 @@ pub fn initialize() -> bool {
         write_volatile(addr_of_mut!((*tx_desc).words[3]), tx_desc as u32);
 
         // DMA software reset, then conservative fixed-burst configuration.
-        write_volatile(ETH_DMABMR, 1);
+        write_volatile(eth_dmabmr(), 1);
         let mut timeout = MDIO_TIMEOUT;
-        while read_volatile(ETH_DMABMR) & 1 != 0 {
+        while read_volatile(eth_dmabmr()) & 1 != 0 {
             if timeout == 0 { return false; }
             timeout -= 1;
         }
-        write_volatile(ETH_DMABMR, DMA_BMR_FIXED_BURST | DMA_BMR_ADDRESS_ALIGNED_BEATS | DMA_BMR_TX_BURST_32 | DMA_BMR_RX_BURST_32 | DMA_BMR_SEPARATE_PBL);
-        write_volatile(ETH_DMAOMR, DMA_OMR_INIT);
-        write_volatile(ETH_DMARDLAR, rx_desc as u32);
-        write_volatile(ETH_DMATDLAR, tx_desc as u32);
-        write_volatile(ETH_DMAIER, 0);
-        write_volatile(ETH_DMASR, 0x1e00_01ff);
+        write_volatile(eth_dmabmr(), DMA_BMR_FIXED_BURST | DMA_BMR_ADDRESS_ALIGNED_BEATS | DMA_BMR_TX_BURST_32 | DMA_BMR_RX_BURST_32 | DMA_BMR_SEPARATE_PBL);
+        write_volatile(eth_dmaomr(), DMA_OMR_INIT);
+        write_volatile(eth_dmardlar(), rx_desc as u32);
+        write_volatile(eth_dmatdlar(), tx_desc as u32);
+        write_volatile(eth_dmaier(), 0);
+        write_volatile(eth_dmasr(), 0x1e00_01ff);
 
         // Locally administered unicast address 02:12:09:40:70:01.
-        write_volatile(ETH_MACA0LR, 0x4009_1202);
-        write_volatile(ETH_MACA0HR, 0x0000_0170);
+        write_volatile(eth_maca0lr(), 0x4009_1202);
+        write_volatile(eth_maca0hr(), 0x0000_0170);
 
         // Match the PHY only after link and autonegotiation are both valid.
         // If there is no negotiated link, use the conservative 10 Mb/s half-
@@ -240,21 +303,21 @@ pub fn initialize() -> bool {
         // Match the STM32F4 HAL register synchronization sequence. The MAC
         // configuration crosses into the TX_CLK/RX_CLK clock domain; ST waits
         // at least four clock cycles after each MAC register write.
-        write_volatile(ETH_MACCR, maccr);
-        mac_register_sync(ETH_MACCR);
-        write_volatile(ETH_MACFFR, 0); // normal destination filtering
-        mac_register_sync(ETH_MACFFR);
+        write_volatile(eth_maccr(), maccr);
+        mac_register_sync(eth_maccr());
+        write_volatile(eth_macffr(), 0); // normal destination filtering
+        mac_register_sync(eth_macffr());
 
         // Enable TE and RE in separate synchronized writes, as in HAL_ETH_Start.
-        write_volatile(ETH_MACCR, maccr | MACCR_TRANSMIT_ENABLE);
-        mac_register_sync(ETH_MACCR);
-        write_volatile(ETH_MACCR, maccr | MACCR_TRANSMIT_ENABLE | MACCR_RECEIVE_ENABLE);
-        mac_register_sync(ETH_MACCR);
+        write_volatile(eth_maccr(), maccr | MACCR_TRANSMIT_ENABLE);
+        mac_register_sync(eth_maccr());
+        write_volatile(eth_maccr(), maccr | MACCR_TRANSMIT_ENABLE | MACCR_RECEIVE_ENABLE);
+        mac_register_sync(eth_maccr());
 
         // Flush the transmit FIFO before enabling DMA transmission.
-        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | DMA_OMR_FLUSH_TX_FIFO);
+        write_volatile(eth_dmaomr(), read_volatile(eth_dmaomr()) | DMA_OMR_FLUSH_TX_FIFO);
         let mut flush_timeout = MDIO_TIMEOUT;
-        while read_volatile(ETH_DMAOMR) & DMA_OMR_FLUSH_TX_FIFO != 0 {
+        while read_volatile(eth_dmaomr()) & DMA_OMR_FLUSH_TX_FIFO != 0 {
             if flush_timeout == 0 {
                 return false;
             }
@@ -262,9 +325,9 @@ pub fn initialize() -> bool {
         }
 
         // Start DMA only after the MAC is ready, then demand descriptor fetch.
-        write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | DMA_OMR_START_RX | DMA_OMR_START_TX);
-        write_volatile(ETH_DMARPDR, 0);
-        write_volatile(ETH_DMATPDR, 0);
+        write_volatile(eth_dmaomr(), read_volatile(eth_dmaomr()) | DMA_OMR_START_RX | DMA_OMR_START_TX);
+        write_volatile(eth_dmarpdr(), 0);
+        write_volatile(eth_dmatpdr(), 0);
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         cortex_m::asm::dsb();
 
@@ -279,8 +342,8 @@ pub fn initialize() -> bool {
 pub fn enable_dma_interrupts() {
     unsafe {
         // Clear stale write-one-to-clear events before enabling sources.
-        write_volatile(ETH_DMASR, DMA_IRQ_CLEAR_MASK);
-        write_volatile(ETH_DMAIER, DMA_IRQ_ENABLE_MASK);
+        write_volatile(eth_dmasr(), DMA_IRQ_CLEAR_MASK);
+        write_volatile(eth_dmaier(), DMA_IRQ_ENABLE_MASK);
     }
 }
 
@@ -288,10 +351,10 @@ pub fn enable_dma_interrupts() {
 /// Packet handling and all smoltcp/DHCP work remain in foreground context.
 pub fn on_dma_interrupt() {
     unsafe {
-        let status = read_volatile(ETH_DMASR);
+        let status = read_volatile(eth_dmasr());
         let pending = status & DMA_IRQ_CLEAR_MASK;
         if pending != 0 {
-            write_volatile(ETH_DMASR, pending);
+            write_volatile(eth_dmasr(), pending);
         }
     }
 }
@@ -332,11 +395,11 @@ pub fn is_initialized() -> bool {
 /// Result of a bounded MDIO scan for the board's DP83848 PHY.
 pub fn probe_dp83848() -> PhyStatus {
     unsafe {
-        write_volatile(RCC_APB2ENR, read_volatile(RCC_APB2ENR) | SYSCFGEN);
+        write_volatile(rcc_apb2enr(), read_volatile(rcc_apb2enr()) | SYSCFGEN);
         (*pac::RCC::PTR).ahb1enr().modify(|_, w| w.ethmacen().set_bit());
         let _ = (*pac::RCC::PTR).ahb1enr().read();
-        let initial = read_volatile(ETH_MACMIIAR);
-        write_volatile(ETH_MACMIIAR, (initial & !(MII_CR_DIV_MASK | MII_BUSY)) | MII_CR_DIV_102);
+        let initial = read_volatile(eth_macmiiar());
+        write_volatile(eth_macmiiar(), (initial & !(MII_CR_DIV_MASK | MII_BUSY)) | MII_CR_DIV_102);
 
         for address in 0u8..32 {
             let id1 = match mdio_read(address, MII_REG_PHY_ID1) {
@@ -402,20 +465,20 @@ fn wait_for_phy_negotiation(mut phy: PhyStatus) -> PhyStatus {
 fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
     unsafe {
         let mut remaining = MDIO_TIMEOUT;
-        while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
+        while read_volatile(eth_macmiiar()) & MII_BUSY != 0 {
             if remaining == 0 { return None; }
             remaining -= 1;
         }
         let operation = ((phy_address as u32) << 11)
             | ((register as u32) << 6)
             | MII_CR_DIV_102 | MII_BUSY;
-        write_volatile(ETH_MACMIIAR, operation);
+        write_volatile(eth_macmiiar(), operation);
         remaining = MDIO_TIMEOUT;
-        while read_volatile(ETH_MACMIIAR) & MII_BUSY != 0 {
+        while read_volatile(eth_macmiiar()) & MII_BUSY != 0 {
             if remaining == 0 { return None; }
             remaining -= 1;
         }
-        Some((read_volatile(ETH_MACMIIDR) & 0xffff) as u16)
+        Some((read_volatile(eth_macmiidr()) & 0xffff) as u16)
     }
 }
 
@@ -439,7 +502,7 @@ impl EthernetDevice {
             {
                 write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
                 self.rx_index = (self.rx_index + 1) % RX_COUNT;
-                write_volatile(ETH_DMARPDR, 0);
+                write_volatile(eth_dmarpdr(), 0);
                 return None;
             }
             Some((self.rx_index, length))
@@ -503,7 +566,7 @@ impl RxToken for EthernetRxToken<'_> {
             core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
             write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
             cortex_m::asm::dsb();
-            write_volatile(ETH_DMARPDR, 0);
+            write_volatile(eth_dmarpdr(), 0);
             result
         }
     }
@@ -531,7 +594,7 @@ impl TxToken for EthernetTxToken<'_> {
             );
             // The STM32F4 HAL writes the next free TX descriptor address
             // to DMATPDR when issuing transmit poll demand.
-            write_volatile(ETH_DMATPDR, addr_of_mut!(TX_DESCRIPTOR) as u32);
+            write_volatile(eth_dmatpdr(), addr_of_mut!(TX_DESCRIPTOR) as u32);
             result
         }
     }
