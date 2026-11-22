@@ -148,9 +148,10 @@ pub fn initialize() -> bool {
 
         let tx_desc = addr_of_mut!(TX_DESCRIPTOR);
         let tx_buf = addr_of_mut!(TX_BUFFER);
-        // TCH belongs to TDES1 (control), not TDES0 (status).
-        write_volatile(addr_of_mut!((*tx_desc).words[0]), 0);
-        write_volatile(addr_of_mut!((*tx_desc).words[1]), TX_DESC_TCH);
+        // In the STM32F4 basic descriptor format, TCH is TDES0 bit 20.
+        // TDES1 holds only the buffer byte counts.
+        write_volatile(addr_of_mut!((*tx_desc).words[0]), TX_DESC_TCH);
+        write_volatile(addr_of_mut!((*tx_desc).words[1]), 0);
         write_volatile(addr_of_mut!((*tx_desc).words[2]), (*tx_buf).0.as_mut_ptr() as u32);
         write_volatile(addr_of_mut!((*tx_desc).words[3]), tx_desc as u32);
 
@@ -447,14 +448,14 @@ impl TxToken for EthernetTxToken<'_> {
             let buffer = addr_of_mut!(TX_BUFFER);
             let bytes = core::slice::from_raw_parts_mut((*buffer).0.as_mut_ptr(), length);
             let result = f(bytes);
-            // TDES1 holds buffer length and the chained-descriptor control bit.
-            write_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1]), TX_DESC_TCH | length as u32);
+            // TDES1 holds the buffer byte count; TCH is in TDES0 on STM32F4.
+            write_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1]), length as u32);
             core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
             cortex_m::asm::dsb();
-            // TDES0 contains only status/control flags for this frame.
+            // Give the chained descriptor to DMA only after its buffer is ready.
             write_volatile(
                 addr_of_mut!(TX_DESCRIPTOR.words[0]),
-                DESC_OWN | TX_DESC_FS | TX_DESC_LS | TX_DESC_IC,
+                DESC_OWN | TX_DESC_TCH | TX_DESC_FS | TX_DESC_LS | TX_DESC_IC,
             );
             write_volatile(ETH_DMATPDR, 0);
             TX_FRAMES.fetch_add(1, Ordering::Relaxed);
