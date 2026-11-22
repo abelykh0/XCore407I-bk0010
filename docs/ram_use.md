@@ -4,22 +4,22 @@ This is a source-level inventory for the ethernet branch. Values are allocation 
 
 STM32F407 memory: 128 KiB main SRAM (DMA-accessible) and 64 KiB CCM SRAM (not Ethernet-DMA-accessible).
 
-## Shared large canvas regions
+## Shared backing regions and mode-dependent reuse
 
 | Allocation | Region | Size | Emulator mode | CDC mode |
 |---|---|---:|---|---|
-| DEMO_CANVAS | Main SRAM, .bss | 84,224 B | First canvas segment | Reused as CDC receiver backing region; currently 4,096 B is claimed, remainder unused by receiver |
-| DEMO_CANVAS_TAIL | CCM, .ccmram.canvas | 46,848 B | Second canvas segment | Reused as alternate stack for synchronous filesystem operations |
-| Combined | Main SRAM + CCM | 131,072 B | Full 512 × 256 canvas | Same physical allocation reused, not allocated again |
+| DEMO_CANVAS | Main SRAM, .bss | 84,224 B reserved | Shared backing storage; not all bytes are active framebuffer data | Reused as CDC receiver backing region; currently 4,096 B is claimed, remainder unused by receiver |
+| DEMO_CANVAS_TAIL | CCM, .ccmram.canvas | 46,848 B reserved | Canvas-tail storage, partly unused or repurposed depending on BK display layout | Reused as alternate stack for synchronous filesystem operations |
+| Combined | Main SRAM + CCM | 131,072 B reserved | Backing-store capacity; not necessarily all live video pixels | Same physical allocation reused, not allocated again |
 
 Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES = 46,848; CANVAS_MAIN_BYTES = 84,224.
 
-## Mode 1 — emulator + UVC + audio + keyboard host
+## Emulator / audio (main mode)
 
 | Block | Region | Size | Purpose |
 |---|---|---:|---|
-| DEMO_CANVAS | Main SRAM | 84,224 B | Emulator video canvas, first segment |
-| DEMO_CANVAS_TAIL | CCM | 46,848 B | Emulator video canvas, second segment |
+| DEMO_CANVAS | Main SRAM | 84,224 B reserved | Shared backing region; only the active BK display / extended-RAM portions are used; the full allocation is not a continuously live framebuffer |
+| DEMO_CANVAS_TAIL | CCM | 46,848 B reserved | Canvas-tail storage is not necessarily active in this mode; portions are unused or repurposed according to the BK display layout |
 | VIDEO_BUFFERS[2] | Main SRAM, .bss | 4,608 B | Two UVC transport buffers, each 768 × 3 = 2,304 B |
 | ROW_BUFFERS | Main SRAM, .bss | 1,024 B | Two 512-byte row-conversion scratch buffers |
 | RamBuffer | CCM, .ccmram | 16,384 B | BK-0010 emulated RAM |
@@ -27,7 +27,7 @@ Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES =
 | USB host/device state | Various | Not measured | TinyUSB state, descriptors, endpoint buffers, host state and class state |
 | Emulator/audio/keyboard state | Various | Not measured | Other C and Rust globals, queues and state |
 
-The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment.
+The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment. The two canvas figures above are linker-reserved capacities, not proof that every byte is actively used by the emulator. In particular, the backing store is shared with the BK extended-memory layout; the active framebuffer extent depends on the selected BK display mode. Do not count the entire 131,072-byte reservation as live emulator video data.
 
 ## Mode 2 — CDC + UVC static page + Ethernet HTTP
 
