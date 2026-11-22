@@ -457,7 +457,9 @@ impl TxToken for EthernetTxToken<'_> {
                 addr_of_mut!(TX_DESCRIPTOR.words[0]),
                 DESC_OWN | TX_DESC_TCH | TX_DESC_FS | TX_DESC_LS | TX_DESC_IC,
             );
-            write_volatile(ETH_DMATPDR, 0);
+            // The STM32F4 HAL writes the next free TX descriptor address
+            // to DMATPDR when issuing transmit poll demand.
+            write_volatile(ETH_DMATPDR, addr_of_mut!(TX_DESCRIPTOR) as u32);
             TX_FRAMES.fetch_add(1, Ordering::Relaxed);
             result
         }
