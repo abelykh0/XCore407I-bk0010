@@ -29,31 +29,29 @@ Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES =
 
 The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment. The two canvas figures above are linker-reserved capacities, not proof that every byte is actively used by the emulator. In particular, the backing store is shared with the BK extended-memory layout; the active framebuffer extent depends on the selected BK display mode. Do not count the entire 131,072-byte reservation as live emulator video data.
 
-## Mode 2 — CDC + UVC static page + Ethernet HTTP
+## CDC mode — UVC static page + CDC + Ethernet HTTP
 
 CDC mode does not run the emulator. It reuses the same canvas regions above. The receiver allocation is inside DEMO_CANVAS, not an additional allocation. The alternate stack occupies DEMO_CANVAS_TAIL.
 
 | Block | Region | Size | Purpose |
 |---|---|---:|---|
-| DEMO_CANVAS (reused) | Main SRAM | 84,224 B reserved | CDC receiver claims 4,096 B; remaining area is available for other mode-specific CPU-only buffers |
-| DEMO_CANVAS_TAIL (reused) | CCM | 46,848 B reserved | Alternate filesystem stack |
+| CDC receiver | DEMO_CANVAS, offset 0 | 4,096 B | Heapless ZMODEM receive storage |
+| Ethernet DMA ring | DEMO_CANVAS, offset 4,096 | 4,656 B | Two RX descriptors + buffers and one TX descriptor + buffer; DMA-accessible main SRAM |
+| CDC alternate stack | DEMO_CANVAS, top 46,848 B | 46,848 B | Stack grows down from the end of the main canvas block |
+| Ethernet socket storage | DEMO_CANVAS_TAIL, CCM | Build-dependent | Two smoltcp SocketStorage entries |
+| HTTP TCP RX | DEMO_CANVAS_TAIL, CCM | 768 B | smoltcp TCP receive buffer |
+| HTTP TCP TX | DEMO_CANVAS_TAIL, CCM | 2,304 B | smoltcp TCP transmit buffer |
+| HTTP body | DEMO_CANVAS_TAIL, CCM | 768 B | Upload chunk and generated response body scratch |
 | VIDEO_BUFFERS[2] | Main SRAM, .bss | 4,608 B | UVC transport buffers for low-rate PC CONNECT static page |
 | ROW_BUFFERS | Main SRAM, .bss | 1,024 B | Camera row-conversion scratch |
-| HTTP TCP RX | Main SRAM, .bss | 768 B | smoltcp TCP receive buffer |
-| HTTP TCP TX | Main SRAM, .bss | 2,304 B | smoltcp TCP transmit buffer |
-| HTTP body | Main SRAM, .bss | 768 B | Upload chunk and generated response body scratch |
-| Ethernet RX packet buffers | Main SRAM, .bss | 3,072 B | Two DMA buffers × 1,536 B |
-| Ethernet TX packet buffer | Main SRAM, .bss | 1,536 B | One DMA buffer |
-| Ethernet descriptors | Main SRAM, .bss | 48 B | Two RX + one TX descriptors, 16 B each |
-| Ethernet socket storage | Main SRAM, .bss | Build-dependent | Two smoltcp SocketStorage entries |
 | CDC receiver | Inside DEMO_CANVAS | 4,096 B claimed | Heapless ZMODEM receive storage; do not count twice |
-| Alternate filesystem stack | Inside DEMO_CANVAS_TAIL | 46,848 B reserved | Stack; do not count twice |
+| Alternate filesystem stack | Inside DEMO_CANVAS | 46,848 B reserved | Stack; do not count twice |
 | NAND_PAGE_SCRATCH | Main SRAM, .bss | 2,112 B | 2,048-byte page + 64-byte spare |
 | LittleFS mount allocation | Static storage | Build-dependent | MaybeUninit<LittleFsAllocation>; exact size requires ELF/map or size_of |
 | Dhara C page buffer | Main SRAM, .bss | 2,048 B | One NAND page in csrc/dhara_adapter.c |
 | ZMODEM send buffer | State/stack | 1,024 B | Embedded in CDC ZMODEM state; receiver payload is the separate 4 KiB canvas allocation |
 
-Current HTTP buffers total 3,840 bytes (768 + 2,304 + 768) and are independent .bss statics. They have not yet been relocated into the reusable canvas blocks. Ethernet DMA descriptors and packet buffers must remain in DMA-accessible main SRAM, not CCM.
+All Ethernet packet, descriptor, socket, and HTTP buffers are now carved from the two reusable canvas regions. The DMA ring occupies 4,656 bytes in DEMO_CANVAS, after the 4 KiB CDC receiver. The TCP socket storage and 3,840 bytes of HTTP RX/TX/body buffers occupy DEMO_CANVAS_TAIL in CCM. No Ethernet/TCP/HTTP packet buffers remain as independent .bss statics. The small HTTP response-header and upload-name scratch arrays are automatic locals on the CDC alternate stack, which is also inside DEMO_CANVAS.
 
 ## Source-verifiable allocation subtotals
 
@@ -74,6 +72,6 @@ These values are not summed into per-mode totals: some are mutually exclusive, s
 
 ## Implications for the RAM reallocation
 
-The CDC layout should place mode-specific CPU-only allocations (especially HTTP RX/TX/body buffers) inside the two existing canvas regions instead of adding independent .bss allocations. The current 4 KiB CDC receiver uses only a small portion of the 84,224-byte main canvas block, so the unused portion is a candidate for HTTP storage. The CCM tail is occupied by the alternate stack during filesystem work; do not place live HTTP buffers there without explicitly managing stack overlap and lifetime. Keep Ethernet DMA descriptors and packet buffers in main SRAM.
+The CDC layout now partitions the two regions by hardware access and lifetime. DEMO_CANVAS holds the 4 KiB receiver at offset 0, the 4,656-byte DMA ring immediately after it, and the 46,848-byte alternate stack at the top. A compile-time assertion verifies that the receiver and DMA ring do not overlap the stack reservation. DEMO_CANVAS_TAIL holds the CPU-only smoltcp socket storage and HTTP buffers. The stack was moved out of CCM before using the tail for HTTP storage, preventing the stack from overwriting live TCP buffers. Ethernet DMA descriptors and packet buffers remain in DMA-accessible main SRAM.
 
 To explain the USB enumeration regression conclusively, inspect the actual ELF/map output for .data, .bss, .ccmram, USB endpoint buffers, and stack reservations. This source inventory alone does not establish remaining free SRAM or prove the root cause.
