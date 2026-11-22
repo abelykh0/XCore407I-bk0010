@@ -104,6 +104,19 @@ static DMA_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
 static DMA_STATUS_SEEN: AtomicU32 = AtomicU32::new(0);
 static MAC_DEBUG_SEEN: AtomicU32 = AtomicU32::new(0);
 
+/// Synchronize a MAC register write across the TX_CLK/RX_CLK clock domain.
+/// ST's F4 HAL performs a read, delay, and same-value write after these updates.
+fn mac_register_sync(register: *mut u32) {
+    unsafe {
+        let value = read_volatile(register);
+        for _ in 0..256 {
+            core::hint::spin_loop();
+        }
+        write_volatile(register, value);
+        let _ = read_volatile(register);
+    }
+}
+
 /// Initialize the RMII MAC and DMA rings after board RMII pins are configured.
 /// Returns false if the expected DP83848 PHY cannot be read.
 pub fn initialize() -> bool {
@@ -182,21 +195,19 @@ pub fn initialize() -> bool {
         let mut maccr = (1 << 25) | (1 << 7); // strip CRC, automatic pad/CRC stripping
         if negotiated && phy.physts & (1 << 1) == 0 { maccr |= 1 << 14; } // 100 Mb/s
         if negotiated && phy.physts & (1 << 2) != 0 { maccr |= 1 << 11; } // full duplex
+        // Match the STM32F4 HAL register synchronization sequence. The MAC
+        // configuration crosses into the TX_CLK/RX_CLK clock domain; ST waits
+        // at least four clock cycles after each MAC register write.
         write_volatile(ETH_MACCR, maccr);
+        mac_register_sync(ETH_MACCR);
         write_volatile(ETH_MACFFR, 0); // normal destination filtering
+        mac_register_sync(ETH_MACFFR);
 
-        // Follow the STM32F4 MAC/DMA startup order: enable the MAC first,
-        // flush its TX FIFO, then start the DMA engines.
-        let enabled_maccr = maccr | (1 << 3) | (1 << 2);
-        write_volatile(ETH_MACCR, enabled_maccr);
-
-        // ST requires at least four TX_CLK/RX_CLK cycles after changing TE/RE.
-        // A bounded delay also avoids relying on compiler-only ordering.
-        let _ = read_volatile(ETH_MACCR);
-        for _ in 0..256 {
-            core::hint::spin_loop();
-        }
-        let _ = read_volatile(ETH_MACCR);
+        // Enable TE and RE in separate synchronized writes, as in HAL_ETH_Start.
+        write_volatile(ETH_MACCR, maccr | (1 << 3));
+        mac_register_sync(ETH_MACCR);
+        write_volatile(ETH_MACCR, maccr | (1 << 3) | (1 << 2));
+        mac_register_sync(ETH_MACCR);
 
         // Flush the transmit FIFO before enabling DMA transmission.
         write_volatile(ETH_DMAOMR, read_volatile(ETH_DMAOMR) | (1 << 20));
@@ -536,6 +547,22 @@ pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u3
             read_volatile(ETH_MACCR),
             read_volatile(SYSCFG_PMC),
             read_volatile(ETH_MACDBGR),
+        )
+    }
+}
+
+/// Read MAC MMC transmit counters for an on-demand IPCONFIG snapshot.
+/// MMC control reset-on-read is left at its hardware reset value (disabled).
+pub fn mmc_tx_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32) {
+    unsafe {
+        (
+            read_volatile((ETH_MAC_BASE + 0x100) as *mut u32), // MMC control
+            read_volatile((ETH_MAC_BASE + 0x118) as *mut u32), // TX frames, good and bad
+            read_volatile((ETH_MAC_BASE + 0x148) as *mut u32), // TX underflow errors
+            read_volatile((ETH_MAC_BASE + 0x158) as *mut u32), // TX late collisions
+            read_volatile((ETH_MAC_BASE + 0x15c) as *mut u32), // TX excessive collisions
+            read_volatile((ETH_MAC_BASE + 0x160) as *mut u32), // TX carrier errors
+            read_volatile((ETH_MAC_BASE + 0x168) as *mut u32), // TX good frames
         )
     }
 }
