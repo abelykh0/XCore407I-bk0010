@@ -53,8 +53,10 @@ use usb_host::{
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
 // Keep smoltcp socket storage in SRAM .bss, not the constrained main stack.
-static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 2] =
-    [smoltcp::iface::SocketStorage::EMPTY; 2];
+static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 2] = [
+    smoltcp::iface::SocketStorage::EMPTY,
+    smoltcp::iface::SocketStorage::EMPTY,
+];
 static mut ETHERNET_HTTP_RX_BUFFER: [u8; 512] = [0; 512];
 static mut ETHERNET_HTTP_TX_BUFFER: [u8; 512] = [0; 512];
 
