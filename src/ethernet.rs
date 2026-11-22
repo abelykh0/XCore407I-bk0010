@@ -851,6 +851,17 @@ impl<'a> EthernetNetwork<'a> {
             let _ = socket.listen(80);
             return;
         }
+
+        // A browser may close a keep-alive connection after a fetch. In
+        // CLOSE-WAIT, is_open() and can_send() can still be true, but the
+        // receive half is finished. Close our transmit half so smoltcp can
+        // complete the TCP teardown and the listening socket can be reused.
+        if !socket.may_recv() {
+            if socket.may_send() {
+                socket.close();
+            }
+            return;
+        }
         if !socket.can_send() {
             return;
         }
