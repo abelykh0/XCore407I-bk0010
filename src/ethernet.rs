@@ -31,8 +31,6 @@ const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
 static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
 static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
 static mut HTTP_BODY_BUFFER: [u8; HTTP_BODY_BUFFER_SIZE] = [0; HTTP_BODY_BUFFER_SIZE];
-const HTTP_RESPONSE_HEADER: &[u8] =
-    b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
 const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><ul id=f></ul><script>
 let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s');async function load(){try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),u=d.querySelector('ul');if(!u)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',u.innerHTML);count+=u.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded). Refresh the page to retry.';}}load()</script>"#;
 
@@ -744,9 +742,8 @@ impl<'a> EthernetNetwork<'a> {
             }).unwrap_or(false);
 
             if received && socket.can_send() {
-                if !api_request {
-                    let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
-                    let _ = socket.send_slice(HTTP_PAGE);
+                let body: &[u8] = if !api_request {
+                    HTTP_PAGE
                 } else {
                     let body = unsafe {
                         core::slice::from_raw_parts_mut(
@@ -816,10 +813,23 @@ impl<'a> EthernetNetwork<'a> {
                         append_http_decimal(body, &mut length, offset.saturating_add(emitted));
                         append_http_bytes(body, &mut length, b"\"></span>");
                     }
-                    let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
-                    let _ = socket.send_slice(&body[..length]);
-                }
-                socket.close();
+                    &body[..length]
+                };
+
+                // Keep this single TCP socket alive so the browser can issue
+                // successive paginated requests without waiting for TIME-WAIT.
+                // Content-Length delimits each response on the persistent stream.
+                let mut header = [0u8; 128];
+                let mut header_len = 0usize;
+                append_http_bytes(
+                    &mut header,
+                    &mut header_len,
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: ",
+                );
+                append_http_decimal(&mut header, &mut header_len, body.len());
+                append_http_bytes(&mut header, &mut header_len, b"\r\n\r\n");
+                let _ = socket.send_slice(&header[..header_len]);
+                let _ = socket.send_slice(body);
             }
         }
     }
