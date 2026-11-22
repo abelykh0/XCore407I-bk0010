@@ -25,7 +25,7 @@ const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 // Keep the request buffer small. The response buffers grow by only 512 bytes
 // in total; directory output is paginated instead of buffering the whole listing.
 const HTTP_RX_BUFFER_SIZE: usize = 256;
-const HTTP_TX_BUFFER_SIZE: usize = 896;
+const HTTP_TX_BUFFER_SIZE: usize = 1280;
 const HTTP_BODY_BUFFER_SIZE: usize = 768;
 const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
 static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
