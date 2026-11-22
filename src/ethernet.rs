@@ -418,6 +418,7 @@ fn write_http_upload(
     use littlefs2::path::Path;
 
     if name.is_empty() || name.len() > 64
+        || total > filesystem.total_space()
         || offset > total || data.len() > total.saturating_sub(offset)
     {
         return false;
@@ -798,6 +799,9 @@ impl<'a> EthernetNetwork<'a> {
         let socket = self.sockets.get_mut::<TcpSocket>(self.http_handle);
         if !socket.is_open() {
             let _ = socket.listen(80);
+            return;
+        }
+        if !socket.can_send() {
             return;
         }
 
