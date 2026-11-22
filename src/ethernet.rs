@@ -535,7 +535,7 @@ impl HttpDownloadState {
         path_bytes[1 + name.len()] = 0;
         let Ok(path) = Path::from_bytes_with_nul(&path_bytes[..name.len() + 2]) else { return false; };
         let Ok(metadata) = filesystem.metadata(path) else { return false; };
-        let Ok(size) = usize::try_from(metadata.len()) else { return false; };
+        let size = metadata.len();
         self.content_type = if http_name_ends_with(name, b".png") { b"image/png" } else { b"image/jpeg" };
         if unsafe { allocation.open_with_options(filesystem, |options| options.read(true), path) }.is_err() {
             return false;
