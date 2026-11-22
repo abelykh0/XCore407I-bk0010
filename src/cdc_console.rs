@@ -1201,6 +1201,24 @@ pub fn service(
                             }
                             write_status(b"\r\nMAC/DMA: ");
                             write_status(if crate::ethernet::is_initialized() { b"initialized" } else { b"not initialized" });
+                            let (rx_frames, tx_frames, rx_errors) = crate::ethernet::frame_counts();
+                            let (arp_rx, ipv4_rx, dhcp_rx, dhcp_configured, dhcp_deconfigured) = crate::ethernet::network_diagnostic();
+                            write_status(b"\\r\\nFrames RX/TX/errors: ");
+                            write_decimal(rx_frames as usize);
+                            write_status(b"/");
+                            write_decimal(tx_frames as usize);
+                            write_status(b"/");
+                            write_decimal(rx_errors as usize);
+                            write_status(b" NET ARP/IP/DHCP: ");
+                            write_decimal(arp_rx as usize);
+                            write_status(b"/");
+                            write_decimal(ipv4_rx as usize);
+                            write_status(b"/");
+                            write_decimal(dhcp_rx as usize);
+                            write_status(b" DHCP EVT cfg/decfg: ");
+                            write_decimal(dhcp_configured as usize);
+                            write_status(b"/");
+                            write_decimal(dhcp_deconfigured as usize);
                             write_status(b"\r\nIPv4: ");
                             if let Some((address, prefix)) = crate::ethernet::ipv4_config() {
                                 for (index, octet) in address.iter().enumerate() {
