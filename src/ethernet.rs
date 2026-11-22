@@ -36,6 +36,12 @@ static HTTP_UPLOAD_DIAG_TOTAL: AtomicU32 = AtomicU32::new(0);
 static HTTP_UPLOAD_DIAG_LENGTH: AtomicU32 = AtomicU32::new(0);
 static HTTP_UPLOAD_DIAG_WRITTEN: AtomicU32 = AtomicU32::new(0);
 static HTTP_UPLOAD_DIAG_SEND_FLAGS: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_STAGE: AtomicU8 = AtomicU8::new(0);
+static HTTP_POLL_DIAG_COUNT: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_RECV_COUNT: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_RECV_BYTES: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_NO_SEND: AtomicU32 = AtomicU32::new(0);
+static HTTP_POLL_DIAG_NO_RECV: AtomicU32 = AtomicU32::new(0);
 
 /// Snapshot of the most recent HTTP upload request and its progress.
 pub fn http_upload_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
@@ -46,6 +52,17 @@ pub fn http_upload_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
         HTTP_UPLOAD_DIAG_LENGTH.load(Ordering::Acquire),
         HTTP_UPLOAD_DIAG_WRITTEN.load(Ordering::Acquire),
         HTTP_UPLOAD_DIAG_SEND_FLAGS.load(Ordering::Acquire),
+    )
+}
+
+pub fn http_poll_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
+    (
+        HTTP_POLL_DIAG_STAGE.load(Ordering::Acquire),
+        HTTP_POLL_DIAG_COUNT.load(Ordering::Relaxed),
+        HTTP_POLL_DIAG_RECV_COUNT.load(Ordering::Relaxed),
+        HTTP_POLL_DIAG_RECV_BYTES.load(Ordering::Acquire),
+        HTTP_POLL_DIAG_NO_SEND.load(Ordering::Relaxed),
+        HTTP_POLL_DIAG_NO_RECV.load(Ordering::Relaxed),
     )
 }
 
@@ -948,6 +965,8 @@ impl<'a> EthernetNetwork<'a> {
     ) {
         use smoltcp::socket::tcp::Socket as TcpSocket;
 
+        HTTP_POLL_DIAG_COUNT.fetch_add(1, Ordering::Relaxed);
+        HTTP_POLL_DIAG_STAGE.store(1, Ordering::Release);
         let socket = self.sockets.get_mut::<TcpSocket>(self.http_handle);
         if !socket.is_open() {
             let _ = socket.listen(80);
@@ -959,15 +978,20 @@ impl<'a> EthernetNetwork<'a> {
         // receive half is finished. Close our transmit half so smoltcp can
         // complete the TCP teardown and the listening socket can be reused.
         if !socket.may_recv() {
+            HTTP_POLL_DIAG_STAGE.store(2, Ordering::Release);
+            HTTP_POLL_DIAG_NO_RECV.fetch_add(1, Ordering::Relaxed);
             if socket.may_send() {
                 socket.close();
             }
             return;
         }
         if !socket.can_send() {
+            HTTP_POLL_DIAG_STAGE.store(3, Ordering::Release);
+            HTTP_POLL_DIAG_NO_SEND.fetch_add(1, Ordering::Relaxed);
             return;
         }
 
+        HTTP_POLL_DIAG_STAGE.store(4, Ordering::Release);
         let mut request_kind = 0u8; // 0=page, 1=directory, 2=upload, 3=bad request
         let mut request_ready = false;
         let mut listing_offset = 0usize;
@@ -983,8 +1007,11 @@ impl<'a> EthernetNetwork<'a> {
             )
         };
 
-        let _ = socket.recv(|data| {
+        let recv_result = socket.recv(|data| {
+            HTTP_POLL_DIAG_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
+            HTTP_POLL_DIAG_RECV_BYTES.store(data.len() as u32, Ordering::Release);
             let Some(separator) = data.windows(4).position(|window| window == b"\r\n\r\n") else {
+                HTTP_POLL_DIAG_STAGE.store(5, Ordering::Release);
                 return (0, false);
             };
             let header_len = separator + 4;
@@ -1044,6 +1071,7 @@ impl<'a> EthernetNetwork<'a> {
                     return (header_len, true);
                 }
                 if data.len() < header_len + content_length {
+                    HTTP_POLL_DIAG_STAGE.store(6, Ordering::Release);
                     return (0, false);
                 }
                 upload_name[..name.len()].copy_from_slice(name);
@@ -1074,9 +1102,14 @@ impl<'a> EthernetNetwork<'a> {
             (header_len, true)
         });
 
+        if recv_result.is_err() {
+            HTTP_POLL_DIAG_STAGE.store(7, Ordering::Release);
+        }
         if !request_ready || !socket.can_send() {
+            if request_ready { HTTP_POLL_DIAG_STAGE.store(8, Ordering::Release); }
             return;
         }
+        HTTP_POLL_DIAG_STAGE.store(9, Ordering::Release);
 
         let mut status_code = 200u16;
         let body: &[u8] = match request_kind {
@@ -1184,5 +1217,6 @@ impl<'a> EthernetNetwork<'a> {
             HTTP_UPLOAD_DIAG_SEND_FLAGS.store((header_sent as u32) | ((body_sent as u32) << 1), Ordering::Release);
             HTTP_UPLOAD_DIAG_STAGE.store(10, Ordering::Release);
         }
+        HTTP_POLL_DIAG_STAGE.store(10, Ordering::Release);
     }
 }
