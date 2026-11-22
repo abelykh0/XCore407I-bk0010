@@ -1308,7 +1308,11 @@ impl<'a> EthernetNetwork<'a> {
                             && (http_name_ends_with(name, b".jpg")
                                 || http_name_ends_with(name, b".jpeg")
                                 || http_name_ends_with(name, b".png"));
-                        if image_file { append_http_bytes(body, &mut length, b"<a target=\"_blank\" rel=\"noopener\" href=\"/file/"); }
+                        if image_file {
+                            append_http_bytes(body, &mut length, b"<a target=\"_blank\" rel=\"noopener\" href=\"/file/");
+                            append_http_bytes(body, &mut length, name);
+                            append_http_bytes(body, &mut length, b"\">");
+                        }
                         for &byte in &name[..name_len] {
                             let escaped = match byte {
                                 b'&' => b"&amp;" as &[u8],
@@ -1319,7 +1323,6 @@ impl<'a> EthernetNetwork<'a> {
                             };
                             append_http_bytes(body, &mut length, escaped);
                         }
-                        if image_file { append_http_bytes(body, &mut length, b"\">"); }
                         if name_len < name.len() { append_http_bytes(body, &mut length, b"... "); }
                         if image_file { append_http_bytes(body, &mut length, b"</a>"); }
                         if is_dir {
