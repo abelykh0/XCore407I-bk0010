@@ -183,9 +183,9 @@ pub fn initialize() -> bool {
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr(), tx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmaier().as_ptr(), 0);
         (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
-            w.ts().set_bit().tus().set_bit().tjts().set_bit().ros().set_bit()
-                .ets().set_bit().rs().set_bit().rbus().set_bit().fbes().set_bit()
-                .ers().set_bit().ais().set_bit().nis().set_bit()
+            w.ts().set_bit().tpss().set_bit().tus().set_bit().tjts().set_bit()
+                .ros().set_bit().ets().set_bit().rs().set_bit().rbus().set_bit()
+                .rpss().set_bit().fbes().set_bit().ers().set_bit().ais().set_bit().nis().set_bit()
         });
 
         // Locally administered unicast address 02:12:09:40:70:01.
