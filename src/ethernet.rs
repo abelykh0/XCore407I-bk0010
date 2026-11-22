@@ -185,7 +185,7 @@ pub fn initialize() -> bool {
         (*pac::ETHERNET_DMA::PTR).dmaomr().write(|w| unsafe { w.bits(DMA_OMR_INIT) });
         write_volatile((*pac::ETHERNET_DMA::PTR).dmardlar().as_ptr(), rx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr(), tx_desc as u32);
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmaier().as_ptr(), 0);
+        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| unsafe { w.bits(0) });
         (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| unsafe { w.bits(DMA_IRQ_CLEAR_MASK) });
 
         // Locally administered unicast address 02:12:09:40:70:01.
@@ -244,11 +244,7 @@ pub fn initialize() -> bool {
 pub fn enable_dma_interrupts() {
     unsafe {
         // Clear stale write-one-to-clear events before enabling sources.
-        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
-            w.ts().set_bit().tus().set_bit().tjts().set_bit().ros().set_bit()
-                .ets().set_bit().rs().set_bit().rbus().set_bit().fbes().set_bit()
-                .ers().set_bit().ais().set_bit().nis().set_bit()
-        });
+        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| unsafe { w.bits(DMA_IRQ_CLEAR_MASK) });
         (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| unsafe { w.bits(DMA_IRQ_ENABLE_MASK) });
     }
 }
