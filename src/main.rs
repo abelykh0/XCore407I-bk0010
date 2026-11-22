@@ -386,16 +386,39 @@ fn main() -> ! {
         USB_FS_READY.store(false, Ordering::Release);
         USB_HOST_TASK_PENDING.store(false, Ordering::Release);
 
+        // The boot keyboard is no longer needed. PC1 can now be reassigned
+        // from FS VBUS enable to Ethernet MDC; USB HS remains active.
+        board::configure_ethernet_pins();
+
+        // Start the Ethernet MAC/DMA after the RMII pins and PHY management bus are ready.
+        // The polled network stack provides DHCP and the embedded HTTP test page.
+        let _ethernet_mac_dma_ready = xcore407i_blinker::ethernet::initialize();
+        if _ethernet_mac_dma_ready {
+            xcore407i_blinker::ethernet::enable_dma_interrupts();
+            unsafe {
+                core.NVIC.set_priority(interrupt::ETH, 0x2 << 4);
+                NVIC::unpend(interrupt::ETH);
+                NVIC::unmask(interrupt::ETH);
+            }
+        }
+        let ethernet_socket_storage = xcore407i_blinker::ethernet::socket_storage();
+        let mut ethernet_network = xcore407i_blinker::ethernet::EthernetNetwork::new(ethernet_socket_storage);
+
         // Mount LittleFS for each CDC session. After formatting, the old
         // storage object is dropped and this loop mounts a fresh Dhara/LittleFS instance.
-        // Keep the ZMODEM state on the CCM alternate stack: it contains the reusable
-        // LittleFS FileAllocation and must not consume the small main stack.
+        // Keep the ZMODEM state on the canvas-backed alternate stack: it contains
+        // the reusable LittleFS FileAllocation and must not consume the small main stack.
         let mut just_formatted = false;
         loop {
             let mount_result: Result<xcore407i_blinker::cdc_console::FormatRequest, xcore407i_blinker::nand_fs::FsAccessError> =
                 unsafe {
                     xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
                         let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
+                        // FileAllocation owns persistent LittleFS state; keep the HTTP
+                        // upload allocation on the alternate stack, not in the small
+                        // main-stack EthernetNetwork value.
+                        let mut http_upload_state = xcore407i_blinker::ethernet::HttpUploadState::new();
+                        let mut http_download_state = xcore407i_blinker::ethernet::HttpDownloadState::new();
 
                         // NAND initialization and the initial LittleFS mount happen
                         // before the filesystem service closure is entered. Keep the
@@ -412,6 +435,11 @@ fn main() -> ! {
                             loop {
                                 let _ = tusb::tud_task_ext(1, false);
                                 xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+                                // The HTTP directory listing reads LittleFS synchronously.
+                                // Keep USB/UVC serviced during NAND page reads.
+                                xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
+                                ethernet_network.poll(TICKS.load(Ordering::Relaxed), fs, &mut http_upload_state, &mut http_download_state);
+                                xcore407i_blinker::nand_fs::set_io_service_hook(None);
                                 // Keep USB/UVC and the video producer alive inside synchronous
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
                                 FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
@@ -1041,6 +1069,12 @@ fn main() -> ! {
             }
         }
     }
+}
+
+#[interrupt]
+#[allow(non_snake_case)]
+fn ETH() {
+    xcore407i_blinker::ethernet::on_dma_interrupt();
 }
 
 #[interrupt]

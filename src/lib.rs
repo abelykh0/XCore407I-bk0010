@@ -13,6 +13,7 @@ mod list_diag;
 #[cfg(feature = "list-profile")]
 mod write_diag;
 pub mod dhara_fs;
+pub mod ethernet;
 pub mod libc_shims;
 mod copy_words;
 #[path = "../resources/font8x8.rs"]

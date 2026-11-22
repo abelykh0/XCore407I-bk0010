@@ -58,6 +58,31 @@ ZmodemAuto=on
 `ClearComBuffOnOpen=off` preserves the startup console banner when the port
 opens. `ZmodemAuto=on` enables automatic ZMODEM receive handling.
 
+### Ethernet HTTP file server
+
+Ethernet is available in CDC mode. The STM32F407's Ethernet MAC uses the
+onboard DP83848 PHY over RMII. The network interface obtains its IPv4
+configuration from DHCP; use the CDC console's `IPCONFIG` command to see the
+assigned address and link status.
+
+Open `http://<board-ip>/` in a browser to access the LittleFS file server.
+The page lists files stored at the filesystem root and provides browser-based
+file upload:
+
+- The directory listing is loaded in pages, so large directories do not need
+  to be returned in one response.
+- Uploads use HTTP POST requests with 2 KiB chunks. The server keeps the
+  destination file open across chunks and writes each chunk at its specified
+  offset.
+- Root-level filenames may contain 1–64 ASCII letters, digits, dots,
+  underscores, and hyphens. Directory paths are not accepted.
+- JPEG (`.jpg`, `.jpeg`) and PNG (`.png`) files are linked from the listing
+  and served inline by the browser. Other files remain available for listing
+  and upload; they are not exposed as downloadable links by this page.
+
+The HTTP server and its buffers are active only in CDC mode and use the same
+LittleFS volume as the CDC console and ZMODEM transfers.
+
 ## RTC registers
 
 The STM32 calendar is exposed as read-only Unix milliseconds (low 32 bits):

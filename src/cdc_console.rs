@@ -38,13 +38,13 @@ static CDC_BANNER_COMPLETE_RX_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  IPCONFIG   Show Ethernet link and IP configuration\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
 #[cfg(feature = "list-profile")]
 const HELP_WRITE_PROFILE: &[u8] = b"  WRITE PROFILE Show last ZMODEM receive timing breakdown\r\n";
 #[cfg(feature = "nand-diagnostics")]
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
-const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: LittleFS mounted for CDC session\r\n";
-const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nAudio: disabled\r\nUSB host / keyboard: disabled\r\nEmulator: disabled\r\nStorage: unavailable\r\n";
+const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nStorage: LittleFS mounted for CDC session\r\n";
+const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nStorage: unavailable\r\n";
 const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
 
 /// TinyUSB reports DTR changes while processing SET_CONTROL_LINE_STATE.
@@ -353,6 +353,8 @@ fn write_hex_u32(value: u32) {
     }
     write_status(&digits);
 }
+
+
 
 fn write_decimal(mut value: usize) {
     let mut digits = [0u8; 10];
@@ -1178,6 +1180,42 @@ pub fn service(
                     } else if cfg!(feature = "list-profile") && command_is(line, b"WRITE PROFILE") {
                         #[cfg(feature = "list-profile")]
                         write_write_profile(zmodem);
+                    } else if command_is(line, b"IPCONFIG") {
+                        let phy = crate::ethernet::probe_dp83848();
+                        if phy.mdio_timeout {
+                            write_status(b"\r\nEthernet: MDIO timeout; PHY status unavailable.\r\n> ");
+                        } else if !phy.found {
+                            write_status(b"\r\nEthernet: DP83848 not detected. Check PHY power and MDIO wiring.\r\n> ");
+                        } else {
+                            write_status(b"\r\nEthernet: link ");
+                            write_status(if phy.physts & 1 != 0 { b"up" } else { b"down" });
+                            if phy.physts & 1 != 0 {
+                                write_status(if phy.physts & (1 << 1) != 0 {
+                                    b", 10 Mb/s" as &[u8]
+                                } else {
+                                    b", 100 Mb/s" as &[u8]
+                                });
+                                write_status(if phy.physts & (1 << 2) != 0 {
+                                    b", full duplex" as &[u8]
+                                } else {
+                                    b", half duplex" as &[u8]
+                                });
+                            }
+                            write_status(b"\r\nMAC/DMA: ");
+                            write_status(if crate::ethernet::is_initialized() { b"initialized" } else { b"not initialized" });
+                            write_status(b"\r\nIPv4: ");
+                            if let Some((address, prefix)) = crate::ethernet::ipv4_config() {
+                                for (index, octet) in address.iter().enumerate() {
+                                    if index != 0 { write_status(b"."); }
+                                    write_decimal(*octet as usize);
+                                }
+                                write_status(b"/");
+                                write_decimal(prefix as usize);
+                            } else {
+                                write_status(b"acquiring via DHCP");
+                            }
+                            write_status(b"\r\n> ");
+                        }
                     } else if command_is(line, b"STATUS") {
                         write_status(if fs.is_some() {
                             STATUS_MOUNTED
@@ -1185,6 +1223,42 @@ pub fn service(
                             STATUS_UNAVAILABLE
                         });
                         write_cdc_diagnostics();
+                        let (stage, offset, total, length, written, sends) =
+                            crate::ethernet::http_upload_diagnostics();
+                        write_status(b"HTTP upload: stage=");
+                        write_decimal(stage as usize);
+                        write_status(b" offset=");
+                        write_decimal(offset as usize);
+                        write_status(b"/");
+                        write_decimal(total as usize);
+                        write_status(b" chunk=");
+                        write_decimal(length as usize);
+                        write_status(b" written=");
+                        write_decimal(written as usize);
+                        write_status(b" send=");
+                        write_decimal(sends as usize);
+                        write_status(b"\r\n");
+                        let (poll_stage, polls, receives, rx_bytes, no_send, no_recv, expected, queue, tcp_state) =
+                            crate::ethernet::http_poll_diagnostics();
+                        write_status(b"HTTP socket: stage=");
+                        write_decimal(poll_stage as usize);
+                        write_status(b" polls=");
+                        write_decimal(polls as usize);
+                        write_status(b" recv_calls=");
+                        write_decimal(receives as usize);
+                        write_status(b" rx_bytes=");
+                        write_decimal(rx_bytes as usize);
+                        write_status(b" no_send=");
+                        write_decimal(no_send as usize);
+                        write_status(b" no_recv=");
+                        write_decimal(no_recv as usize);
+                        write_status(b" expected=");
+                        write_decimal(expected as usize);
+                        write_status(b" queue=");
+                        write_decimal(queue as usize);
+                        write_status(b" tcp_state=");
+                        write_decimal(tcp_state as usize);
+                        write_status(b"\r\n");
                         write_status(if ZMODEM_START_FAILED {
                             b"ZMODEM startup: header detected, receiver did not start.\r\n"
                         } else if ZMODEM_PROBE_MATCHED {

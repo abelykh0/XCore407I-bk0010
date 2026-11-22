@@ -236,25 +236,75 @@ pub const CANVAS_MAIN_BYTES: usize = CANVAS_BYTES - CANVAS_TAIL_BYTES;
 #[derive(Clone, Copy)]
 #[repr(C, align(4))]
 struct AlignedCanvas<const N: usize>([u8; N]);
+#[repr(C, align(8))]
+struct DmaAlignedCanvas<const N: usize>([u8; N]);
 
-static mut DEMO_CANVAS: AlignedCanvas<CANVAS_MAIN_BYTES> = AlignedCanvas([0; CANVAS_MAIN_BYTES]);
+static mut DEMO_CANVAS: DmaAlignedCanvas<CANVAS_MAIN_BYTES> = DmaAlignedCanvas([0; CANVAS_MAIN_BYTES]);
 #[repr(C, align(8))]
 union CanvasTailStorage {
     canvas: AlignedCanvas<CANVAS_TAIL_BYTES>,
-    stack: [u8; CANVAS_TAIL_BYTES],
+    cpu: [u8; CANVAS_TAIL_BYTES],
 }
 
-// The CCM tail is the video canvas in normal mode and the CDC alternate stack
-// while the CDC filesystem session is active. Those modes are mutually exclusive.
+// DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of one logical
+// 128 KiB BK canvas. In CDC mode, the main segment is reused for receiver,
+// Ethernet DMA and HTTP RX/body storage plus the alternate stack; the CCM
+// tail holds CPU-only smoltcp socket metadata and the TCP transmit buffer.
 #[unsafe(link_section = ".ccmram.canvas")]
 static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
     CanvasTailStorage { canvas: AlignedCanvas([0; CANVAS_TAIL_BYTES]) };
 
+pub(crate) const CDC_RECEIVER_STORAGE_BYTES: usize = 4096;
+pub(crate) const CDC_ETHERNET_DMA_STORAGE_BYTES: usize = 2 * 16 + 2 * 1536 + 16 + 1536;
+pub(crate) const CDC_HTTP_RX_BYTES: usize = 4096;
+pub(crate) const CDC_HTTP_BODY_BYTES: usize = 63_184;
+pub(crate) const CDC_HTTP_STORAGE_BYTES: usize =
+    CDC_HTTP_RX_BYTES + CDC_HTTP_BODY_BYTES;
+const CDC_ALT_STACK_BYTES: usize = 8 * 1024;
+const CDC_ALT_STACK_BOTTOM: usize = CANVAS_MAIN_BYTES - CDC_ALT_STACK_BYTES;
+
+// Receiver, DMA ring and HTTP buffers occupy the low end; the 8 KiB
+// filesystem alternate stack grows down from the high end.
+const _: () = assert!(
+    CDC_RECEIVER_STORAGE_BYTES
+        + CDC_ETHERNET_DMA_STORAGE_BYTES
+        + CDC_HTTP_STORAGE_BYTES
+        <= CDC_ALT_STACK_BOTTOM
+);
+const _: () = assert!(
+    CDC_RECEIVER_STORAGE_BYTES
+        + CDC_ETHERNET_DMA_STORAGE_BYTES
+        + CDC_HTTP_STORAGE_BYTES
+        == CDC_ALT_STACK_BOTTOM
+);
+
 pub(crate) fn cdc_alternate_stack_top() -> *mut u8 {
     unsafe {
-        core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.stack)
+        core::ptr::addr_of_mut!(DEMO_CANVAS.0)
             .cast::<u8>()
-            .add(CANVAS_TAIL_BYTES)
+            .add(CANVAS_MAIN_BYTES)
+    }
+}
+
+pub(crate) fn cdc_ethernet_dma_storage_ptr() -> *mut u8 {
+    unsafe {
+        core::ptr::addr_of_mut!(DEMO_CANVAS.0)
+            .cast::<u8>()
+            .add(CDC_RECEIVER_STORAGE_BYTES)
+    }
+}
+
+pub(crate) fn cdc_ethernet_http_storage_ptr() -> *mut u8 {
+    unsafe {
+        core::ptr::addr_of_mut!(DEMO_CANVAS.0)
+            .cast::<u8>()
+            .add(CDC_RECEIVER_STORAGE_BYTES + CDC_ETHERNET_DMA_STORAGE_BYTES)
+    }
+}
+
+pub(crate) fn cdc_ethernet_socket_storage_ptr() -> *mut u8 {
+    unsafe {
+        core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.cpu).cast::<u8>()
     }
 }
 
@@ -264,8 +314,8 @@ struct RowBuffers([u8; WIDTH * 2]);
 static mut ROW_BUFFERS: RowBuffers = RowBuffers([0; WIDTH * 2]);
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
 // CDC mode uses the PC CONNECT renderer and does not consume the demo canvas.
-// Reuse its large contiguous SRAM allocation for the heapless ZMODEM receiver;
-// the CCM tail is used as the alternate filesystem stack during this session.
+// Its main-SRAM range holds the ZMODEM receiver, Ethernet DMA ring, HTTP
+// buffers and alternate stack. The CCM tail holds smoltcp socket storage.
 static CDC_RECEIVER_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn claim_cdc_receiver_storage() -> Option<(*mut u8, usize)> {
@@ -273,7 +323,7 @@ pub(crate) fn claim_cdc_receiver_storage() -> Option<(*mut u8, usize)> {
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .ok()?;
     let ptr = unsafe { core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>() };
-    Some((ptr, 4096))
+    Some((ptr, CDC_RECEIVER_STORAGE_BYTES))
 }
 
 pub(crate) fn release_cdc_receiver_storage() {

@@ -99,6 +99,78 @@ pub(crate) fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::F
     while rcc.cfgr().read().sws().bits() != 2 {}
 }
 
+
+/// Configure the STM32F407 RMII pin muxes for the XCore407I.
+///
+/// The board has a dedicated, always-powered 50 MHz oscillator for the
+/// DP83848. Its output is routed to both the PHY X1/REF_CLK input and MCU PA1.
+/// There is no MCU PLL or GPIO output configuration needed to generate this
+/// clock: PA1 must receive it as ETH_RMII_REF_CLK (AF11).
+///
+/// The XCore407I routes TX_EN/TXD0/TXD1 to PG11/PG13/PG14, avoiding the
+/// USB3300 ULPI pins PB11/PB12/PB13. PC1 is shared with USB FS VBUS enable,
+/// so this function is called only after CDC boot selection has shut down
+/// the FS host. USB HS ULPI pins are not touched.
+pub(crate) fn configure_ethernet_pins() {
+    const RCC_AHB1ENR: *mut u32 = 0x4002_3830 as *mut u32;
+    const GPIOA: usize = 0x4002_0000;
+    const GPIOC: usize = 0x4002_0800;
+    const GPIOG: usize = 0x4002_1800;
+
+    unsafe {
+        // Make this routine self-contained: enable GPIOA for the external
+        // RMII reference-clock input, GPIOC for RX/MDC, and GPIOG for TX.
+        core::ptr::write_volatile(
+            RCC_AHB1ENR,
+            core::ptr::read_volatile(RCC_AHB1ENR) | (1 << 0) | (1 << 2) | (1 << 6),
+        );
+        let _ = core::ptr::read_volatile(RCC_AHB1ENR);
+
+        for (port, pin) in [
+            (GPIOA, 1u8),  // RMII_REF_CLK
+            (GPIOA, 2u8),  // RMII_MDIO
+            (GPIOA, 7u8),  // RMII_CRS_DV
+            (GPIOC, 1u8),  // RMII_MDC (was USB FS VBUS enable)
+            (GPIOC, 4u8),  // RMII_RXD0
+            (GPIOC, 5u8),  // RMII_RXD1
+            (GPIOG, 11u8), // RMII_TX_EN (alternate board routing)
+            (GPIOG, 13u8), // RMII_TXD0 (alternate board routing)
+            (GPIOG, 14u8), // RMII_TXD1 (alternate board routing)
+        ] {
+            let base = port as *mut u32;
+            let moder = base.add(0x00 / 4);
+            let otyper = base.add(0x04 / 4);
+            let speed = base.add(0x08 / 4);
+            let pull = base.add(0x0C / 4);
+            let afr = base.add(if pin < 8 { 0x20 / 4 } else { 0x24 / 4 });
+            let shift = (pin as u32 & 7) * 4;
+            let mode_shift = (pin as u32) * 2;
+            let mode_mask = 0b11 << mode_shift;
+
+            core::ptr::write_volatile(
+                moder,
+                (core::ptr::read_volatile(moder) & !mode_mask) | (0b10 << mode_shift),
+            );
+            core::ptr::write_volatile(
+                otyper,
+                core::ptr::read_volatile(otyper) & !(1 << pin),
+            );
+            core::ptr::write_volatile(
+                speed,
+                (core::ptr::read_volatile(speed) & !mode_mask) | (0b11 << mode_shift),
+            );
+            core::ptr::write_volatile(
+                pull,
+                core::ptr::read_volatile(pull) & !mode_mask,
+            );
+            core::ptr::write_volatile(
+                afr,
+                (core::ptr::read_volatile(afr) & !(0xF << shift)) | (0xB << shift),
+            );
+        }
+    }
+}
+
 /// Configure the Ethernet MDIO/MDC and USB3300 ULPI pin muxes.
 ///
 /// The HAL owns the GPIO register layout and alternate-function mapping. The
