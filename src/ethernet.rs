@@ -48,17 +48,22 @@ const MDIO_TIMEOUT: u32 = 1_000_000;
 const PHY_NEGOTIATION_POLLS: u32 = 5_000;
 const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 
+// Keep the request buffer small. The response buffers grow by only 512 bytes
+// in total; directory output is paginated instead of buffering the whole listing.
 const HTTP_RX_BUFFER_SIZE: usize = 256;
-const HTTP_TX_BUFFER_SIZE: usize = 512;
-const HTTP_BODY_BUFFER_SIZE: usize = 384;
+const HTTP_TX_BUFFER_SIZE: usize = 768;
+const HTTP_BODY_BUFFER_SIZE: usize = 640;
+const HTTP_DIRECTORY_PAGE_SIZE: usize = 2;
 static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
 static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
 static mut HTTP_BODY_BUFFER: [u8; HTTP_BODY_BUFFER_SIZE] = [0; HTTP_BODY_BUFFER_SIZE];
 const HTTP_RESPONSE_HEADER: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
-const HTTP_PAGE_PREFIX: &[u8] =
-    b"<!doctype html><html><head><meta charset=utf-8><title>LittleFS</title></head><body><h1>LittleFS files</h1><ul>";
-const HTTP_PAGE_SUFFIX: &[u8] = b"</ul></body></html>";
+const HTTP_PAGE: &[u8] = br#"<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title></head><body><h1>LittleFS files</h1><ul id=files></ul><button id=more hidden>Load more</button><script>
+let offset=0;const list=document.getElementById('files'),more=document.getElementById('more');
+async function load(){more.disabled=true;try{const r=await fetch('/api/files?offset='+offset);if(!r.ok)throw Error(r.status);const d=new DOMParser().parseFromString(await r.text(),'text/html');list.insertAdjacentHTML('beforeend',d.querySelector('ul').innerHTML);const n=d.querySelector('[data-next]');if(n){offset=Number(n.dataset.next);more.hidden=false;}else{more.hidden=true;}}catch(e){more.hidden=false;more.textContent='Retry';}finally{more.disabled=false;}}
+more.addEventListener('click',load);load();
+</script></body></html>"#;
 
 const RX_COUNT: usize = 2;
 const FRAME_CAPACITY: usize = 1536;
@@ -608,7 +613,7 @@ impl<'a> EthernetNetwork<'a> {
         self.poll_http(filesystem);
     }
 
-    /// Serve a live root-directory listing from the already-mounted LittleFS.
+    /// Serve a small page shell and an AJAX-paginated LittleFS directory listing.
     fn poll_http(
         &mut self,
         filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
@@ -622,62 +627,101 @@ impl<'a> EthernetNetwork<'a> {
         }
 
         if socket.can_recv() {
-            let received = socket.recv(|data| (data.len(), !data.is_empty()))
-                .unwrap_or(false);
+            let mut api_request = false;
+            let mut offset = 0usize;
+            let received = socket.recv(|data| {
+                const API_PREFIX: &[u8] = b"GET /api/files?offset=";
+                if let Some(line_end) = data.iter().position(|&byte| byte == b'\\n') {
+                    let line = &data[..line_end];
+                    if let Some(rest) = line.strip_prefix(API_PREFIX) {
+                        api_request = true;
+                        for &byte in rest {
+                            if !byte.is_ascii_digit() { break; }
+                            offset = offset.saturating_mul(10)
+                                .saturating_add((byte - b'0') as usize)
+                                .min(1_000_000);
+                        }
+                    }
+                }
+                (data.len(), !data.is_empty())
+            }).unwrap_or(false);
+
             if received && socket.can_send() {
-                let body = unsafe {
-                    core::slice::from_raw_parts_mut(
-                        addr_of_mut!(HTTP_BODY_BUFFER).cast::<u8>(),
-                        HTTP_BODY_BUFFER_SIZE,
-                    )
-                };
-                let mut length = 0;
-                let mut truncated = false;
-                append_http_bytes(body, &mut length, HTTP_PAGE_PREFIX);
+                if !api_request {
+                    let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
+                    let _ = socket.send_slice(HTTP_PAGE);
+                } else {
+                    let body = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            addr_of_mut!(HTTP_BODY_BUFFER).cast::<u8>(),
+                            HTTP_BODY_BUFFER_SIZE,
+                        )
+                    };
+                    let mut length = 0usize;
+                    let mut seen = 0usize;
+                    let mut emitted = 0usize;
+                    let mut has_more = false;
+                    append_http_bytes(body, &mut length, b"<ul>");
 
-                let _ = crate::nand_fs::read_root_directory(
-                    filesystem,
-                    true,
-                    |path, is_dir, size| {
-                        if truncated {
-                            return Ok(());
-                        }
-                        let name = path.strip_prefix(b"/").unwrap_or(path);
-                        let name = name.strip_suffix(b"\0").unwrap_or(name);
-                        // Reserve enough space for worst-case HTML escaping, the
-                        // size suffix, and the closing page tags.
-                        let required = name.len().saturating_mul(6).saturating_add(64);
-                        if required > body.len().saturating_sub(length) {
-                            append_http_bytes(body, &mut length, b"<li>... listing truncated ...</li>");
-                            truncated = true;
-                            return Ok(());
-                        }
-                        append_http_bytes(body, &mut length, b"<li>");
-                        for &byte in name {
-                            let escaped = match byte {
-                                b'&' => b"&amp;" as &[u8],
-                                b'<' => b"&lt;",
-                                b'>' => b"&gt;",
-                                b'"' => b"&quot;",
-                                _ => core::slice::from_ref(&byte),
-                            };
-                            append_http_bytes(body, &mut length, escaped);
-                        }
-                        if is_dir {
-                            append_http_bytes(body, &mut length, b"/");
-                        } else {
-                            append_http_bytes(body, &mut length, b" (");
-                            append_http_decimal(body, &mut length, size);
-                            append_http_bytes(body, &mut length, b" bytes)");
-                        }
-                        append_http_bytes(body, &mut length, b"</li>");
-                        Ok(())
-                    },
-                );
+                    let _ = crate::nand_fs::read_root_directory(
+                        filesystem,
+                        true,
+                        |path, is_dir, size| {
+                            if seen < offset {
+                                seen += 1;
+                                return Ok(());
+                            }
+                            if emitted >= HTTP_DIRECTORY_PAGE_SIZE {
+                                has_more = true;
+                                return Ok(());
+                            }
+                            seen += 1;
+                            emitted += 1;
 
-                append_http_bytes(body, &mut length, HTTP_PAGE_SUFFIX);
-                let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
-                let _ = socket.send_slice(&body[..length]);
+                            let name = path.strip_prefix(b"/").unwrap_or(path);
+                            let name = name.strip_suffix(b"\\0").unwrap_or(name);
+                            // Bound worst-case HTML expansion while retaining useful names.
+                            let mut name_len = core::cmp::min(name.len(), 32);
+                            while name_len > 0 && name_len < name.len()
+                                && name[name_len] & 0xc0 == 0x80
+                            {
+                                name_len -= 1;
+                            }
+                            append_http_bytes(body, &mut length, b"<li>");
+                            for &byte in &name[..name_len] {
+                                let escaped = match byte {
+                                    b'&' => b"&amp;" as &[u8],
+                                    b'<' => b"&lt;",
+                                    b'>' => b"&gt;",
+                                    b'"' => b"&quot;",
+                                    _ => core::slice::from_ref(&byte),
+                                };
+                                append_http_bytes(body, &mut length, escaped);
+                            }
+                            if name_len < name.len() {
+                                append_http_bytes(body, &mut length, b"... ");
+                            }
+                            if is_dir {
+                                append_http_bytes(body, &mut length, b"/");
+                            } else {
+                                append_http_bytes(body, &mut length, b" (");
+                                append_http_decimal(body, &mut length, size);
+                                append_http_bytes(body, &mut length, b" bytes)");
+                            }
+                            append_http_bytes(body, &mut length, b"</li>");
+                            Ok(())
+                        },
+                    );
+
+                    append_http_bytes(body, &mut length, b"</ul>");
+                    if has_more {
+                        append_http_bytes(body, &mut length, b"<span data-next=\"");
+                        append_http_decimal(body, &mut length, offset.saturating_add(emitted));
+                        append_http_bytes(body, &mut length, b"\"></span>");
+                    }
+                    let _ = socket.send_slice(HTTP_RESPONSE_HEADER);
+                    let _ = socket.send_slice(&body[..length]);
+                }
                 socket.close();
             }
         }
