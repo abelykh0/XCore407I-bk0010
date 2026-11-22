@@ -12,7 +12,6 @@ use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxT
 use smoltcp::time::Instant;
 
 
-const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
 
 
 
@@ -183,7 +182,11 @@ pub fn initialize() -> bool {
         write_volatile((*pac::ETHERNET_DMA::PTR).dmardlar().as_ptr(), rx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr(), tx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmaier().as_ptr(), 0);
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmasr().as_ptr(), 0x1e00_01ff);
+        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
+            w.ts().set_bit().tus().set_bit().tjts().set_bit().ros().set_bit()
+                .ets().set_bit().rs().set_bit().rbus().set_bit().fbes().set_bit()
+                .ers().set_bit().ais().set_bit().nis().set_bit()
+        });
 
         // Locally administered unicast address 02:12:09:40:70:01.
         write_volatile((*pac::ETHERNET_MAC::PTR).maca0lr().as_ptr(), 0x4009_1202);
@@ -241,7 +244,11 @@ pub fn initialize() -> bool {
 pub fn enable_dma_interrupts() {
     unsafe {
         // Clear stale write-one-to-clear events before enabling sources.
-        write_volatile((*pac::ETHERNET_DMA::PTR).dmasr().as_ptr(), DMA_IRQ_CLEAR_MASK);
+        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
+            w.ts().set_bit().tus().set_bit().tjts().set_bit().ros().set_bit()
+                .ets().set_bit().rs().set_bit().rbus().set_bit().fbes().set_bit()
+                .ers().set_bit().ais().set_bit().nis().set_bit()
+        });
         (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| {
             w.tie().set_bit()
                 .tbuie().set_bit()
@@ -257,10 +264,24 @@ pub fn enable_dma_interrupts() {
 /// Packet handling and all smoltcp/DHCP work remain in foreground context.
 pub fn on_dma_interrupt() {
     unsafe {
-        let status = read_volatile((*pac::ETHERNET_DMA::PTR).dmasr().as_ptr());
-        let pending = status & DMA_IRQ_CLEAR_MASK;
-        if pending != 0 {
-            write_volatile((*pac::ETHERNET_DMA::PTR).dmasr().as_ptr(), pending);
+        let status = (*pac::ETHERNET_DMA::PTR).dmasr().read();
+        if status.ts().bit_is_set()
+            || status.tus().bit_is_set()
+            || status.tjts().bit_is_set()
+            || status.ros().bit_is_set()
+            || status.ets().bit_is_set()
+            || status.rs().bit_is_set()
+            || status.rbus().bit_is_set()
+            || status.fbes().bit_is_set()
+            || status.ers().bit_is_set()
+            || status.ais().bit_is_set()
+            || status.nis().bit_is_set()
+        {
+            (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
+                w.ts().set_bit().tus().set_bit().tjts().set_bit().ros().set_bit()
+                    .ets().set_bit().rs().set_bit().rbus().set_bit().fbes().set_bit()
+                    .ers().set_bit().ais().set_bit().nis().set_bit()
+            });
         }
     }
 }
@@ -304,7 +325,6 @@ pub fn probe_dp83848() -> PhyStatus {
         (*pac::RCC::PTR).apb2enr().modify(|_, w| w.syscfgen().set_bit());
         (*pac::RCC::PTR).ahb1enr().modify(|_, w| w.ethmacen().set_bit());
         let _ = (*pac::RCC::PTR).ahb1enr().read();
-        let initial = read_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr());
         (*pac::ETHERNET_MAC::PTR).macmiiar().modify(|_, w| w.cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168).mb().clear_bit());
 
         for address in 0u8..32 {
@@ -376,10 +396,8 @@ fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
             remaining -= 1;
         }
         (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| {
-            w.pa().bits(phy_address)
-                .mr().bits(register)
-                .cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168)
-                .mb().set_bit()
+            unsafe { w.pa().bits(phy_address).mr().bits(register); }
+            w.cr().variant(pac::ethernet_mac::macmiiar::CR::Cr150_168).mb().set_bit()
         });
         remaining = MDIO_TIMEOUT;
         while read_volatile((*pac::ETHERNET_MAC::PTR).macmiiar().as_ptr()) & MII_BUSY != 0 {
