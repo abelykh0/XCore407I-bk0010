@@ -354,6 +354,12 @@ fn write_hex_u32(value: u32) {
     write_status(&digits);
 }
 
+fn write_hex_u8(value: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let digits = [HEX[(value >> 4) as usize], HEX[(value & 0x0F) as usize]];
+    write_status(&digits);
+}
+
 fn write_decimal(mut value: usize) {
     let mut digits = [0u8; 10];
     let mut start = digits.len();
@@ -1238,6 +1244,14 @@ pub fn service(
                             write_hex_u32(tx3);
                             write_status(b" TXCUR:0x");
                             write_hex_u32(txcur);
+                            let (tx_length, tx_bytes) = crate::ethernet::tx_packet_diagnostic();
+                            write_status(b" TXLEN:");
+                            write_decimal(tx_length as usize);
+                            write_status(b" TXDATA:");
+                            for (index, byte) in tx_bytes.iter().enumerate() {
+                                if index != 0 { write_status(b" "); }
+                                write_hex_u8(*byte);
+                            }
                             write_status(b" IER:0x");
                             write_hex_u32(dmaier);
                             write_status(b" MACCR:0x");
