@@ -25,7 +25,7 @@ const PHY_NEGOTIATION_DELAY: u32 = 50_000;
 // Keep the request buffer small. The response buffers grow by only 512 bytes
 // in total; directory output is paginated instead of buffering the whole listing.
 const HTTP_RX_BUFFER_SIZE: usize = 768;
-const HTTP_TX_BUFFER_SIZE: usize = 1280;
+const HTTP_TX_BUFFER_SIZE: usize = 2304;
 const HTTP_BODY_BUFFER_SIZE: usize = 768;
 const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
 static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
@@ -989,7 +989,13 @@ impl<'a> EthernetNetwork<'a> {
             _ => b"HTTP/1.1 500 Internal Server Error\r\n",
         };
         append_http_bytes(&mut header, &mut header_len, status);
-        append_http_bytes(&mut header, &mut header_len, b"Content-Type: text/plain; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: ");
+        let content_type = if request_kind <= 1 {
+            b"Content-Type: text/html; charset=utf-8\r\n" as &[u8]
+        } else {
+            b"Content-Type: text/plain; charset=utf-8\r\n"
+        };
+        append_http_bytes(&mut header, &mut header_len, content_type);
+        append_http_bytes(&mut header, &mut header_len, b"Connection: keep-alive\r\nContent-Length: ");
         append_http_decimal(&mut header, &mut header_len, body.len());
         append_http_bytes(&mut header, &mut header_len, b"\r\n\r\n");
         let _ = socket.send_slice(&header[..header_len]);
