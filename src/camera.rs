@@ -260,11 +260,11 @@ pub(crate) const CDC_HTTP_RX_BYTES: usize = 4096;
 pub(crate) const CDC_HTTP_BODY_BYTES: usize = 24_528;
 pub(crate) const CDC_HTTP_STORAGE_BYTES: usize =
     CDC_HTTP_RX_BYTES + CDC_HTTP_BODY_BYTES;
-const CDC_ALT_STACK_BYTES: usize = CANVAS_TAIL_BYTES;
+const CDC_ALT_STACK_BYTES: usize = 8 * 1024;
 const CDC_ALT_STACK_BOTTOM: usize = CANVAS_MAIN_BYTES - CDC_ALT_STACK_BYTES;
 
-// Receiver, DMA ring and HTTP buffers occupy the low end; the alternate
-// stack grows down from the high end. Keep all allocations disjoint.
+// Receiver, DMA ring and HTTP buffers occupy the low end; the 8 KiB
+// filesystem alternate stack grows down from the high end.
 const _: () = assert!(
     CDC_RECEIVER_STORAGE_BYTES
         + CDC_ETHERNET_DMA_STORAGE_BYTES
