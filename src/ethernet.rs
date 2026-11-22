@@ -423,6 +423,7 @@ impl RxToken for EthernetRxToken<'_> {
         unsafe {
             let buffer = addr_of_mut!(RX_BUFFERS).cast::<FrameBuffer>().add(self.index);
             let bytes = core::slice::from_raw_parts((*buffer).0.as_ptr(), self.length);
+            record_rx_protocol(bytes);
             let result = f(bytes);
             RX_FRAMES.fetch_add(1, Ordering::Relaxed);
             let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.index);
@@ -466,6 +467,42 @@ impl TxToken for EthernetTxToken<'_> {
 static RX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static TX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static RX_ERRORS: AtomicU32 = AtomicU32::new(0);
+static RX_ARP_FRAMES: AtomicU32 = AtomicU32::new(0);
+static RX_IPV4_FRAMES: AtomicU32 = AtomicU32::new(0);
+static RX_DHCP_UDP_FRAMES: AtomicU32 = AtomicU32::new(0);
+static DHCP_CONFIGURED_EVENTS: AtomicU32 = AtomicU32::new(0);
+static DHCP_DECONFIGURED_EVENTS: AtomicU32 = AtomicU32::new(0);
+
+fn record_rx_protocol(bytes: &[u8]) {
+    if bytes.len() < 14 { return; }
+    let ether_type = u16::from_be_bytes([bytes[12], bytes[13]]);
+    if ether_type == 0x0806 {
+        RX_ARP_FRAMES.fetch_add(1, Ordering::Relaxed);
+    } else if ether_type == 0x0800 {
+        RX_IPV4_FRAMES.fetch_add(1, Ordering::Relaxed);
+        if bytes.len() < 34 || bytes[23] != 17 { return; }
+        let ip_header_len = ((bytes[14] & 0x0f) as usize) * 4;
+        if ip_header_len < 20 { return; }
+        let udp = 14 + ip_header_len;
+        if bytes.len() < udp + 8 { return; }
+        let src = u16::from_be_bytes([bytes[udp], bytes[udp + 1]]);
+        let dst = u16::from_be_bytes([bytes[udp + 2], bytes[udp + 3]]);
+        if (src == 67 && dst == 68) || (src == 68 && dst == 67) {
+            RX_DHCP_UDP_FRAMES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Protocol counters for frames accepted from the RX descriptors.
+pub fn network_diagnostic() -> (u32, u32, u32, u32, u32) {
+    (
+        RX_ARP_FRAMES.load(Ordering::Relaxed),
+        RX_IPV4_FRAMES.load(Ordering::Relaxed),
+        RX_DHCP_UDP_FRAMES.load(Ordering::Relaxed),
+        DHCP_CONFIGURED_EVENTS.load(Ordering::Relaxed),
+        DHCP_DECONFIGURED_EVENTS.load(Ordering::Relaxed),
+    )
+}
 
 /// Snapshot DMA engine and RX descriptor state without allocating memory.
 pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
@@ -550,6 +587,7 @@ impl<'a> EthernetNetwork<'a> {
         if let Some(event) = self.sockets.get_mut::<smoltcp::socket::dhcpv4::Socket>(self.dhcp_handle).poll() {
             match event {
                 DhcpEvent::Configured(config) => {
+                    DHCP_CONFIGURED_EVENTS.fetch_add(1, Ordering::Relaxed);
                     let address = config.address;
                     let router = config.router;
                     self.iface.update_ip_addrs(|addrs| {
@@ -564,6 +602,7 @@ impl<'a> EthernetNetwork<'a> {
                     IPV4_PREFIX.store(address.prefix_len(), Ordering::Release);
                 }
                 DhcpEvent::Deconfigured => {
+                    DHCP_DECONFIGURED_EVENTS.fetch_add(1, Ordering::Relaxed);
                     self.iface.update_ip_addrs(|addrs| addrs.clear());
                     self.iface.routes_mut().remove_default_ipv4_route();
                     IPV4_ADDRESS.store(0, Ordering::Release);
