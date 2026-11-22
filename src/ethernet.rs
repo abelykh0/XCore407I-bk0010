@@ -182,7 +182,7 @@ pub fn initialize() -> bool {
         write_volatile((*pac::ETHERNET_DMA::PTR).dmardlar().as_ptr(), rx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr(), tx_desc as u32);
         (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| unsafe { w.bits(0) });
-        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| unsafe { w.bits(DMA_IRQ_CLEAR_MASK) });
+        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| w.bits(DMA_IRQ_CLEAR_MASK));
 
         // Locally administered unicast address 02:12:09:40:70:01.
         write_volatile((*pac::ETHERNET_MAC::PTR).maca0lr().as_ptr(), 0x4009_1202);
@@ -213,7 +213,7 @@ pub fn initialize() -> bool {
                 .cstf().set_bit();
             unsafe {
                 w.bl().bits(0);
-                w.ifg().bits(0);
+                w.ifg().bits(0)
             }
         });
         mac_register_sync((*pac::ETHERNET_MAC::PTR).maccr().as_ptr());
@@ -255,7 +255,7 @@ pub fn enable_dma_interrupts() {
     unsafe {
         // Clear stale write-one-to-clear events before enabling sources.
         (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| unsafe { w.bits(DMA_IRQ_CLEAR_MASK) });
-        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| unsafe { w.bits(DMA_IRQ_ENABLE_MASK) });
+        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| w.bits(DMA_IRQ_ENABLE_MASK));
     }
 }
 
@@ -265,7 +265,7 @@ pub fn on_dma_interrupt() {
     unsafe {
         let pending = (*pac::ETHERNET_DMA::PTR).dmasr().read().bits() & DMA_IRQ_CLEAR_MASK;
         if pending != 0 {
-            (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| unsafe { w.bits(pending) });
+            (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| w.bits(pending));
         }
     }
 }
@@ -383,7 +383,7 @@ fn mdio_read(phy_address: u8, register: u8) -> Option<u16> {
             | ((register as u32) << 6)
             | MII_CR_DIV_102
             | 1;
-        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| unsafe { w.bits(operation) });
+        (*pac::ETHERNET_MAC::PTR).macmiiar().write(|w| w.bits(operation));
         remaining = MDIO_TIMEOUT;
         while (*pac::ETHERNET_MAC::PTR).macmiiar().read().mb().bit_is_set() {
             if remaining == 0 { return None; }
