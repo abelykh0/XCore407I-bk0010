@@ -54,7 +54,7 @@ const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
 // Keep smoltcp socket storage in SRAM .bss, not the constrained main stack.
 static mut ETHERNET_SOCKET_STORAGE: [smoltcp::iface::SocketStorage<'static>; 2] =
-    [smoltcp::iface::SocketStorage::EMPTY; 2];
+    [smoltcp::iface::SocketStorage::EMPTY, smoltcp::iface::SocketStorage::EMPTY];
 
 static FILE_BROWSER_VIDEO_RENDERER: AtomicPtr<Nv12DemoImage> =
     AtomicPtr::new(ptr::null_mut());
