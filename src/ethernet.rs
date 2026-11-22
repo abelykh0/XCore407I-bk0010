@@ -496,6 +496,7 @@ pub struct HttpUploadState {
     final_path_len: usize,
     total: usize,
     received: usize,
+    rx_len: usize,
 }
 
 impl HttpUploadState {
@@ -508,6 +509,7 @@ impl HttpUploadState {
             final_path_len: 0,
             total: 0,
             received: 0,
+            rx_len: 0,
         }
     }
 
@@ -1029,7 +1031,7 @@ impl<'a> EthernetNetwork<'a> {
             )
         };
 
-        let recv_result = socket.recv(|data| {
+        let parse_request = |data: &[u8]| {
             HTTP_POLL_DIAG_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
             HTTP_POLL_DIAG_RECV_BYTES.store(data.len() as u32, Ordering::Release);
             let Some(separator) = data.windows(4).position(|window| window == b"\r\n\r\n") else {
@@ -1123,7 +1125,34 @@ impl<'a> EthernetNetwork<'a> {
             request_kind = if line.starts_with(b"GET / ") { 0 } else { 3 };
             request_ready = true;
             (header_len, true)
-        });
+        };
+
+        // smoltcp recv() exposes only the current contiguous ring-buffer slice.
+        // Accumulate successive slices so a wrapped TCP request is parsed as one
+        // complete HTTP message. Keep partial requests across polling passes.
+        while http_upload.rx_len < HTTP_RX_BUFFER_SIZE {
+            let tail = &mut upload_body[http_upload.rx_len..HTTP_RX_BUFFER_SIZE];
+            match socket.recv(|data| {
+                let count = data.len().min(tail.len());
+                tail[..count].copy_from_slice(&data[..count]);
+                (count, count)
+            }) {
+                Ok(count) if count != 0 => {
+                    http_upload.rx_len += count;
+                    HTTP_POLL_DIAG_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
+                    HTTP_POLL_DIAG_RECV_BYTES.store(http_upload.rx_len as u32, Ordering::Release);
+                }
+                _ => break,
+            }
+        }
+        let (consumed, request_ready) = parse_request(&upload_body[..http_upload.rx_len]);
+        if request_ready {
+            http_upload.rx_len = http_upload.rx_len.saturating_sub(consumed);
+            if http_upload.rx_len != 0 {
+                // This server handles one request at a time and does not pipeline.
+                http_upload.rx_len = 0;
+            }
+        }
 
         HTTP_POLL_DIAG_QUEUE.store(socket.recv_queue() as u32, Ordering::Release);
         HTTP_POLL_DIAG_CAPACITY.store(socket.recv_capacity() as u32, Ordering::Release);
@@ -1141,9 +1170,6 @@ impl<'a> EthernetNetwork<'a> {
             smoltcp::socket::tcp::State::TimeWait => 10,
         };
         HTTP_POLL_DIAG_STATE.store(tcp_state, Ordering::Release);
-        if recv_result.is_err() {
-            HTTP_POLL_DIAG_STAGE.store(7, Ordering::Release);
-        }
         if !request_ready || !socket.can_send() {
             if request_ready { HTTP_POLL_DIAG_STAGE.store(8, Ordering::Release); }
             return;
@@ -1257,5 +1283,6 @@ impl<'a> EthernetNetwork<'a> {
             HTTP_UPLOAD_DIAG_STAGE.store(10, Ordering::Release);
         }
         HTTP_POLL_DIAG_STAGE.store(10, Ordering::Release);
+        http_upload.rx_len = 0;
     }
 }
