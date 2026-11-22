@@ -1024,6 +1024,7 @@ impl<'a> EthernetNetwork<'a> {
         let mut upload_offset = 0usize;
         let mut upload_total = 0usize;
         let mut upload_len = 0usize;
+        let mut upload_body_offset = 0usize;
         let upload_body = unsafe {
             core::slice::from_raw_parts_mut(
                 addr_of_mut!((*http_storage_ptr()).body).cast::<u8>(),
@@ -1031,7 +1032,7 @@ impl<'a> EthernetNetwork<'a> {
             )
         };
 
-        let parse_request = |data: &[u8]| {
+        let mut parse_request = |data: &[u8]| {
             HTTP_POLL_DIAG_RECV_COUNT.fetch_add(1, Ordering::Relaxed);
             HTTP_POLL_DIAG_RECV_BYTES.store(data.len() as u32, Ordering::Release);
             let Some(separator) = data.windows(4).position(|window| window == b"\r\n\r\n") else {
@@ -1109,7 +1110,7 @@ impl<'a> EthernetNetwork<'a> {
                 {
                     request_kind = 3;
                 } else {
-                    upload_body[..upload_len].copy_from_slice(&data[header_len..header_len + upload_len]);
+                    upload_body_offset = header_len;
                     request_kind = 2;
                 }
                 HTTP_UPLOAD_DIAG_OFFSET.store(upload_offset as u32, Ordering::Release);
@@ -1145,14 +1146,7 @@ impl<'a> EthernetNetwork<'a> {
                 _ => break,
             }
         }
-        let (consumed, request_ready) = parse_request(&upload_body[..http_upload.rx_len]);
-        if request_ready {
-            http_upload.rx_len = http_upload.rx_len.saturating_sub(consumed);
-            if http_upload.rx_len != 0 {
-                // This server handles one request at a time and does not pipeline.
-                http_upload.rx_len = 0;
-            }
-        }
+        let (_, request_ready) = parse_request(&upload_body[..http_upload.rx_len]);
 
         HTTP_POLL_DIAG_QUEUE.store(socket.recv_queue() as u32, Ordering::Release);
         HTTP_POLL_DIAG_CAPACITY.store(socket.recv_capacity() as u32, Ordering::Release);
@@ -1241,7 +1235,7 @@ impl<'a> EthernetNetwork<'a> {
             }
             2 => {
                 let name = &upload_name[..upload_name_len];
-                if http_upload.write_chunk(filesystem, name, upload_offset, upload_total, &upload_body[..upload_len]) {
+                if http_upload.write_chunk(filesystem, name, upload_offset, upload_total, &upload_body[upload_body_offset..upload_body_offset + upload_len]) {
                     b"OK"
                 } else {
                     status_code = 500;
