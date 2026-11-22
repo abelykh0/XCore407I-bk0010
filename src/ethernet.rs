@@ -631,7 +631,7 @@ impl<'a> EthernetNetwork<'a> {
             let mut offset = 0usize;
             let received = socket.recv(|data| {
                 const API_PREFIX: &[u8] = b"GET /api/files?offset=";
-                if let Some(line_end) = data.iter().position(|&byte| byte == b'\\n') {
+                if let Some(line_end) = data.iter().position(|&byte| byte == b'\n') {
                     let line = &data[..line_end];
                     if let Some(rest) = line.strip_prefix(API_PREFIX) {
                         api_request = true;
@@ -679,7 +679,7 @@ impl<'a> EthernetNetwork<'a> {
                             emitted += 1;
 
                             let name = path.strip_prefix(b"/").unwrap_or(path);
-                            let name = name.strip_suffix(b"\\0").unwrap_or(name);
+                            let name = name.strip_suffix(b"\0").unwrap_or(name);
                             // Bound worst-case HTML expansion while retaining useful names.
                             let mut name_len = core::cmp::min(name.len(), 32);
                             while name_len > 0 && name_len < name.len()
