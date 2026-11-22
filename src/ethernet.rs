@@ -101,6 +101,8 @@ pub struct PhyStatus {
 
 static MAC_DMA_READY: AtomicBool = AtomicBool::new(false);
 static DMA_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
+static DMA_STATUS_SEEN: AtomicU32 = AtomicU32::new(0);
+static MAC_DEBUG_SEEN: AtomicU32 = AtomicU32::new(0);
 
 /// Initialize the RMII MAC and DMA rings after board RMII pins are configured.
 /// Returns false if the expected DP83848 PHY cannot be read.
@@ -234,6 +236,7 @@ pub fn enable_dma_interrupts() {
 pub fn on_dma_interrupt() {
     unsafe {
         let status = read_volatile(ETH_DMASR);
+        DMA_STATUS_SEEN.fetch_or(status & 0x0001_ffff, Ordering::Relaxed);
         let pending = status & DMA_IRQ_CLEAR_MASK;
         if pending != 0 {
             write_volatile(ETH_DMASR, pending);
@@ -245,6 +248,14 @@ pub fn on_dma_interrupt() {
 /// Number of Ethernet DMA interrupts serviced by the CPU.
 pub fn dma_interrupt_count() -> u32 {
     DMA_IRQ_COUNT.load(Ordering::Relaxed)
+}
+
+/// Sticky DMA status events and MAC datapath activity observed since startup.
+pub fn diagnostic_history() -> (u32, u32) {
+    (
+        DMA_STATUS_SEEN.load(Ordering::Relaxed),
+        MAC_DEBUG_SEEN.load(Ordering::Relaxed),
+    )
 }
 
 /// Whether MAC/DMA initialization completed successfully.
@@ -581,6 +592,10 @@ impl<'a> EthernetNetwork<'a> {
     pub fn poll(&mut self, now_ms: u32) {
         if !is_initialized() {
             return;
+        }
+
+        unsafe {
+            MAC_DEBUG_SEEN.fetch_or(read_volatile(ETH_MACDBGR), Ordering::Relaxed);
         }
 
         let timestamp = Instant::from_millis(now_ms as i64);
