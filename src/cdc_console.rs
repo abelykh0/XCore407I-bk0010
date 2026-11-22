@@ -1246,6 +1246,11 @@ pub fn service(
                             write_hex_u32(pmc);
                             write_status(b" MACDBG:0x");
                             write_hex_u32(macdbg);
+                            let (dma_seen, mac_seen) = crate::ethernet::diagnostic_history();
+                            write_status(b" HIST SR/DBG:0x");
+                            write_hex_u32(dma_seen);
+                            write_status(b"/0x");
+                            write_hex_u32(mac_seen);
                             write_status(b" IRQ:");
                             write_decimal(crate::ethernet::dma_interrupt_count() as usize);
                             write_status(b"\r\nIPv4: ");
