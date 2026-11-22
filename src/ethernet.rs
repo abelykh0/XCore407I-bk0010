@@ -29,6 +29,26 @@ const HTTP_RX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_RX_BYTES;
 const HTTP_BODY_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_BODY_BYTES;
 const HTTP_DIRECTORY_PAGE_SIZE: usize = 128;
 
+// Last HTTP upload request/write/response stage, exposed through CDC STATUS.
+static HTTP_UPLOAD_DIAG_STAGE: AtomicU8 = AtomicU8::new(0);
+static HTTP_UPLOAD_DIAG_OFFSET: AtomicU32 = AtomicU32::new(0);
+static HTTP_UPLOAD_DIAG_TOTAL: AtomicU32 = AtomicU32::new(0);
+static HTTP_UPLOAD_DIAG_LENGTH: AtomicU32 = AtomicU32::new(0);
+static HTTP_UPLOAD_DIAG_WRITTEN: AtomicU32 = AtomicU32::new(0);
+static HTTP_UPLOAD_DIAG_SEND_FLAGS: AtomicU32 = AtomicU32::new(0);
+
+/// Snapshot of the most recent HTTP upload request and its progress.
+pub fn http_upload_diagnostics() -> (u8, u32, u32, u32, u32, u32) {
+    (
+        HTTP_UPLOAD_DIAG_STAGE.load(Ordering::Acquire),
+        HTTP_UPLOAD_DIAG_OFFSET.load(Ordering::Acquire),
+        HTTP_UPLOAD_DIAG_TOTAL.load(Ordering::Acquire),
+        HTTP_UPLOAD_DIAG_LENGTH.load(Ordering::Acquire),
+        HTTP_UPLOAD_DIAG_WRITTEN.load(Ordering::Acquire),
+        HTTP_UPLOAD_DIAG_SEND_FLAGS.load(Ordering::Acquire),
+    )
+}
+
 const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><input id=u type=file><button id=b type=button>Upload</button><p id=p role=status></p><ul id=f></ul><script>
 let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s'),u=document.getElementById('u'),p=document.getElementById('p');async function load(){o=0;count=0;f.textContent='';try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),ul=d.querySelector('ul');if(!ul)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',ul.innerHTML);count+=ul.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded).';}}document.getElementById('b').onclick=async()=>{let file=u.files[0];if(!file){p.textContent='Choose a file first.';return;}if(!/^[A-Za-z0-9._-]{1,64}$/.test(file.name)){p.textContent='Use a filename with 1-64 letters, digits, dot, underscore or hyphen.';return;}try{let chunk=2048;for(let offset=0;offset<file.size||offset===0;){let part=file.slice(offset,Math.min(offset+chunk,file.size));p.textContent='Uploading '+file.name+': '+Math.min(offset+part.size,file.size)+' / '+file.size+' bytes';let r=await fetch('/api/upload?name='+encodeURIComponent(file.name)+'&offset='+offset+'&total='+file.size,{method:'POST',body:part});if(!r.ok)throw Error(await r.text());offset+=part.size;if(file.size===0)break;}p.textContent='Upload complete: '+file.name;await load();}catch(e){p.textContent='Upload failed: '+e.message;}};load()</script>"#;
 
@@ -493,6 +513,8 @@ impl HttpUploadState {
     ) -> bool {
         use littlefs2::path::Path;
 
+        HTTP_UPLOAD_DIAG_STAGE.store(2, Ordering::Release);
+        HTTP_UPLOAD_DIAG_WRITTEN.store(0, Ordering::Release);
         if name.is_empty() || name.len() > 64 || total > filesystem.total_space()
             || offset > total || data.len() > total.saturating_sub(offset)
         {
@@ -557,14 +579,18 @@ impl HttpUploadState {
                 _ => { self.abort(filesystem); return false; }
             };
             written += count;
+            HTTP_UPLOAD_DIAG_WRITTEN.store(written as u32, Ordering::Release);
         }
         self.received += data.len();
+        HTTP_UPLOAD_DIAG_STAGE.store(3, Ordering::Release);
 
         if self.received == self.total {
+            HTTP_UPLOAD_DIAG_STAGE.store(4, Ordering::Release);
             if unsafe { self.allocation.close(filesystem) }.is_err() {
                 self.abort(filesystem);
                 return false;
             }
+            HTTP_UPLOAD_DIAG_STAGE.store(5, Ordering::Release);
             let Ok(temp) = Path::from_bytes_with_nul(&self.temp_path[..self.temp_path_len]) else {
                 self.abort(filesystem); return false;
             };
@@ -574,9 +600,11 @@ impl HttpUploadState {
             if filesystem.exists(final_path) && filesystem.remove(final_path).is_err() {
                 self.abort(filesystem); return false;
             }
+            HTTP_UPLOAD_DIAG_STAGE.store(6, Ordering::Release);
             if filesystem.rename(temp, final_path).is_err() {
                 self.abort(filesystem); return false;
             }
+            HTTP_UPLOAD_DIAG_STAGE.store(7, Ordering::Release);
             self.temp_path_len = 0;
             self.final_path_len = 0;
             self.total = 0;
@@ -1031,6 +1059,12 @@ impl<'a> EthernetNetwork<'a> {
                     upload_body[..upload_len].copy_from_slice(&data[header_len..header_len + upload_len]);
                     request_kind = 2;
                 }
+                HTTP_UPLOAD_DIAG_OFFSET.store(upload_offset as u32, Ordering::Release);
+                HTTP_UPLOAD_DIAG_TOTAL.store(upload_total as u32, Ordering::Release);
+                HTTP_UPLOAD_DIAG_LENGTH.store(upload_len as u32, Ordering::Release);
+                HTTP_UPLOAD_DIAG_WRITTEN.store(0, Ordering::Release);
+                HTTP_UPLOAD_DIAG_SEND_FLAGS.store(0, Ordering::Release);
+                HTTP_UPLOAD_DIAG_STAGE.store(1, Ordering::Release);
                 request_ready = true;
                 return (header_len + content_length, true);
             }
@@ -1139,7 +1173,16 @@ impl<'a> EthernetNetwork<'a> {
         append_http_bytes(&mut header, &mut header_len, b"Connection: keep-alive\r\nContent-Length: ");
         append_http_decimal(&mut header, &mut header_len, body.len());
         append_http_bytes(&mut header, &mut header_len, b"\r\n\r\n");
-        let _ = socket.send_slice(&header[..header_len]);
-        let _ = socket.send_slice(body);
+        if request_kind == 2 { HTTP_UPLOAD_DIAG_STAGE.store(8, Ordering::Release); }
+        let header_sent = socket.send_slice(&header[..header_len]).is_ok();
+        if request_kind == 2 {
+            HTTP_UPLOAD_DIAG_SEND_FLAGS.store(header_sent as u32, Ordering::Release);
+            HTTP_UPLOAD_DIAG_STAGE.store(9, Ordering::Release);
+        }
+        let body_sent = socket.send_slice(body).is_ok();
+        if request_kind == 2 {
+            HTTP_UPLOAD_DIAG_SEND_FLAGS.store((header_sent as u32) | ((body_sent as u32) << 1), Ordering::Release);
+            HTTP_UPLOAD_DIAG_STAGE.store(10, Ordering::Release);
+        }
     }
 }
