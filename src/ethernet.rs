@@ -28,9 +28,7 @@ const HTTP_RX_BUFFER_SIZE: usize = 768;
 const HTTP_TX_BUFFER_SIZE: usize = 2304;
 const HTTP_BODY_BUFFER_SIZE: usize = 768;
 const HTTP_DIRECTORY_PAGE_SIZE: usize = 3;
-static mut HTTP_RX_BUFFER: [u8; HTTP_RX_BUFFER_SIZE] = [0; HTTP_RX_BUFFER_SIZE];
-static mut HTTP_TX_BUFFER: [u8; HTTP_TX_BUFFER_SIZE] = [0; HTTP_TX_BUFFER_SIZE];
-static mut HTTP_BODY_BUFFER: [u8; HTTP_BODY_BUFFER_SIZE] = [0; HTTP_BODY_BUFFER_SIZE];
+
 const HTTP_PAGE: &[u8] = br#"<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>LittleFS</title><h1>LittleFS files</h1><p id=s role=status>Loading files...</p><input id=u type=file><button id=b type=button>Upload</button><p id=p role=status></p><ul id=f></ul><script>
 let o=0,count=0,f=document.getElementById('f'),s=document.getElementById('s'),u=document.getElementById('u'),p=document.getElementById('p');async function load(){o=0;count=0;f.textContent='';try{let more=true;while(more){s.textContent='Loading files... ('+count+' loaded)';let r=await fetch('/api/files?offset='+o);if(!r.ok)throw Error('HTTP '+r.status);let d=new DOMParser().parseFromString(await r.text(),'text/html'),ul=d.querySelector('ul');if(!ul)throw Error('Invalid response');f.insertAdjacentHTML('beforeend',ul.innerHTML);count+=ul.children.length;let n=d.querySelector('[data-next]');more=!!n;if(n)o=Number(n.dataset.next);if(more)await new Promise(resolve=>setTimeout(resolve,0));}s.textContent=count+' files loaded.';}catch(e){s.textContent='Could not finish loading files ('+count+' loaded).';}}document.getElementById('b').onclick=async()=>{let file=u.files[0];if(!file){p.textContent='Choose a file first.';return;}if(!/^[A-Za-z0-9._-]{1,64}$/.test(file.name)){p.textContent='Use a filename with 1-64 letters, digits, dot, underscore or hyphen.';return;}try{let chunk=256;for(let offset=0;offset<file.size||offset===0;){let part=file.slice(offset,Math.min(offset+chunk,file.size));p.textContent='Uploading '+file.name+': '+Math.min(offset+part.size,file.size)+' / '+file.size+' bytes';let r=await fetch('/api/upload?name='+encodeURIComponent(file.name)+'&offset='+offset+'&total='+file.size,{method:'POST',body:part});if(!r.ok)throw Error(await r.text());offset+=part.size;if(file.size===0)break;}p.textContent='Upload complete: '+file.name;await load();}catch(e){p.textContent='Upload failed: '+e.message;}};load()</script>"#;
 
@@ -66,17 +64,47 @@ struct DmaDescriptor {
 #[repr(C, align(4))]
 struct FrameBuffer([u8; FRAME_CAPACITY]);
 
-// These statics are deliberately not placed in the CCM section.
-static mut RX_DESCRIPTORS: [DmaDescriptor; RX_COUNT] = [
-    DmaDescriptor { words: [0; 4] },
-    DmaDescriptor { words: [0; 4] },
-];
-static mut RX_BUFFERS: [FrameBuffer; RX_COUNT] = [
-    FrameBuffer([0; FRAME_CAPACITY]),
-    FrameBuffer([0; FRAME_CAPACITY]),
-];
-static mut TX_DESCRIPTOR: DmaDescriptor = DmaDescriptor { words: [0; 4] };
-static mut TX_BUFFER: FrameBuffer = FrameBuffer([0; FRAME_CAPACITY]);
+// DMA-visible descriptors and packet buffers are carved from DEMO_CANVAS
+// in main SRAM. CPU-only TCP and HTTP storage is carved from DEMO_CANVAS_TAIL.
+#[repr(C, align(8))]
+struct EthernetDmaStorage {
+    rx_descriptors: [DmaDescriptor; RX_COUNT],
+    rx_buffers: [FrameBuffer; RX_COUNT],
+    tx_descriptor: DmaDescriptor,
+    tx_buffer: FrameBuffer,
+}
+
+#[repr(C, align(8))]
+struct EthernetCpuStorage {
+    socket_storage: [smoltcp::iface::SocketStorage<'static>; 2],
+    http_rx: [u8; HTTP_RX_BUFFER_SIZE],
+    http_tx: [u8; HTTP_TX_BUFFER_SIZE],
+    http_body: [u8; HTTP_BODY_BUFFER_SIZE],
+}
+
+const _: () = assert!(core::mem::size_of::<EthernetDmaStorage>() <= crate::camera::CDC_ETHERNET_DMA_STORAGE_BYTES);
+const _: () = assert!(core::mem::size_of::<EthernetCpuStorage>() <= crate::camera::CANVAS_TAIL_BYTES);
+
+#[inline]
+fn dma_storage_ptr() -> *mut EthernetDmaStorage {
+    crate::camera::cdc_ethernet_dma_storage_ptr().cast()
+}
+
+#[inline]
+fn cpu_storage_ptr() -> *mut EthernetCpuStorage {
+    crate::camera::cdc_ethernet_cpu_storage_ptr().cast()
+}
+
+pub fn socket_storage() -> &'static mut [smoltcp::iface::SocketStorage<'static>] {
+    unsafe {
+        let storage = cpu_storage_ptr();
+        core::ptr::addr_of_mut!((*storage).socket_storage).write([
+            smoltcp::iface::SocketStorage::EMPTY,
+            smoltcp::iface::SocketStorage::EMPTY,
+        ]);
+        &mut *core::ptr::addr_of_mut!((*storage).socket_storage)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct PhyStatus {
@@ -137,8 +165,9 @@ pub fn initialize() -> bool {
 
         // Software-owned, chained descriptor rings. Enhanced descriptors are
         // disabled; each descriptor is the four-word basic format from RM0090.
-        let rx_desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>();
-        let rx_buf = addr_of_mut!(RX_BUFFERS).cast::<FrameBuffer>();
+        let dma = dma_storage_ptr();
+        let rx_desc = addr_of_mut!((*dma).rx_descriptors).cast::<DmaDescriptor>();
+        let rx_buf = addr_of_mut!((*dma).rx_buffers).cast::<FrameBuffer>();
         for i in 0..RX_COUNT {
             let desc = rx_desc.add(i);
             let next = rx_desc.add((i + 1) % RX_COUNT);
@@ -150,8 +179,8 @@ pub fn initialize() -> bool {
             write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
         }
 
-        let tx_desc = addr_of_mut!(TX_DESCRIPTOR);
-        let tx_buf = addr_of_mut!(TX_BUFFER);
+        let tx_desc = addr_of_mut!((*dma).tx_descriptor);
+        let tx_buf = addr_of_mut!((*dma).tx_buffer);
         // In the STM32F4 basic descriptor format, TCH is TDES0 bit 20.
         // TDES1 holds only the buffer byte counts.
         write_volatile(addr_of_mut!((*tx_desc).words[0]), TX_DESC_TCH);
@@ -579,7 +608,7 @@ impl EthernetDevice {
 
     fn rx_ready(&mut self) -> Option<(usize, usize)> {
         unsafe {
-            let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.rx_index);
+            let desc = addr_of_mut!((*dma_storage_ptr()).rx_descriptors).cast::<DmaDescriptor>().add(self.rx_index);
             let status = read_volatile(addr_of_mut!((*desc).words[0]));
             if status & DESC_OWN != 0 { return None; }
             let length = ((status >> RX_DESC_FL_SHIFT) & 0x3fff) as usize;
@@ -596,7 +625,7 @@ impl EthernetDevice {
     }
 
     fn tx_ready() -> bool {
-        unsafe { read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[0])) & DESC_OWN == 0 }
+        unsafe { read_volatile(addr_of_mut!((*dma_storage_ptr()).tx_descriptor.words[0])) & DESC_OWN == 0 }
     }
 }
 
@@ -645,10 +674,10 @@ pub struct EthernetRxToken<'a> {
 impl RxToken for EthernetRxToken<'_> {
     fn consume<R, F>(self, f: F) -> R where F: FnOnce(&[u8]) -> R {
         unsafe {
-            let buffer = addr_of_mut!(RX_BUFFERS).cast::<FrameBuffer>().add(self.index);
+            let buffer = addr_of_mut!((*dma_storage_ptr()).rx_buffers).cast::<FrameBuffer>().add(self.index);
             let bytes = core::slice::from_raw_parts((*buffer).0.as_ptr(), self.length);
             let result = f(bytes);
-            let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.index);
+            let desc = addr_of_mut!((*dma_storage_ptr()).rx_descriptors).cast::<DmaDescriptor>().add(self.index);
             core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
             write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
             cortex_m::asm::dsb();
@@ -666,21 +695,21 @@ impl TxToken for EthernetTxToken<'_> {
     fn consume<R, F>(self, length: usize, f: F) -> R where F: FnOnce(&mut [u8]) -> R {
         assert!(length <= FRAME_CAPACITY);
         unsafe {
-            let buffer = addr_of_mut!(TX_BUFFER);
+            let buffer = addr_of_mut!((*dma_storage_ptr()).tx_buffer);
             let bytes = core::slice::from_raw_parts_mut((*buffer).0.as_mut_ptr(), length);
             let result = f(bytes);
             // TDES1 holds the buffer byte count; TCH is in TDES0 on STM32F4.
-            write_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1]), length as u32);
+            write_volatile(addr_of_mut!((*dma_storage_ptr()).tx_descriptor.words[1]), length as u32);
             core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
             cortex_m::asm::dsb();
             // Give the chained descriptor to DMA only after its buffer is ready.
             write_volatile(
-                addr_of_mut!(TX_DESCRIPTOR.words[0]),
+                addr_of_mut!((*dma_storage_ptr()).tx_descriptor.words[0]),
                 DESC_OWN | TX_DESC_TCH | TX_DESC_FS | TX_DESC_LS | TX_DESC_IC,
             );
             // The STM32F4 HAL writes the next free TX descriptor address
             // to DMATPDR when issuing transmit poll demand.
-            write_volatile((*pac::ETHERNET_DMA::PTR).dmatpdr().as_ptr(), addr_of_mut!(TX_DESCRIPTOR) as u32);
+            write_volatile((*pac::ETHERNET_DMA::PTR).dmatpdr().as_ptr(), addr_of_mut!((*dma_storage_ptr()).tx_descriptor) as u32);
             result
         }
     }
@@ -724,16 +753,18 @@ impl<'a> EthernetNetwork<'a> {
         let mut sockets = SocketSet::new(storage);
         let dhcp_handle = sockets.add(Dhcpv4Socket::new());
 
-        // The HTTP buffers are static SRAM objects, not stack allocations.
+        // TCP and HTTP buffers live in the CCM tail arena. They are CPU-only;
+        // only the descriptor ring and packet buffers need DMA-accessible SRAM.
+        let cpu = cpu_storage_ptr();
         let http_rx: &'static mut [u8] = unsafe {
             core::slice::from_raw_parts_mut(
-                addr_of_mut!(HTTP_RX_BUFFER).cast::<u8>(),
+                addr_of_mut!((*cpu).http_rx).cast::<u8>(),
                 HTTP_RX_BUFFER_SIZE,
             )
         };
         let http_tx: &'static mut [u8] = unsafe {
             core::slice::from_raw_parts_mut(
-                addr_of_mut!(HTTP_TX_BUFFER).cast::<u8>(),
+                addr_of_mut!((*cpu).http_tx).cast::<u8>(),
                 HTTP_TX_BUFFER_SIZE,
             )
         };
@@ -815,7 +846,7 @@ impl<'a> EthernetNetwork<'a> {
         let mut upload_len = 0usize;
         let upload_body = unsafe {
             core::slice::from_raw_parts_mut(
-                addr_of_mut!(HTTP_BODY_BUFFER).cast::<u8>(),
+                addr_of_mut!((*cpu_storage_ptr()).http_body).cast::<u8>(),
                 HTTP_BODY_BUFFER_SIZE,
             )
         };
