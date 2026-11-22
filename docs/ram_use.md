@@ -31,7 +31,7 @@ The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure 
 
 ## CDC mode — UVC static page + CDC + Ethernet HTTP
 
-CDC mode does not run the emulator. It reuses the same physical backing-store allocation. DEMO_CANVAS holds the receiver, DMA ring, HTTP buffers and alternate stack in disjoint ranges. DEMO_CANVAS_TAIL holds CPU-only smoltcp socket metadata.
+CDC mode does not run the emulator. It reuses the same physical backing-store allocation. DEMO_CANVAS holds the receiver, DMA ring, HTTP RX/body buffers and the 8 KiB filesystem alternate stack in disjoint ranges. DEMO_CANVAS_TAIL holds CPU-only smoltcp socket metadata and the TCP TX buffer.
 
 | Block | Region | Size | Purpose |
 |---|---|---:|---|
@@ -51,7 +51,7 @@ CDC mode does not run the emulator. It reuses the same physical backing-store al
 | Dhara C page buffer | Main SRAM, .bss | 2,048 B | One NAND page in csrc/dhara_adapter.c |
 | ZMODEM send buffer | State/stack | 1,024 B | Embedded in CDC ZMODEM state; receiver payload is the separate 4 KiB canvas allocation |
 
-All Ethernet packet, descriptor, socket and HTTP buffers are carved from the reusable canvas backing store. The DMA ring remains in DMA-accessible main SRAM. HTTP RX and body storage use the entire 28,624-byte gap between the DMA ring and alternate stack: 4 KiB RX and 24,528 B body. The TCP TX buffer was moved into CCM immediately after the socket metadata and now uses the remaining tail (about 46 KiB). The directory response page size is 128 entries instead of 3. The upload chunk size and browser chunk size remain 2 KiB. No Ethernet/TCP/HTTP buffers remain as independent .bss statics. The small HTTP response-header and upload-name scratch arrays are automatic locals on the CDC alternate stack.
+All Ethernet packet, descriptor, socket and HTTP buffers are carved from the reusable canvas backing store. The DMA ring remains in DMA-accessible main SRAM. HTTP RX and body storage use the entire 67,280-byte gap between the DMA ring and the 8 KiB alternate stack: 4 KiB RX and 63,184 B body. The TCP TX buffer was moved into CCM immediately after the socket metadata and now uses the remaining tail (about 46 KiB). The directory response page size is 128 entries instead of 3. The upload chunk size and browser chunk size remain 2 KiB. No Ethernet/TCP/HTTP buffers remain as independent .bss statics. The small HTTP response-header and upload-name scratch arrays are automatic locals on the CDC alternate stack.
 
 ## Source-verifiable allocation subtotals
 
@@ -60,7 +60,7 @@ All Ethernet packet, descriptor, socket and HTTP buffers are carved from the reu
 | Large canvas reservation (main + CCM) | 131,072 B |
 | UVC transport double buffer | 4,608 B |
 | Row scratch | 1,024 B |
-| HTTP RX + body in main SRAM | 28,624 B |
+| HTTP RX + body in main SRAM | 67,280 B |
 | Ethernet RX + TX packet buffers | 4,608 B |
 | Ethernet DMA descriptors | 48 B |
 | NAND page scratch | 2,112 B |
