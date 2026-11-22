@@ -444,7 +444,7 @@ fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) 
 
 const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 
-struct HttpUploadState {
+pub struct HttpUploadState {
     allocation: littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
     temp_path: [u8; 80],
     temp_path_len: usize,
@@ -455,7 +455,7 @@ struct HttpUploadState {
 }
 
 impl HttpUploadState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             allocation: littlefs2::fs::FileAllocation::new(),
             temp_path: [0; 80],
@@ -830,7 +830,6 @@ pub struct EthernetNetwork<'a> {
     sockets: smoltcp::iface::SocketSet<'a>,
     dhcp_handle: smoltcp::iface::SocketHandle,
     http_handle: smoltcp::iface::SocketHandle,
-    http_upload: HttpUploadState,
 }
 
 impl<'a> EthernetNetwork<'a> {
@@ -866,7 +865,7 @@ impl<'a> EthernetNetwork<'a> {
         );
         let http_handle = sockets.add(http_socket);
 
-        Self { device, iface, sockets, dhcp_handle, http_handle, http_upload: HttpUploadState::new() }
+        Self { device, iface, sockets, dhcp_handle, http_handle }
     }
 
     /// Advance Ethernet, DHCP, and interface timers. Call frequently from the
@@ -875,6 +874,7 @@ impl<'a> EthernetNetwork<'a> {
         &mut self,
         now_ms: u32,
         filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+        http_upload: &mut HttpUploadState,
     ) {
         if !is_initialized() {
             return;
@@ -909,13 +909,14 @@ impl<'a> EthernetNetwork<'a> {
             }
         }
 
-        self.poll_http(filesystem);
+        self.poll_http(filesystem, http_upload);
     }
 
     /// Serve a small page shell and an AJAX-paginated LittleFS directory listing.
     fn poll_http(
         &mut self,
         filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+        http_upload: &mut HttpUploadState,
     ) {
         use smoltcp::socket::tcp::Socket as TcpSocket;
 
@@ -1108,7 +1109,7 @@ impl<'a> EthernetNetwork<'a> {
             }
             2 => {
                 let name = &upload_name[..upload_name_len];
-                if self.http_upload.write_chunk(filesystem, name, upload_offset, upload_total, &upload_body[..upload_len]) {
+                if http_upload.write_chunk(filesystem, name, upload_offset, upload_total, &upload_body[..upload_len]) {
                     b"OK"
                 } else {
                     status_code = 500;
