@@ -100,9 +100,6 @@ pub struct PhyStatus {
 }
 
 static MAC_DMA_READY: AtomicBool = AtomicBool::new(false);
-static DMA_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
-static DMA_STATUS_SEEN: AtomicU32 = AtomicU32::new(0);
-static MAC_DEBUG_SEEN: AtomicU32 = AtomicU32::new(0);
 
 /// Synchronize a MAC register write across the TX_CLK/RX_CLK clock domain.
 /// ST's F4 HAL performs a read, delay, and same-value write after these updates.
@@ -247,26 +244,11 @@ pub fn enable_dma_interrupts() {
 pub fn on_dma_interrupt() {
     unsafe {
         let status = read_volatile(ETH_DMASR);
-        DMA_STATUS_SEEN.fetch_or(status & 0x0001_ffff, Ordering::Relaxed);
         let pending = status & DMA_IRQ_CLEAR_MASK;
         if pending != 0 {
             write_volatile(ETH_DMASR, pending);
-            DMA_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
         }
     }
-}
-
-/// Number of Ethernet DMA interrupts serviced by the CPU.
-pub fn dma_interrupt_count() -> u32 {
-    DMA_IRQ_COUNT.load(Ordering::Relaxed)
-}
-
-/// Sticky DMA status events and MAC datapath activity observed since startup.
-pub fn diagnostic_history() -> (u32, u32) {
-    (
-        DMA_STATUS_SEEN.load(Ordering::Relaxed),
-        MAC_DEBUG_SEEN.load(Ordering::Relaxed),
-    )
 }
 
 /// Whether MAC/DMA initialization completed successfully.
@@ -386,7 +368,6 @@ impl EthernetDevice {
             {
                 write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
                 self.rx_index = (self.rx_index + 1) % RX_COUNT;
-                RX_ERRORS.fetch_add(1, Ordering::Relaxed);
                 write_volatile(ETH_DMARPDR, 0);
                 return None;
             }
@@ -446,9 +427,7 @@ impl RxToken for EthernetRxToken<'_> {
         unsafe {
             let buffer = addr_of_mut!(RX_BUFFERS).cast::<FrameBuffer>().add(self.index);
             let bytes = core::slice::from_raw_parts((*buffer).0.as_ptr(), self.length);
-            record_rx_protocol(bytes);
             let result = f(bytes);
-            RX_FRAMES.fetch_add(1, Ordering::Relaxed);
             let desc = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>().add(self.index);
             core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
             write_volatile(addr_of_mut!((*desc).words[0]), DESC_OWN);
@@ -482,113 +461,11 @@ impl TxToken for EthernetTxToken<'_> {
             // The STM32F4 HAL writes the next free TX descriptor address
             // to DMATPDR when issuing transmit poll demand.
             write_volatile(ETH_DMATPDR, addr_of_mut!(TX_DESCRIPTOR) as u32);
-            TX_FRAMES.fetch_add(1, Ordering::Relaxed);
             result
         }
     }
 }
 
-
-static RX_FRAMES: AtomicU32 = AtomicU32::new(0);
-static TX_FRAMES: AtomicU32 = AtomicU32::new(0);
-static RX_ERRORS: AtomicU32 = AtomicU32::new(0);
-static RX_ARP_FRAMES: AtomicU32 = AtomicU32::new(0);
-static RX_IPV4_FRAMES: AtomicU32 = AtomicU32::new(0);
-static RX_DHCP_UDP_FRAMES: AtomicU32 = AtomicU32::new(0);
-static DHCP_CONFIGURED_EVENTS: AtomicU32 = AtomicU32::new(0);
-static DHCP_DECONFIGURED_EVENTS: AtomicU32 = AtomicU32::new(0);
-
-fn record_rx_protocol(bytes: &[u8]) {
-    if bytes.len() < 14 { return; }
-    let ether_type = u16::from_be_bytes([bytes[12], bytes[13]]);
-    if ether_type == 0x0806 {
-        RX_ARP_FRAMES.fetch_add(1, Ordering::Relaxed);
-    } else if ether_type == 0x0800 {
-        RX_IPV4_FRAMES.fetch_add(1, Ordering::Relaxed);
-        if bytes.len() < 34 || bytes[23] != 17 { return; }
-        let ip_header_len = ((bytes[14] & 0x0f) as usize) * 4;
-        if ip_header_len < 20 { return; }
-        let udp = 14 + ip_header_len;
-        if bytes.len() < udp + 8 { return; }
-        let src = u16::from_be_bytes([bytes[udp], bytes[udp + 1]]);
-        let dst = u16::from_be_bytes([bytes[udp + 2], bytes[udp + 3]]);
-        if (src == 67 && dst == 68) || (src == 68 && dst == 67) {
-            RX_DHCP_UDP_FRAMES.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
-/// Protocol counters for frames accepted from the RX descriptors.
-pub fn network_diagnostic() -> (u32, u32, u32, u32, u32) {
-    (
-        RX_ARP_FRAMES.load(Ordering::Relaxed),
-        RX_IPV4_FRAMES.load(Ordering::Relaxed),
-        RX_DHCP_UDP_FRAMES.load(Ordering::Relaxed),
-        DHCP_CONFIGURED_EVENTS.load(Ordering::Relaxed),
-        DHCP_DECONFIGURED_EVENTS.load(Ordering::Relaxed),
-    )
-}
-
-/// Snapshot DMA engine and RX descriptor state without allocating memory.
-pub fn dma_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
-    unsafe {
-        let rx = addr_of_mut!(RX_DESCRIPTORS).cast::<DmaDescriptor>();
-        (
-            read_volatile(ETH_DMASR),
-            read_volatile(ETH_DMAOMR),
-            read_volatile(addr_of_mut!((*rx).words[0])),
-            read_volatile(addr_of_mut!((*rx.add(1)).words[0])),
-            read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[0])),
-            read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1])),
-            read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[2])),
-            read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[3])),
-            read_volatile(ETH_DMACHTDR),
-            read_volatile(ETH_DMAIER),
-            read_volatile(ETH_MACCR),
-            read_volatile(SYSCFG_PMC),
-            read_volatile(ETH_MACDBGR),
-        )
-    }
-}
-
-/// Read MAC MMC transmit counters for an on-demand IPCONFIG snapshot.
-/// MMC control reset-on-read is left at its hardware reset value (disabled).
-pub fn mmc_tx_diagnostic() -> (u32, u32, u32, u32, u32, u32, u32) {
-    unsafe {
-        (
-            read_volatile((ETH_MAC_BASE + 0x100) as *mut u32), // MMC control
-            read_volatile((ETH_MAC_BASE + 0x118) as *mut u32), // TX frames, good and bad
-            read_volatile((ETH_MAC_BASE + 0x148) as *mut u32), // TX underflow errors
-            read_volatile((ETH_MAC_BASE + 0x158) as *mut u32), // TX late collisions
-            read_volatile((ETH_MAC_BASE + 0x15c) as *mut u32), // TX excessive collisions
-            read_volatile((ETH_MAC_BASE + 0x160) as *mut u32), // TX carrier errors
-            read_volatile((ETH_MAC_BASE + 0x168) as *mut u32), // TX good frames
-        )
-    }
-}
-
-/// Return the current TX descriptor length for IPCONFIG diagnostics.
-pub fn tx_packet_length() -> u32 {
-    unsafe { read_volatile(addr_of_mut!(TX_DESCRIPTOR.words[1])) & 0x1fff }
-}
-
-/// Read one byte from the TX buffer for bounded, no-allocation diagnostics.
-pub fn tx_packet_byte(index: usize) -> u8 {
-    if index >= FRAME_CAPACITY { return 0; }
-    unsafe {
-        let source = addr_of_mut!(TX_BUFFER).cast::<u8>();
-        read_volatile(source.add(index))
-    }
-}
-
-/// Ethernet frames accepted by the stack, transmitted, and rejected by RX.
-pub fn frame_counts() -> (u32, u32, u32) {
-    (
-        RX_FRAMES.load(Ordering::Relaxed),
-        TX_FRAMES.load(Ordering::Relaxed),
-        RX_ERRORS.load(Ordering::Relaxed),
-    )
-}
 
 static IPV4_ADDRESS: AtomicU32 = AtomicU32::new(0);
 static IPV4_PREFIX: AtomicU8 = AtomicU8::new(0);
@@ -635,10 +512,6 @@ impl<'a> EthernetNetwork<'a> {
             return;
         }
 
-        unsafe {
-            MAC_DEBUG_SEEN.fetch_or(read_volatile(ETH_MACDBGR), Ordering::Relaxed);
-        }
-
         let timestamp = Instant::from_millis(now_ms as i64);
         let _ = self.iface.poll(timestamp, &mut self.device, &mut self.sockets);
 
@@ -646,7 +519,6 @@ impl<'a> EthernetNetwork<'a> {
         if let Some(event) = self.sockets.get_mut::<smoltcp::socket::dhcpv4::Socket>(self.dhcp_handle).poll() {
             match event {
                 DhcpEvent::Configured(config) => {
-                    DHCP_CONFIGURED_EVENTS.fetch_add(1, Ordering::Relaxed);
                     let address = config.address;
                     let router = config.router;
                     self.iface.update_ip_addrs(|addrs| {
@@ -661,7 +533,6 @@ impl<'a> EthernetNetwork<'a> {
                     IPV4_PREFIX.store(address.prefix_len(), Ordering::Release);
                 }
                 DhcpEvent::Deconfigured => {
-                    DHCP_DECONFIGURED_EVENTS.fetch_add(1, Ordering::Relaxed);
                     self.iface.update_ip_addrs(|addrs| addrs.clear());
                     self.iface.routes_mut().remove_default_ipv4_route();
                     IPV4_ADDRESS.store(0, Ordering::Release);
