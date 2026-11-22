@@ -1223,6 +1223,21 @@ pub fn service(
                             STATUS_UNAVAILABLE
                         });
                         write_cdc_diagnostics();
+                        let (stage, offset, total, length, written, sends) =
+                            crate::ethernet::http_upload_diagnostics();
+                        write_status(b"HTTP upload: stage=");
+                        write_decimal(stage as usize);
+                        write_status(b" offset=");
+                        write_decimal(offset as usize);
+                        write_status(b"/");
+                        write_decimal(total as usize);
+                        write_status(b" chunk=");
+                        write_decimal(length as usize);
+                        write_status(b" written=");
+                        write_decimal(written as usize);
+                        write_status(b" send=");
+                        write_decimal(sends as usize);
+                        write_status(b"\r\n");
                         write_status(if ZMODEM_START_FAILED {
                             b"ZMODEM startup: header detected, receiver did not start.\r\n"
                         } else if ZMODEM_PROBE_MATCHED {
