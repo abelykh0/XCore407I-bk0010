@@ -16,10 +16,6 @@ use smoltcp::time::Instant;
 
 
 
-const DMA_IRQ_CLEAR_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16);
-const DMA_IRQ_ENABLE_MASK: u32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 13) | (1 << 15) | (1 << 16);
-const DMA_OMR_INIT: u32 = (1 << 26) | (1 << 25) | (1 << 21);
-const DMA_BMR_INIT: u32 = (1 << 25) | (32 << 8) | (32 << 17) | (1 << 23) | (1 << 16);
 const MII_CR_DIV_102: u32 = 0b100 << 2;
 
 const DP83848_PHYSTS_LINK: u16 = 1 << 0;
@@ -177,12 +173,67 @@ pub fn initialize() -> bool {
             if timeout == 0 { return false; }
             timeout -= 1;
         }
-        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| unsafe { w.bits(DMA_BMR_INIT) });
-        (*pac::ETHERNET_DMA::PTR).dmaomr().write(|w| unsafe { w.bits(DMA_OMR_INIT) });
+        (*pac::ETHERNET_DMA::PTR).dmabmr().write(|w| unsafe {
+            w.sr().clear_bit()
+                .da().clear_bit()
+                .dsl().bits(0)
+                .edfe().clear_bit()
+                .pbl().bits(32)
+                .pm().bits(0)
+                .fb().set_bit()
+                .rdp().bits(32)
+                .usp().set_bit()
+                .fpm().clear_bit()
+                .aab().set_bit()
+                .mb().clear_bit()
+        });
+        (*pac::ETHERNET_DMA::PTR).dmaomr().write(|w| unsafe {
+            w.sr().clear_bit()
+                .osf().clear_bit()
+                .rtc().bits(0)
+                .fugf().clear_bit()
+                .fef().clear_bit()
+                .st().clear_bit()
+                .ttc().bits(0)
+                .ftf().clear_bit()
+                .tsf().set_bit()
+                .dfrf().clear_bit()
+                .rsf().set_bit()
+                .dtcefd().set_bit()
+        });
         write_volatile((*pac::ETHERNET_DMA::PTR).dmardlar().as_ptr(), rx_desc as u32);
         write_volatile((*pac::ETHERNET_DMA::PTR).dmatdlar().as_ptr(), tx_desc as u32);
-        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| unsafe { w.bits(0) });
-        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| w.bits(DMA_IRQ_CLEAR_MASK));
+        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| {
+            w.tie().clear_bit()
+                .tpsie().clear_bit()
+                .tbuie().clear_bit()
+                .tjtie().clear_bit()
+                .roie().clear_bit()
+                .tuie().clear_bit()
+                .rie().clear_bit()
+                .rbuie().clear_bit()
+                .rpsie().clear_bit()
+                .rwtie().clear_bit()
+                .etie().clear_bit()
+                .erie().clear_bit()
+                .fbeie().clear_bit()
+                .ebeie().clear_bit()
+                .aise().clear_bit()
+                .nise().clear_bit()
+        });
+        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
+            w.ts().set_bit()
+                .tbus().set_bit()
+                .tjts().set_bit()
+                .ros().set_bit()
+                .tus().set_bit()
+                .rs().set_bit()
+                .rbus().set_bit()
+                .fbes().set_bit()
+                .ers().set_bit()
+                .ais().set_bit()
+                .nis().set_bit()
+        });
 
         // Locally administered unicast address 02:12:09:40:70:01.
         write_volatile((*pac::ETHERNET_MAC::PTR).maca0lr().as_ptr(), 0x4009_1202);
@@ -254,8 +305,37 @@ pub fn initialize() -> bool {
 pub fn enable_dma_interrupts() {
     unsafe {
         // Clear stale write-one-to-clear events before enabling sources.
-        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| unsafe { w.bits(DMA_IRQ_CLEAR_MASK) });
-        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| w.bits(DMA_IRQ_ENABLE_MASK));
+        (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
+            w.ts().set_bit()
+                .tbus().set_bit()
+                .tjts().set_bit()
+                .ros().set_bit()
+                .tus().set_bit()
+                .rs().set_bit()
+                .rbus().set_bit()
+                .fbes().set_bit()
+                .ers().set_bit()
+                .ais().set_bit()
+                .nis().set_bit()
+        });
+        (*pac::ETHERNET_DMA::PTR).dmaier().write(|w| {
+            w.tie().set_bit()
+                .tpsie().clear_bit()
+                .tbuie().set_bit()
+                .tjtie().clear_bit()
+                .roie().clear_bit()
+                .tuie().clear_bit()
+                .rie().set_bit()
+                .rbuie().clear_bit()
+                .rpsie().clear_bit()
+                .rwtie().clear_bit()
+                .etie().clear_bit()
+                .erie().clear_bit()
+                .fbeie().set_bit()
+                .ebeie().clear_bit()
+                .aise().set_bit()
+                .nise().set_bit()
+        });
     }
 }
 
@@ -263,9 +343,32 @@ pub fn enable_dma_interrupts() {
 /// Packet handling and all smoltcp/DHCP work remain in foreground context.
 pub fn on_dma_interrupt() {
     unsafe {
-        let pending = (*pac::ETHERNET_DMA::PTR).dmasr().read().bits() & DMA_IRQ_CLEAR_MASK;
-        if pending != 0 {
-            (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| w.bits(pending));
+        let status = (*pac::ETHERNET_DMA::PTR).dmasr().read();
+        let ts = status.ts().bit_is_set();
+        let tbus = status.tbus().bit_is_set();
+        let tjts = status.tjts().bit_is_set();
+        let ros = status.ros().bit_is_set();
+        let tus = status.tus().bit_is_set();
+        let rs = status.rs().bit_is_set();
+        let rbus = status.rbus().bit_is_set();
+        let fbes = status.fbes().bit_is_set();
+        let ers = status.ers().bit_is_set();
+        let ais = status.ais().bit_is_set();
+        let nis = status.nis().bit_is_set();
+        if ts || tbus || tjts || ros || tus || rs || rbus || fbes || ers || ais || nis {
+            (*pac::ETHERNET_DMA::PTR).dmasr().write(|w| {
+                w.ts().bit(ts)
+                    .tbus().bit(tbus)
+                    .tjts().bit(tjts)
+                    .ros().bit(ros)
+                    .tus().bit(tus)
+                    .rs().bit(rs)
+                    .rbus().bit(rbus)
+                    .fbes().bit(fbes)
+                    .ers().bit(ers)
+                    .ais().bit(ais)
+                    .nis().bit(nis)
+            });
         }
     }
 }
