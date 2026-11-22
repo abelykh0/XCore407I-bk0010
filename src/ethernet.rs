@@ -643,7 +643,7 @@ impl<'a> EthernetNetwork<'a> {
                             return Ok(());
                         }
                         let name = path.strip_prefix(b"/").unwrap_or(path);
-                        let name = name.strip_suffix(b"\\0").unwrap_or(name);
+                        let name = name.strip_suffix(b"\0").unwrap_or(name);
                         // Reserve enough space for worst-case HTML escaping, the
                         // size suffix, and the closing page tags.
                         let required = name.len().saturating_mul(6).saturating_add(64);
