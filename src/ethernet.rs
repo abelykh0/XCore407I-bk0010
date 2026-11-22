@@ -444,6 +444,148 @@ fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) 
 
 const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 
+struct HttpUploadState {
+    allocation: littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
+    temp_path: [u8; 80],
+    temp_path_len: usize,
+    final_path: [u8; 66],
+    final_path_len: usize,
+    total: usize,
+    received: usize,
+}
+
+impl HttpUploadState {
+    const fn new() -> Self {
+        Self {
+            allocation: littlefs2::fs::FileAllocation::new(),
+            temp_path: [0; 80],
+            temp_path_len: 0,
+            final_path: [0; 66],
+            final_path_len: 0,
+            total: 0,
+            received: 0,
+        }
+    }
+
+    fn abort(&mut self, filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>) {
+        use littlefs2::path::Path;
+        if self.allocation.is_open() {
+            let _ = unsafe { self.allocation.close(filesystem) };
+        }
+        if self.temp_path_len != 0 {
+            if let Ok(path) = Path::from_bytes_with_nul(&self.temp_path[..self.temp_path_len]) {
+                let _ = filesystem.remove(path);
+            }
+        }
+        self.temp_path_len = 0;
+        self.final_path_len = 0;
+        self.total = 0;
+        self.received = 0;
+    }
+
+    fn write_chunk(
+        &mut self,
+        filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
+        name: &[u8],
+        offset: usize,
+        total: usize,
+        data: &[u8],
+    ) -> bool {
+        use littlefs2::path::Path;
+
+        if name.is_empty() || name.len() > 64 || total > filesystem.total_space()
+            || offset > total || data.len() > total.saturating_sub(offset)
+        {
+            return false;
+        }
+
+        if offset == 0 {
+            if self.temp_path_len != 0 || self.allocation.is_open() {
+                self.abort(filesystem);
+            }
+
+            let mut final_len = 0usize;
+            self.final_path[final_len] = b'/';
+            final_len += 1;
+            self.final_path[final_len..final_len + name.len()].copy_from_slice(name);
+            final_len += name.len();
+            self.final_path[final_len] = 0;
+            final_len += 1;
+
+            let mut temp_len = 0usize;
+            self.temp_path[..9].copy_from_slice(b"/.upload-");
+            temp_len = 9;
+            self.temp_path[temp_len..temp_len + name.len()].copy_from_slice(name);
+            temp_len += name.len();
+            self.temp_path[temp_len] = 0;
+            temp_len += 1;
+
+            let Ok(temp) = Path::from_bytes_with_nul(&self.temp_path[..temp_len]) else { return false; };
+            let Ok(final_path) = Path::from_bytes_with_nul(&self.final_path[..final_len]) else { return false; };
+            if filesystem.exists(temp) && filesystem.remove(temp).is_err() { return false; }
+            if filesystem.open_file_with_options_and_then_with_allocation(
+                |options| options.write(true).create_new(true),
+                temp,
+                &mut self.allocation,
+                |_file| Ok(()),
+            ).is_err() {
+                return false;
+            }
+            if unsafe { self.allocation.open_with_options(filesystem, |options| options.write(true), temp) }.is_err() {
+                let _ = filesystem.remove(temp);
+                return false;
+            }
+            self.temp_path_len = temp_len;
+            self.final_path_len = final_len;
+            self.total = total;
+            self.received = 0;
+            let _ = final_path;
+        } else if self.temp_path_len == 0
+            || self.final_path_len == 0
+            || self.total != total
+            || self.received != offset
+            || self.final_path[1..self.final_path_len - 1] != *name
+            || !self.allocation.is_open()
+        {
+            return false;
+        }
+
+        let mut written = 0usize;
+        while written < data.len() {
+            let count = match unsafe { self.allocation.write(filesystem, &data[written..]) } {
+                Ok(count) if count != 0 => count,
+                _ => { self.abort(filesystem); return false; }
+            };
+            written += count;
+        }
+        self.received += data.len();
+
+        if self.received == self.total {
+            if unsafe { self.allocation.close(filesystem) }.is_err() {
+                self.abort(filesystem);
+                return false;
+            }
+            let Ok(temp) = Path::from_bytes_with_nul(&self.temp_path[..self.temp_path_len]) else {
+                self.abort(filesystem); return false;
+            };
+            let Ok(final_path) = Path::from_bytes_with_nul(&self.final_path[..self.final_path_len]) else {
+                self.abort(filesystem); return false;
+            };
+            if filesystem.exists(final_path) && filesystem.remove(final_path).is_err() {
+                self.abort(filesystem); return false;
+            }
+            if filesystem.rename(temp, final_path).is_err() {
+                self.abort(filesystem); return false;
+            }
+            self.temp_path_len = 0;
+            self.final_path_len = 0;
+            self.total = 0;
+            self.received = 0;
+        }
+        true
+    }
+}
+
 fn parse_http_decimal(bytes: &[u8]) -> Option<usize> {
     let bytes = bytes.trim_ascii();
     if bytes.is_empty() { return None; }
@@ -453,74 +595,6 @@ fn parse_http_decimal(bytes: &[u8]) -> Option<usize> {
         value = value.checked_mul(10)?.checked_add((byte - b'0') as usize)?;
     }
     Some(value)
-}
-
-fn write_http_upload(
-    filesystem: &littlefs2::fs::Filesystem<'_, crate::nand_fs::ActiveStorage>,
-    name: &[u8],
-    offset: usize,
-    total: usize,
-    data: &[u8],
-) -> bool {
-    use littlefs2::io::prelude::Write;
-    use littlefs2::io::SeekFrom;
-    use littlefs2::path::Path;
-
-    if name.is_empty() || name.len() > 64
-        || total > filesystem.total_space()
-        || offset > total || data.len() > total.saturating_sub(offset)
-    {
-        return false;
-    }
-
-    let mut final_path_bytes = [0u8; 66];
-    final_path_bytes[0] = b'/';
-    final_path_bytes[1..1 + name.len()].copy_from_slice(name);
-    final_path_bytes[1 + name.len()] = 0;
-    let final_path = match Path::from_bytes_with_nul(&final_path_bytes[..name.len() + 2]) {
-        Ok(path) => path,
-        Err(_) => return false,
-    };
-
-    let mut temp_path_bytes = [0u8; 80];
-    let mut temp_len = 0usize;
-    if !append_http_bytes(&mut temp_path_bytes, &mut temp_len, b"/.upload-")
-        || !append_http_bytes(&mut temp_path_bytes, &mut temp_len, name)
-        || !append_http_bytes(&mut temp_path_bytes, &mut temp_len, b"\0")
-    {
-        return false;
-    }
-    let temp_path = match Path::from_bytes_with_nul(&temp_path_bytes[..temp_len]) {
-        Ok(path) => path,
-        Err(_) => return false,
-    };
-
-    let written = if offset == 0 {
-        if filesystem.exists(temp_path) && filesystem.remove(temp_path).is_err() {
-            return false;
-        }
-        filesystem.create_file_and_then(temp_path, |file| file.write_all(data)).is_ok()
-    } else {
-        filesystem.open_file_and_then(temp_path, |file| {
-            if file.len()? != offset {
-                return Ok(false);
-            }
-            file.seek(SeekFrom::End(0))?;
-            file.write_all(data)?;
-            Ok(true)
-        }).unwrap_or(false)
-    };
-    if !written {
-        return false;
-    }
-
-    if offset + data.len() == total {
-        if filesystem.exists(final_path) && filesystem.remove(final_path).is_err() {
-            return false;
-        }
-        return filesystem.rename(temp_path, final_path).is_ok();
-    }
-    true
 }
 /// Whether MAC/DMA initialization completed successfully.
 pub fn is_initialized() -> bool {
@@ -756,6 +830,7 @@ pub struct EthernetNetwork<'a> {
     sockets: smoltcp::iface::SocketSet<'a>,
     dhcp_handle: smoltcp::iface::SocketHandle,
     http_handle: smoltcp::iface::SocketHandle,
+    http_upload: HttpUploadState,
 }
 
 impl<'a> EthernetNetwork<'a> {
@@ -791,7 +866,7 @@ impl<'a> EthernetNetwork<'a> {
         );
         let http_handle = sockets.add(http_socket);
 
-        Self { device, iface, sockets, dhcp_handle, http_handle }
+        Self { device, iface, sockets, dhcp_handle, http_handle, http_upload: HttpUploadState::new() }
     }
 
     /// Advance Ethernet, DHCP, and interface timers. Call frequently from the
@@ -1033,7 +1108,7 @@ impl<'a> EthernetNetwork<'a> {
             }
             2 => {
                 let name = &upload_name[..upload_name_len];
-                if write_http_upload(filesystem, name, upload_offset, upload_total, &upload_body[..upload_len]) {
+                if self.http_upload.write_chunk(filesystem, name, upload_offset, upload_total, &upload_body[..upload_len]) {
                     b"OK"
                 } else {
                     status_code = 500;
