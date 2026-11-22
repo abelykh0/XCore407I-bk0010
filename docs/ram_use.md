@@ -36,16 +36,16 @@ CDC mode does not run the emulator. It reuses the same physical backing-store al
 | Block | Region | Size | Purpose |
 |---|---|---:|---|
 | CDC receiver | DEMO_CANVAS, offset 0 | 4,096 B | Heapless ZMODEM receive storage |
+| CDC alternate stack | DEMO_CANVAS, top 46,848 B | 46,848 B | Stack grows down from the end of the main canvas block |
+| CDC receiver (accounting note) | Inside DEMO_CANVAS | 4,096 B claimed | Same receiver allocation; do not count twice |
+| Alternate filesystem stack (accounting note) | Inside DEMO_CANVAS | 46,848 B reserved | Same alternate stack allocation; do not count twice |
 | Ethernet DMA ring | DEMO_CANVAS, offset 4,096 | 4,656 B | Two RX descriptors + buffers and one TX descriptor + buffer; DMA-accessible main SRAM |
+| Ethernet socket storage | DEMO_CANVAS_TAIL, CCM | Build-dependent | Two smoltcp SocketStorage entries; CPU-only metadata |
 | HTTP TCP RX | DEMO_CANVAS, offset 8,752 | 4,096 B | smoltcp TCP receive buffer |
 | HTTP TCP TX | DEMO_CANVAS, offset 12,848 | 20,480 B | smoltcp TCP transmit buffer |
 | HTTP body | DEMO_CANVAS, offset 33,328 | 4,048 B | Upload chunk and generated response body scratch |
-| CDC alternate stack | DEMO_CANVAS, top 46,848 B | 46,848 B | Stack grows down from the end of the main canvas block |
-| Ethernet socket storage | DEMO_CANVAS_TAIL, CCM | Build-dependent | Two smoltcp SocketStorage entries; CPU-only metadata |
 | VIDEO_BUFFERS[2] | Main SRAM, .bss | 4,608 B | UVC transport buffers for low-rate PC CONNECT static page |
 | ROW_BUFFERS | Main SRAM, .bss | 1,024 B | Camera row-conversion scratch |
-| CDC receiver | Inside DEMO_CANVAS | 4,096 B claimed | Heapless ZMODEM receive storage; do not count twice |
-| Alternate filesystem stack | Inside DEMO_CANVAS | 46,848 B reserved | Stack; do not count twice |
 | NAND_PAGE_SCRATCH | Main SRAM, .bss | 2,112 B | 2,048-byte page + 64-byte spare |
 | LittleFS mount allocation | Static storage | Build-dependent | MaybeUninit<LittleFsAllocation>; exact size requires ELF/map or size_of |
 | Dhara C page buffer | Main SRAM, .bss | 2,048 B | One NAND page in csrc/dhara_adapter.c |
