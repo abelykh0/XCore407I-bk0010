@@ -46,7 +46,7 @@ const HELP_WRITE_PROFILE: &[u8] = b"  WRITE PROFILE Show last ZMODEM receive tim
 const HELP_NAND_DIAGNOSTICS: &[u8] = b"  ECCFILETEST Write/read a 4 KiB ECC test file\r\n  ECCPAGE    Compare one physical page repeatedly\r\n  ECCPAGEHW  Compare stored, hardware, and software ECC\r\n  ECCSEQ ON/OFF Arm/disarm program-sequence trace\r\n  ECCSEQSTATUS Show captured FSMC ECC/FIFO sequence\r\n  ECCWRITE ON/OFF Enable/disable page-program verification\r\n  ECCWRITESTATUS Show last verified page program\r\n  NANDRESETTEST Repeat raw reads with NAND RESET\r\n  NANDPAGEPROBE / NANDPROBE Low-level NAND diagnostics\r\n";
 const STATUS_MOUNTED: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nStorage: LittleFS mounted for CDC session\r\n";
 const STATUS_UNAVAILABLE: &[u8] = b"\r\nUSB: High-Speed UVC camera + CDC serial\r\nStorage: unavailable\r\n";
-const VERSION: &[u8] = b"\r\nXCore407I BK-0010 firmware\r\n> ";
+
 
 /// TinyUSB reports DTR changes while processing SET_CONTROL_LINE_STATE.
 /// Keep the callback limited to publishing state; all console I/O stays in
@@ -1859,7 +1859,9 @@ pub fn service(
                             write_status(b"Storage unavailable.\r\n> ");
                         }
                     } else if command_is(line, b"VERSION") {
-                        write_status(VERSION);
+                        write_status(b"\r\nXCore407I BK-0010 firmware v");
+                        write_status(env!("CARGO_PKG_VERSION").as_bytes());
+                        write_status(b"\r\n> ");
                     } else if command_is(line, b"FORMAT") {
                         write_status(
                             b"WARNING: FORMAT YES erases the NAND and creates a new Dhara/LittleFS volume.\r\nType FORMAT YES to confirm.\r\n> ",
