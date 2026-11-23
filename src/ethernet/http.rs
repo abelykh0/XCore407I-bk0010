@@ -6,12 +6,6 @@ use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 pub(super) const HTTP_RX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_RX_BYTES;
 pub(super) const HTTP_BODY_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_BODY_BYTES;
-// Each filename is escaped twice (data-name and visible text). HTML escaping can
-// expand one ASCII byte to six bytes; reserve another 256 bytes per entry for
-// markup and the displayed file size. This keeps a full page within the body buffer.
-const HTTP_DIRECTORY_PAGE_SIZE: usize =
-    HTTP_BODY_BUFFER_SIZE / (littlefs2::consts::FILENAME_MAX_PLUS_ONE as usize * 12 + 256);
-
 static HTTP_UPLOAD_DIAG_STAGE: AtomicU8 = AtomicU8::new(0);
 static HTTP_UPLOAD_DIAG_OFFSET: AtomicU32 = AtomicU32::new(0);
 static HTTP_UPLOAD_DIAG_TOTAL: AtomicU32 = AtomicU32::new(0);
@@ -63,6 +57,45 @@ fn http_name_ends_with(name: &[u8], suffix: &[u8]) -> bool {
             .iter()
             .zip(suffix)
             .all(|(left, right)| left.to_ascii_lowercase() == *right)
+}
+
+fn http_escaped_name_len(name: &[u8]) -> usize {
+    name.iter()
+        .map(|byte| match byte {
+            b'&' => 5,
+            b'<' | b'>' => 4,
+            b'"' => 6,
+            _ => 1,
+        })
+        .sum()
+}
+
+fn http_directory_entry_len(name: &[u8], is_dir: bool, size: usize) -> usize {
+    let safe_image_name = !name.is_empty()
+        && name.len() <= 64
+        && name != b"."
+        && name != b".."
+        && name.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'));
+    let image_file = !is_dir
+        && safe_image_name
+        && (http_name_ends_with(name, b".jpg")
+            || http_name_ends_with(name, b".jpeg")
+            || http_name_ends_with(name, b".png"));
+    let escaped_name_len = http_escaped_name_len(name);
+    let mut entry_len = b"<li data-name=\"".len() + escaped_name_len + b"\">".len()
+        + escaped_name_len + b"</li>".len();
+    if image_file {
+        entry_len += b"<a target=\"_blank\" rel=\"noopener\" href=\"/file/".len()
+            + name.len() + b"\">".len() + b"</a>".len();
+    }
+    if is_dir {
+        entry_len += 1; // trailing slash
+    } else {
+        let mut digits = [0u8; 10];
+        let digit_count = crate::format::u32_to_decimal(size as u32, &mut digits).len();
+        entry_len += b" (".len() + digit_count + digit_count.saturating_sub(1) / 3 + b" bytes)".len();
+    }
+    entry_len
 }
 
 fn append_http_bytes(buffer: &mut [u8], length: &mut usize, bytes: &[u8]) -> bool {
@@ -563,18 +596,27 @@ impl<'a> super::EthernetNetwork<'a> {
                     filesystem,
                     true,
                     |path, is_dir, size| {
+                        if has_more {
+                            return Ok(());
+                        }
                         if seen < listing_offset {
                             seen += 1;
                             return Ok(());
                         }
-                        if emitted >= HTTP_DIRECTORY_PAGE_SIZE {
+                        let name = path.strip_prefix(b"/").unwrap_or(path);
+                        let name = name.strip_suffix(b"\0").unwrap_or(name);
+                        // Check the complete rendered entry before writing any of it.
+                        // Reserve room for the closing list and pagination marker.
+                        let pagination_reserve =
+                            b"</ul>".len() + b"<span data-next=\"".len() + 10 + b"\"></span>".len();
+                        let required = http_directory_entry_len(name, is_dir, size)
+                            + pagination_reserve;
+                        if required > body.len().saturating_sub(length) {
                             has_more = true;
                             return Ok(());
                         }
                         seen += 1;
                         emitted += 1;
-                        let name = path.strip_prefix(b"/").unwrap_or(path);
-                        let name = name.strip_suffix(b"\0").unwrap_or(name);
                         append_http_bytes(body, &mut length, b"<li data-name=\"");
                         for &byte in name {
                             let escaped = match byte {
