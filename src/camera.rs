@@ -1,7 +1,7 @@
 //! C-style compact color canvas and NV12 UVC packetizer.
 //!
 //! This mirrors the original C canvas: 128 KiB of source data split between
-//! ordinary SRAM and CCM, with two 768-byte row caches in CCM. Color stores
+//! ordinary SRAM and CCM, with one 512-byte luma row cache in SRAM. Color stores
 //! packed Cb/Cr pairs at 256x256; BW stores Y at 512x256.
 
 // PACKET_SIZE_NO_HEADER is 1.5 * UVC_WIDTH
@@ -307,9 +307,9 @@ pub(crate) fn cdc_ethernet_socket_storage_ptr() -> *mut u8 {
 }
 
 #[repr(C, align(4))]
-struct RowBuffers([u8; WIDTH * 2]);
-// CPU-only line conversion scratch; keep it in SRAM to conserve CCM.
-static mut ROW_BUFFERS: RowBuffers = RowBuffers([0; WIDTH * 2]);
+struct RowBuffer([u8; WIDTH]);
+// CPU-only luma conversion scratch; keep it in SRAM to conserve CCM.
+static mut ROW_BUFFER: RowBuffer = RowBuffer([0; WIDTH]);
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
 // CDC mode uses the PC CONNECT renderer and does not consume the demo canvas.
 // Its main-SRAM range holds the ZMODEM receiver, Ethernet DMA ring, HTTP
@@ -860,7 +860,6 @@ pub struct Nv12DemoImage {
     offset: usize,
     frame_id: bool,
     cached_y_source_row: u16,
-    cached_uv_source_row: u16,
     cached_clock_version: u32,
     pc_connect_screen: bool,
 }
@@ -876,7 +875,6 @@ impl Nv12DemoImage {
             offset: 0,
             frame_id: false,
             cached_y_source_row: u16::MAX,
-            cached_uv_source_row: u16::MAX,
             cached_clock_version: CLOCK_VERSION.load(Ordering::Relaxed),
             pc_connect_screen: false,
         })
@@ -901,7 +899,6 @@ impl Nv12DemoImage {
         if self.offset == 0 {
             if apply_pending_camera_mode() {
                 self.cached_y_source_row = u16::MAX;
-                self.cached_uv_source_row = u16::MAX;
                 self.cached_clock_version = CLOCK_VERSION.load(Ordering::Relaxed);
             }
         }
@@ -1041,11 +1038,9 @@ impl Nv12DemoImage {
                 // In color mode the UV plane is a contiguous copy of the
                 // source canvas. Let the copy cross source-row boundaries;
                 // copy_canvas_range() already handles the SRAM/CCM split.
-                // Monochrome still needs row-sized chunks to prepare neutral UV.
                 let source_row = chroma_pos / WIDTH;
                 let run = (WIDTH - x).min(FRAME_BYTES - pos).min(out.len() - written);
                 if mode == CameraMode::Monochrome {
-                    self.prepare_uv_row(source_row as u16);
                     out[written..written + run].fill(128);
                 } else if BK_EXTENDED_MODE.load(Ordering::Acquire) && source_row >= 64 {
                     let [u, v] = UV_PALETTE[0x15];
@@ -1195,34 +1190,16 @@ impl Nv12DemoImage {
         self.cached_y_source_row = source_row;
     }
 
-    fn prepare_uv_row(&mut self, source_row: u16) {
-        if self.cached_uv_source_row == source_row {
-            return;
-        }
-        if camera_mode() == CameraMode::Monochrome {
-            unsafe { uv_row_ptr().write_bytes(128, WIDTH) };
-        } else {
-            unsafe { copy_canvas_range(source_row as usize * WIDTH, uv_row_ptr(), WIDTH) };
-        }
-        self.cached_uv_source_row = source_row;
-    }
 }
 
 #[inline(always)]
 unsafe fn y_row_ptr() -> *mut u8 {
     unsafe {
-    core::ptr::addr_of_mut!(ROW_BUFFERS.0).cast::<u8>()
+    core::ptr::addr_of_mut!(ROW_BUFFER.0).cast::<u8>()
 
     }
 }
 
-#[inline(always)]
-unsafe fn uv_row_ptr() -> *mut u8 {
-    unsafe {
-    core::ptr::addr_of_mut!(ROW_BUFFERS.0).cast::<u8>().add(WIDTH)
-
-    }
-}
 
 /// Copy an aligned region from the C-style main SRAM + CCM canvas split.
 unsafe fn copy_canvas_range(mut offset: usize, mut destination: *mut u8, mut bytes: usize) {
