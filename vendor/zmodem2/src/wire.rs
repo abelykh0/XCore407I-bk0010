@@ -14,9 +14,8 @@ use crate::io::{Read, Write};
 use crate::zdle;
 use crate::{ZDLE, ZPAD};
 
-/// Size of the unescaped subpacket payload. The size is picked from the
-/// original ZMODEM specification.
-pub(crate) const SUBPACKET_MAX_SIZE: usize = 1024;
+/// Maximum unescaped data subpacket payload supported by this implementation.
+pub const SUBPACKET_MAX_SIZE: usize = 1024;
 pub(crate) const SUBPACKET_PER_ACK: usize = 10;
 pub(crate) const MAX_HEADER_ESCAPED: usize = 128;
 pub(crate) const MAX_SUBPACKET_ESCAPED: usize = SUBPACKET_MAX_SIZE * 2 + 2 + 8;

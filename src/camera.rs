@@ -245,14 +245,14 @@ union CanvasTailStorage {
 }
 
 // DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of one logical
-// 128 KiB BK canvas. In CDC mode, the main segment is reused for receiver,
-// Ethernet DMA and HTTP RX/body storage plus the alternate stack; the CCM
+// 128 KiB BK canvas. In CDC mode, the main segment is reused for ZMODEM
+// receiver/send staging, Ethernet DMA and HTTP RX/body storage plus the alternate stack; the CCM
 // tail holds CPU-only smoltcp socket metadata and the TCP transmit buffer.
 #[unsafe(link_section = ".ccmram.canvas")]
 static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
     CanvasTailStorage { canvas: AlignedCanvas([0; CANVAS_TAIL_BYTES]) };
 
-pub(crate) const CDC_RECEIVER_STORAGE_BYTES: usize = 4096;
+pub(crate) const CDC_ZMODEM_STORAGE_BYTES: usize = 4096;
 pub(crate) const CDC_ETHERNET_DMA_STORAGE_BYTES: usize = 2 * 16 + 2 * 1536 + 16 + 1536;
 pub(crate) const CDC_HTTP_RX_BYTES: usize = 4096;
 pub(crate) const CDC_HTTP_BODY_BYTES: usize = 62_416;
@@ -261,16 +261,16 @@ pub(crate) const CDC_HTTP_STORAGE_BYTES: usize =
 const CDC_ALT_STACK_BYTES: usize = 8 * 1024 + 768;
 const CDC_ALT_STACK_BOTTOM: usize = CANVAS_MAIN_BYTES - CDC_ALT_STACK_BYTES;
 
-// Receiver, DMA ring and HTTP buffers occupy the low end; the enlarged
+// ZMODEM storage, DMA ring and HTTP buffers occupy the low end; the enlarged
 // filesystem alternate stack grows down from the high end.
 const _: () = assert!(
-    CDC_RECEIVER_STORAGE_BYTES
+    CDC_ZMODEM_STORAGE_BYTES
         + CDC_ETHERNET_DMA_STORAGE_BYTES
         + CDC_HTTP_STORAGE_BYTES
         <= CDC_ALT_STACK_BOTTOM
 );
 const _: () = assert!(
-    CDC_RECEIVER_STORAGE_BYTES
+    CDC_ZMODEM_STORAGE_BYTES
         + CDC_ETHERNET_DMA_STORAGE_BYTES
         + CDC_HTTP_STORAGE_BYTES
         == CDC_ALT_STACK_BOTTOM
@@ -288,7 +288,7 @@ pub(crate) fn cdc_ethernet_dma_storage_ptr() -> *mut u8 {
     unsafe {
         core::ptr::addr_of_mut!(DEMO_CANVAS.0)
             .cast::<u8>()
-            .add(CDC_RECEIVER_STORAGE_BYTES)
+            .add(CDC_ZMODEM_STORAGE_BYTES)
     }
 }
 
@@ -296,7 +296,7 @@ pub(crate) fn cdc_ethernet_http_storage_ptr() -> *mut u8 {
     unsafe {
         core::ptr::addr_of_mut!(DEMO_CANVAS.0)
             .cast::<u8>()
-            .add(CDC_RECEIVER_STORAGE_BYTES + CDC_ETHERNET_DMA_STORAGE_BYTES)
+            .add(CDC_ZMODEM_STORAGE_BYTES + CDC_ETHERNET_DMA_STORAGE_BYTES)
     }
 }
 
@@ -312,20 +312,20 @@ struct RowBuffer([u8; WIDTH]);
 static mut ROW_BUFFER: RowBuffer = RowBuffer([0; WIDTH]);
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
 // CDC mode uses the PC CONNECT renderer and does not consume the demo canvas.
-// Its main-SRAM range holds the ZMODEM receiver, Ethernet DMA ring, HTTP
-// buffers and alternate stack. The CCM tail holds smoltcp socket storage.
-static CDC_RECEIVER_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+// Its main-SRAM range holds shared ZMODEM receiver/send storage, the
+// Ethernet DMA ring, HTTP buffers and alternate stack. The CCM tail holds smoltcp socket storage.
+static CDC_ZMODEM_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn claim_cdc_receiver_storage() -> Option<(*mut u8, usize)> {
-    CDC_RECEIVER_STORAGE_IN_USE
+pub(crate) fn claim_cdc_zmodem_storage() -> Option<(*mut u8, usize)> {
+    CDC_ZMODEM_STORAGE_IN_USE
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .ok()?;
     let ptr = unsafe { core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>() };
-    Some((ptr, CDC_RECEIVER_STORAGE_BYTES))
+    Some((ptr, CDC_ZMODEM_STORAGE_BYTES))
 }
 
-pub(crate) fn release_cdc_receiver_storage() {
-    CDC_RECEIVER_STORAGE_IN_USE.store(false, Ordering::Release);
+pub(crate) fn release_cdc_zmodem_storage() {
+    CDC_ZMODEM_STORAGE_IN_USE.store(false, Ordering::Release);
 }
 
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);

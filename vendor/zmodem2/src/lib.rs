@@ -47,6 +47,7 @@ mod zdle;
 pub use api::*;
 pub use error::*;
 pub use transmission::*;
+pub use wire::SUBPACKET_MAX_SIZE;
 
 pub(crate) const ZPAD: u8 = b'*';
 pub(crate) const ZDLE: u8 = 0x18;
