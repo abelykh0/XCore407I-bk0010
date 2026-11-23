@@ -50,7 +50,7 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
     })
 }
 
-/// Render a bounded batch of PCM samples from the main loop.
+/// Advance a bounded batch of source-time samples from the main loop.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_render() {
     if let Some(state) = audio_state_ptr() {
