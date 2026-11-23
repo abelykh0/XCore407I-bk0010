@@ -112,62 +112,62 @@ pub(crate) fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::F
 /// so this function is called only after CDC boot selection has shut down
 /// the FS host. USB HS ULPI pins are not touched.
 pub(crate) fn configure_ethernet_pins() {
-    const RCC_AHB1ENR: *mut u32 = 0x4002_3830 as *mut u32;
-    const GPIOA: usize = 0x4002_0000;
-    const GPIOC: usize = 0x4002_0800;
-    const GPIOG: usize = 0x4002_1800;
-
     unsafe {
         // Make this routine self-contained: enable GPIOA for the external
         // RMII reference-clock input, GPIOC for RX/MDC, and GPIOG for TX.
-        core::ptr::write_volatile(
-            RCC_AHB1ENR,
-            core::ptr::read_volatile(RCC_AHB1ENR) | (1 << 0) | (1 << 2) | (1 << 6),
-        );
-        let _ = core::ptr::read_volatile(RCC_AHB1ENR);
+        let rcc = &*pac::RCC::ptr();
+        rcc.ahb1enr().modify(|_, w| {
+            w.gpioaen().set_bit()
+                .gpiocen().set_bit()
+                .gpiogen().set_bit()
+        });
+        let _ = rcc.ahb1enr().read();
 
-        for (port, pin) in [
-            (GPIOA, 1u8),  // RMII_REF_CLK
-            (GPIOA, 2u8),  // RMII_MDIO
-            (GPIOA, 7u8),  // RMII_CRS_DV
-            (GPIOC, 1u8),  // RMII_MDC (was USB FS VBUS enable)
-            (GPIOC, 4u8),  // RMII_RXD0
-            (GPIOC, 5u8),  // RMII_RXD1
-            (GPIOG, 11u8), // RMII_TX_EN (alternate board routing)
-            (GPIOG, 13u8), // RMII_TXD0 (alternate board routing)
-            (GPIOG, 14u8), // RMII_TXD1 (alternate board routing)
-        ] {
-            let base = port as *mut u32;
-            let moder = base.add(0x00 / 4);
-            let otyper = base.add(0x04 / 4);
-            let speed = base.add(0x08 / 4);
-            let pull = base.add(0x0C / 4);
-            let afr = base.add(if pin < 8 { 0x20 / 4 } else { 0x24 / 4 });
-            let shift = (pin as u32 & 7) * 4;
-            let mode_shift = (pin as u32) * 2;
-            let mode_mask = 0b11 << mode_shift;
+        let gpioa = &*pac::GPIOA::ptr();
+        let gpioc = &*pac::GPIOC::ptr();
+        let gpiog = &*pac::GPIOG::ptr();
 
-            core::ptr::write_volatile(
-                moder,
-                (core::ptr::read_volatile(moder) & !mode_mask) | (0b10 << mode_shift),
-            );
-            core::ptr::write_volatile(
-                otyper,
-                core::ptr::read_volatile(otyper) & !(1 << pin),
-            );
-            core::ptr::write_volatile(
-                speed,
-                (core::ptr::read_volatile(speed) & !mode_mask) | (0b11 << mode_shift),
-            );
-            core::ptr::write_volatile(
-                pull,
-                core::ptr::read_volatile(pull) & !mode_mask,
-            );
-            core::ptr::write_volatile(
-                afr,
-                (core::ptr::read_volatile(afr) & !(0xF << shift)) | (0xB << shift),
-            );
+        macro_rules! configure_rmii_pin {
+            ($gpio:expr, $pin:expr) => {{
+                let pin = $pin as u32;
+                let mode_shift = pin * 2;
+                let mode_mask = 0b11 << mode_shift;
+                let af_shift = (pin & 7) * 4;
+
+                $gpio.moder().modify(|r, w| {
+                    w.bits((r.bits() & !mode_mask) | (0b10 << mode_shift))
+                });
+                $gpio.otyper().modify(|r, w| {
+                    w.bits(r.bits() & !(1 << pin))
+                });
+                $gpio.ospeedr().modify(|r, w| {
+                    w.bits((r.bits() & !mode_mask) | (0b11 << mode_shift))
+                });
+                $gpio.pupdr().modify(|r, w| {
+                    w.bits(r.bits() & !mode_mask)
+                });
+
+                if pin < 8 {
+                    $gpio.afrl().modify(|r, w| {
+                        w.bits((r.bits() & !(0xF << af_shift)) | (0xB << af_shift))
+                    });
+                } else {
+                    $gpio.afrh().modify(|r, w| {
+                        w.bits((r.bits() & !(0xF << af_shift)) | (0xB << af_shift))
+                    });
+                }
+            }};
         }
+
+        configure_rmii_pin!(gpioa, 1);  // RMII_REF_CLK
+        configure_rmii_pin!(gpioa, 2);  // RMII_MDIO
+        configure_rmii_pin!(gpioa, 7);  // RMII_CRS_DV
+        configure_rmii_pin!(gpioc, 1);  // RMII_MDC (was USB FS VBUS enable)
+        configure_rmii_pin!(gpioc, 4);  // RMII_RXD0
+        configure_rmii_pin!(gpioc, 5);  // RMII_RXD1
+        configure_rmii_pin!(gpiog, 11); // RMII_TX_EN (alternate board routing)
+        configure_rmii_pin!(gpiog, 13); // RMII_TXD0 (alternate board routing)
+        configure_rmii_pin!(gpiog, 14); // RMII_TXD1 (alternate board routing)
     }
 }
 
