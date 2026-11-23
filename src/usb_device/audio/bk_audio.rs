@@ -24,7 +24,7 @@ const AUDIO_AMPLITUDE: i16 = 12_000;
 const PCM_RING_CAPACITY: u16 = 2048;
 const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
 const _: () = assert!(PCM_RING_CAPACITY.is_power_of_two());
-const _: () = assert!(PACKET_BYTES <= crate::uvc::USB_HS_DMA_BUFFER_LIMIT);
+const _: () = assert!(PACKET_BYTES <= crate::usb_device::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
 static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
 static PCM_TAIL: AtomicU16 = AtomicU16::new(0);

@@ -5,7 +5,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use littlefs2::{fs::Filesystem, path::Path};
 
-use crate::{cdc_zmodem, nand_fs::ActiveStorage, tusb};
+use crate::{nand_fs::ActiveStorage, tusb};
+use super::zmodem as cdc_zmodem;
 
 const LINE_CAPACITY: usize = 80;
 

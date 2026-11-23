@@ -15,7 +15,7 @@ use panic_halt as _;
 use stm32f4::stm32f407::interrupt;
 use stm32f4xx_hal::pac;
 use xcore407i_blinker::camera::{clear_demo_canvas, show_usb_status, show_file_browser_line, Nv12DemoImage};
-use xcore407i_blinker::uvc::prepare_next_video_batch;
+use xcore407i_blinker::usb_device::uvc::prepare_next_video_batch;
 use xcore407i_blinker::tusb;
 use xcore407i_blinker::rtc;
 
@@ -58,9 +58,9 @@ static FILE_BROWSER_IO_SERVICE: fn() = service_file_browser_io;
 fn service_cdc_scan_io() {
     unsafe {
         let _ = tusb::tud_task_ext(1, false);
-        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+        xcore407i_blinker::usb_device::uvc_nv12::xcore_tud_uvc_task(1);
     }
-    xcore407i_blinker::cdc_console::service_connection();
+    xcore407i_blinker::usb_device::cdc_console::service_connection();
 
     // ECCSCAN can run for a long time in the CDC foreground. Keep the
     // camera producer moving, but advance only one bounded batch per service
@@ -76,7 +76,7 @@ fn service_cdc_scan_io() {
 fn service_file_browser_io() {
     unsafe {
         let _ = tusb::tud_task_ext(1, false);
-        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+        xcore407i_blinker::usb_device::uvc_nv12::xcore_tud_uvc_task(1);
     }
     if USB_FS_READY.load(Ordering::Acquire)
         && USB_HOST_TASK_PENDING.swap(false, Ordering::AcqRel)
@@ -348,7 +348,7 @@ fn main() -> ! {
         NVIC::unpend(interrupt::OTG_HS);
     }
 
-    xcore407i_blinker::uvc::set_cdc_mode(cdc_enabled);
+    xcore407i_blinker::usb_device::uvc::set_cdc_mode(cdc_enabled);
 
     let hs_device_init = tusb::tusb_rhport_init_t {
         role: tusb::tusb_role_t::TUSB_ROLE_DEVICE,
@@ -406,10 +406,10 @@ fn main() -> ! {
         // the reusable LittleFS FileAllocation and must not consume the small main stack.
         let mut just_formatted = false;
         loop {
-            let mount_result: Result<xcore407i_blinker::cdc_console::FormatRequest, xcore407i_blinker::nand_fs::FsAccessError> =
+            let mount_result: Result<xcore407i_blinker::usb_device::cdc_console::FormatRequest, xcore407i_blinker::nand_fs::FsAccessError> =
                 unsafe {
                     xcore407i_blinker::nand_fs::with_cdc_alternate_stack(|| {
-                        let mut zmodem_state = xcore407i_blinker::cdc_zmodem::State::new();
+                        let mut zmodem_state = xcore407i_blinker::usb_device::cdc_zmodem::State::new();
                         // FileAllocation owns persistent LittleFS state; keep the HTTP
                         // upload allocation on the alternate stack, not in the small
                         // main-stack EthernetNetwork value.
@@ -423,14 +423,14 @@ fn main() -> ! {
                         xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
                         let mount_result = xcore407i_blinker::nand_fs::with_mounted_detailed_with_progress(|fs| {
                             if just_formatted {
-                                xcore407i_blinker::cdc_console::report_format_status(
+                                xcore407i_blinker::usb_device::cdc_console::report_format_status(
                                     b"Fresh LittleFS mount succeeded. CDC storage is ready.\r\n",
                                 );
                                 just_formatted = false;
                             }
                             loop {
                                 let _ = tusb::tud_task_ext(1, false);
-                                xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+                                xcore407i_blinker::usb_device::uvc_nv12::xcore_tud_uvc_task(1);
                                 // The HTTP directory listing reads LittleFS synchronously.
                                 // Keep USB/UVC serviced during NAND page reads.
                                 xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
@@ -440,7 +440,7 @@ fn main() -> ! {
                                 // NAND waits. The PC CONNECT renderer does not read the canvas.
                                 FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
                                 xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
-                                let format_requested = xcore407i_blinker::cdc_console::service(
+                                let format_requested = xcore407i_blinker::usb_device::cdc_console::service(
                                     Some(fs),
                                     &mut zmodem_state,
                                     TICKS.load(Ordering::Relaxed),
@@ -449,7 +449,7 @@ fn main() -> ! {
                                 xcore407i_blinker::nand_fs::set_io_service_hook(None);
                                 FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
                                 while prepare_next_video_batch(&mut video_renderer) {}
-                                if format_requested != xcore407i_blinker::cdc_console::FormatRequest::None {
+                                if format_requested != xcore407i_blinker::usb_device::cdc_console::FormatRequest::None {
                                     break Ok(format_requested);
                                 }
                             }
@@ -460,22 +460,22 @@ fn main() -> ! {
                         // Keep the state on the alternate stack in the storage-unavailable
                         // console too; do not construct another large state on the main stack.
                         if let Err(error) = mount_result {
-                            xcore407i_blinker::cdc_console::report_storage_error(error);
+                            xcore407i_blinker::usb_device::cdc_console::report_storage_error(error);
                             loop {
                                 let _ = tusb::tud_task_ext(1, false);
-                                xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
-                                let requested = xcore407i_blinker::cdc_console::service(
+                                xcore407i_blinker::usb_device::uvc_nv12::xcore_tud_uvc_task(1);
+                                let requested = xcore407i_blinker::usb_device::cdc_console::service(
                                     None,
                                     &mut zmodem_state,
                                     TICKS.load(Ordering::Relaxed),
                                     &mut || {
                                         let _ = tusb::tud_task_ext(1, false);
-                                        xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+                                        xcore407i_blinker::usb_device::uvc_nv12::xcore_tud_uvc_task(1);
                                         while prepare_next_video_batch(&mut video_renderer) {}
                                     },
                                 );
                                 while prepare_next_video_batch(&mut video_renderer) {}
-                                if requested != xcore407i_blinker::cdc_console::FormatRequest::None {
+                                if requested != xcore407i_blinker::usb_device::cdc_console::FormatRequest::None {
                                     break Ok(requested);
                                 }
                             }
@@ -487,10 +487,10 @@ fn main() -> ! {
 
         // The mounted-filesystem closure has returned, so LittleFS and its
         // Dhara storage borrow are dropped before the destructive format.
-        let format_request = match &mount_result { Ok(request) => *request, Err(_) => xcore407i_blinker::cdc_console::FormatRequest::None };
+        let format_request = match &mount_result { Ok(request) => *request, Err(_) => xcore407i_blinker::usb_device::cdc_console::FormatRequest::None };
 
-        if format_request == xcore407i_blinker::cdc_console::FormatRequest::LittleFs {
-            xcore407i_blinker::cdc_console::report_format_status(b"Filesystem released. Formatting LittleFS only; Dhara journal is preserved...\r\n");
+        if format_request == xcore407i_blinker::usb_device::cdc_console::FormatRequest::LittleFs {
+            xcore407i_blinker::usb_device::cdc_console::report_format_status(b"Filesystem released. Formatting LittleFS only; Dhara journal is preserved...\r\n");
             FILE_BROWSER_VIDEO_RENDERER.store(&mut video_renderer, Ordering::Release);
             xcore407i_blinker::nand_fs::set_io_service_hook(Some(&FILE_BROWSER_IO_SERVICE));
             let format_result = xcore407i_blinker::nand_fs::format_existing_littlefs();
@@ -498,14 +498,14 @@ fn main() -> ! {
             FILE_BROWSER_VIDEO_RENDERER.store(ptr::null_mut(), Ordering::Release);
             match format_result {
                 Ok(()) => {
-                    xcore407i_blinker::cdc_console::report_format_status(b"LittleFS-only format complete and verified.\r\n");
+                    xcore407i_blinker::usb_device::cdc_console::report_format_status(b"LittleFS-only format complete and verified.\r\n");
                     just_formatted = true;
                     continue;
                 }
-                Err(error) => xcore407i_blinker::cdc_console::report_format_failure(error),
+                Err(error) => xcore407i_blinker::usb_device::cdc_console::report_format_failure(error),
             }
-        } else if format_request == xcore407i_blinker::cdc_console::FormatRequest::WholeNand {
-            xcore407i_blinker::cdc_console::report_format_status(
+        } else if format_request == xcore407i_blinker::usb_device::cdc_console::FormatRequest::WholeNand {
+            xcore407i_blinker::usb_device::cdc_console::report_format_status(
                 b"Filesystem released. Formatting NAND; all files will be lost...\r\n",
             );
             let mut last_reported = 0u32;
@@ -514,23 +514,23 @@ fn main() -> ! {
                     |completed, total| {
                         unsafe {
                             let _ = tusb::tud_task_ext(1, false);
-                            xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+                            xcore407i_blinker::usb_device::uvc_nv12::xcore_tud_uvc_task(1);
                         }
                         while prepare_next_video_batch(&mut video_renderer) {}
                         if completed == total || completed >= last_reported + 32 {
                             last_reported = completed;
-                            xcore407i_blinker::cdc_console::report_format_status(b".");
+                            xcore407i_blinker::usb_device::cdc_console::report_format_status(b".");
                         }
                     },
                 );
             match format_result {
                 Ok(report) => {
-                    xcore407i_blinker::cdc_console::report_format_complete(report);
+                    xcore407i_blinker::usb_device::cdc_console::report_format_complete(report);
                     just_formatted = true;
                     continue;
                 }
                 Err(error) => {
-                    xcore407i_blinker::cdc_console::report_format_failure(error);
+                    xcore407i_blinker::usb_device::cdc_console::report_format_failure(error);
                 }
             }
         }
@@ -585,7 +585,7 @@ fn main() -> ! {
         // endpoints are re-armed directly by their class xfer_isr callbacks.
         unsafe {
             let _ = tusb::tud_task_ext(1, false);
-            xcore407i_blinker::uvc_nv12::xcore_tud_uvc_task(1);
+            xcore407i_blinker::usb_device::uvc_nv12::xcore_tud_uvc_task(1);
         }
 
         // Service the USB FS host in thread context. TIM3 only schedules this
@@ -637,7 +637,7 @@ fn main() -> ! {
             // outlive it. USB, camera transport, NAND contents and host HID
             // connectivity are intentionally left running.
             unsafe { bk_reset(); }
-            xcore407i_blinker::audio_uac2::reset_emulator_capture();
+            xcore407i_blinker::usb_device::audio_uac2::reset_emulator_capture();
             keyboard::reset_frame_pacing();
             keyboard_queue_discard();
             reset_emulator_ui();
@@ -875,7 +875,7 @@ fn main() -> ! {
                         // prevents further video writes from using the old canvas
                         // layout while the requested mode is waiting.
                         if xcore407i_blinker::camera::camera_mode_change_pending()
-                            && xcore407i_blinker::uvc::streaming_active()
+                            && xcore407i_blinker::usb_device::uvc::streaming_active()
                         {
                             break;
                         }
@@ -885,7 +885,7 @@ fn main() -> ! {
                     // until it consumes the pending mode at a frame boundary.
                     // USB completion IRQs continue freeing DMA buffers meanwhile.
                     while xcore407i_blinker::camera::camera_mode_change_pending()
-                        && xcore407i_blinker::uvc::streaming_active()
+                        && xcore407i_blinker::usb_device::uvc::streaming_active()
                     {
                         while prepare_next_video_batch(&mut video_renderer) {}
                     }
@@ -893,7 +893,7 @@ fn main() -> ! {
                     // Convert queued BK speaker transitions into PCM in thread
                     // context. The USB audio completion callback only drains
                     // this ring and must never perform sample rendering itself.
-                    xcore407i_blinker::audio_uac2::xcore_tud_audio_render();
+                    xcore407i_blinker::usb_device::audio_uac2::xcore_tud_audio_render();
 
                     service_keyboard_frame_pacing();
                 }

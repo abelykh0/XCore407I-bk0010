@@ -9,7 +9,7 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::camera::{HEIGHT, WIDTH};
-use crate::uvc::{
+use super::uvc::{
     ControlResponse, UvcClass, active_frame_interval_100ns, active_frame_rate_fps,
     CONTROL_INTERFACE, ENDPOINT_IN, ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE,
     NV12_GUID, STREAMING_INTERFACE, VS_TOTAL_LENGTH,
@@ -35,8 +35,8 @@ static mut UVC_STATE: MaybeUninit<UvcClass> = MaybeUninit::uninit();
 static mut UVC_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
 // TinyUSB retains the EP0 response pointer until the control transfer completes.
 // Keep it separate from UVC_STATE, which is mutable by other USB callbacks.
-static mut UVC_CONTROL_RESPONSE: [u8; crate::uvc::PROBE_LENGTH] =
-    [0; crate::uvc::PROBE_LENGTH];
+static mut UVC_CONTROL_RESPONSE: [u8; super::uvc::PROBE_LENGTH] =
+    [0; super::uvc::PROBE_LENGTH];
 
 unsafe extern "C" {
     fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
@@ -541,7 +541,7 @@ pub extern "C" fn xcore_tud_uvc_class_control_out(
     length: u16,
     data: *const u8,
 ) -> bool {
-    if data.is_null() || length > crate::uvc::PROBE_LENGTH as u16 {
+    if data.is_null() || length > super::uvc::PROBE_LENGTH as u16 {
         return false;
     }
     let data = unsafe { core::slice::from_raw_parts(data, length as usize) };

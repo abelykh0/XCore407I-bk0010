@@ -4,7 +4,7 @@
 //! endpoint addresses, high-bandwidth UVC transactions, and packet sizes.
 
 use crate::camera::{HEIGHT, WIDTH};
-use crate::uvc::{
+use crate::usb_device::uvc::{
     active_frame_interval_100ns, active_frame_rate_fps, FRAME_BIT_RATE, FRAME_BYTES,
     ENDPOINT_IN, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE, NV12_GUID,
 };
@@ -323,7 +323,7 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
 
     // Preserve the original UVC+UAC2 descriptor byte-for-byte in normal mode.
     // CDC mode uses its separate UVC+CDC configuration.
-    if !crate::uvc::cdc_mode_enabled() {
+    if !crate::usb_device::uvc::cdc_mode_enabled() {
         return NORMAL_CONFIGURATION_DESCRIPTOR.as_ptr();
     }
 

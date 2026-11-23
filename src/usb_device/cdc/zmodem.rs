@@ -193,13 +193,13 @@ impl State {
         }
 
         let written = if self.receive_file_count == 1 && self.receive_name_len != 0 {
-            super::cdc_console::write_receive_complete(
+            super::console::write_receive_complete(
                 &self.receive_name[..self.receive_name_len],
                 self.receive_last_file_size,
                 self.receive_elapsed_seconds,
             )
         } else {
-            super::cdc_console::write_receive_summary(
+            super::console::write_receive_summary(
                 self.receive_file_count,
                 self.receive_total_size,
             )
@@ -620,7 +620,7 @@ fn service_sender(
         if state.session_complete_pending {
             state.session_complete_pending = false;
             let elapsed_ms = rtc_now_millis().wrapping_sub(state.send_started_rtc_ms);
-            super::cdc_console::write_send_complete(
+            super::console::write_send_complete(
                 &state.send_path[1..state.send_path_len - 1],
                 state.send_size,
                 elapsed_ms / 1_000,
@@ -697,7 +697,7 @@ fn service_sender(
                 state.session_complete_pending = true;
             }
             Action::Event(Event::Aborted) => {
-                super::cdc_console::write_status(b"\r\nZMODEM send aborted or failed.\r\n> ");
+                super::console::write_status(b"\r\nZMODEM send aborted or failed.\r\n> ");
                 finished = true;
                 break;
             }
@@ -767,7 +767,7 @@ fn service_sender(
                                 ZmodemError::UnsupportedFeature => b"\r\nZMODEM send: unsupported receiver feature\r\n",
                                 ZmodemError::SubpacketTooLarge => b"\r\nZMODEM send: receiver packet too large\r\n",
                             };
-                            super::cdc_console::write_status(message);
+                            super::console::write_status(message);
                             sender.abort();
                         }
                     }
@@ -790,7 +790,7 @@ fn service_sender(
     if finished {
         if state.file_allocation.is_open() {
             if unsafe { state.file_allocation.close(fs) }.is_err() {
-                super::cdc_console::write_status(
+                super::console::write_status(
                     b"\r\nZMODEM send: LittleFS close failed; reset required before another transfer.\r\n> ",
                 );
             }
@@ -848,7 +848,7 @@ pub fn service(
                 state.transfer_failed = true;
                 finished = true;
                 remove_partial_file(fs, state);
-                super::cdc_console::write_status(
+                super::console::write_status(
                     b"\r\nZMODEM timeout; unable to queue abort\r\n> ",
                 );
                 break;
@@ -897,7 +897,7 @@ pub fn service(
                 let bytes_len = bytes.len();
                 if state.final_path_len == 0 {
                     state.last_error = 1;
-                    super::cdc_console::write_status(
+                    super::console::write_status(
                         b"\r\nZMODEM storage error: temp file not active\r\n",
                     );
                     state.transfer_failed = true;
@@ -928,7 +928,7 @@ pub fn service(
                 state.receive_size = state.receive_size.wrapping_add(bytes_len as u32);
                 if receiver.file_written(bytes_len).is_err() {
                     state.last_error = 3;
-                    super::cdc_console::write_status(
+                    super::console::write_status(
                         b"\r\nZMODEM protocol error: file_written rejected data\r\n",
                     );
                     state.transfer_failed = true;
@@ -972,7 +972,7 @@ pub fn service(
                     if receiver.accept_file_at(0).is_err() {
                         state.last_error = 4;
                         state.receive_pending_name_len = 0;
-                        super::cdc_console::write_status(
+                        super::console::write_status(
                             b"\r\nZMODEM protocol error: accept_file_at failed\r\n",
                         );
                         state.transfer_failed = true;
@@ -990,7 +990,7 @@ pub fn service(
                         6 => b"\r\nZMODEM rejected file: temp-file path invalid\r\n",
                         _ => b"\r\nZMODEM rejected file: temp-file creation failed\r\n",
                     };
-                    super::cdc_console::write_status(message);
+                    super::console::write_status(message);
                     if receiver.skip_file().is_err() {
                         state.transfer_failed = true;
                         let _ = receiver.abort();
@@ -1014,7 +1014,7 @@ pub fn service(
                     // manual recovery. Clearing final_path_len prevents the
                     // common abort cleanup from deleting it.
                     state.final_path_len = 0;
-                    super::cdc_console::write_status(
+                    super::console::write_status(
                         b"\r\nZMODEM storage error: final commit failed; temporary file preserved\r\n",
                     );
                     state.transfer_failed = true;
@@ -1048,17 +1048,17 @@ pub fn service(
                 finished = true;
                 remove_partial_file(fs, state);
                 if state.timeout_pending {
-                    super::cdc_console::write_status(
+                    super::console::write_status(
                         b"\r\nZMODEM timed out after 60 seconds of inactivity\r\n> ",
                     );
                 } else if state.transfer_failed {
-                    super::cdc_console::write_status(
+                    super::console::write_status(
                         b"\r\nZMODEM stopped: storage/protocol error\r\n> ",
                     );
                 } else if state.transfer_started {
-                    super::cdc_console::write_status(b"\r\nZMODEM transfer cancelled\r\n> ");
+                    super::console::write_status(b"\r\nZMODEM transfer cancelled\r\n> ");
                 } else {
-                    super::cdc_console::write_status(b"\r\nZMODEM session cancelled\r\n> ");
+                    super::console::write_status(b"\r\nZMODEM session cancelled\r\n> ");
                 }
                 // Keep failure flags set until the common teardown below captures
                 // them and enables the CDC input-discard window.
@@ -1163,7 +1163,7 @@ pub fn service(
                                 ZmodemError::UnsupportedFeature => b"\r\nZMODEM input: unsupported feature\r\n",
                                 ZmodemError::SubpacketTooLarge => b"\r\nZMODEM input: subpacket too large; retry requested\r\n",
                             };
-                            super::cdc_console::write_status(message);
+                            super::console::write_status(message);
                             let _ = receiver.abort();
                             break;
                         }

@@ -2,8 +2,6 @@
 #![allow(suspicious_runtime_symbol_definitions)]
 
 pub mod bk_screen;
-pub mod cdc_console;
-pub mod cdc_zmodem;
 pub mod camera;
 pub mod format;
 pub mod nand_fs;
@@ -11,12 +9,8 @@ pub mod dhara_fs;
 pub mod ethernet;
 pub mod libc_shims;
 pub mod rtc;
-pub mod bk_audio;
 pub mod tusb;
-pub mod audio_uac2;
-pub mod uvc_nv12;
-pub mod tusb_descriptors;
-pub mod uvc;
+pub mod usb_device;
 
 mod nand_ecc;
 mod copy_words;
