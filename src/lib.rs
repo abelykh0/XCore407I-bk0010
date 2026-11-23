@@ -1,8 +1,8 @@
 #![no_std]
 #![allow(suspicious_runtime_symbol_definitions)]
 
-pub mod bk_screen;
 pub mod camera;
+pub mod emulator;
 pub mod format;
 pub mod nand_fs;
 pub mod dhara_fs;

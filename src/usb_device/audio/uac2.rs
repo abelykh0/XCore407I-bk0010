@@ -3,7 +3,7 @@
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use super::bk_audio::BkEmulatorAudio;
+use crate::emulator::bk_audio::BkEmulatorAudio;
 const UAC_STREAM_INTERFACE: u8 = 3;
 
 static AUDIO_STATE_READY: AtomicBool = AtomicBool::new(false);
@@ -61,7 +61,7 @@ pub extern "C" fn xcore_tud_audio_render() {
 /// USB completion callback: copy pre-rendered PCM samples only.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
-    unsafe { super::bk_audio::fill_usb_packet(buffer, capacity) }
+    unsafe { crate::emulator::bk_audio::fill_usb_packet(buffer, capacity) }
 }
 
 /// TinyUSB calls this on unmount/reset; the next SET_INTERFACE will reinitialize

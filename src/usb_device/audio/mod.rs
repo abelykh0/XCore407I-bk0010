@@ -1,4 +1,3 @@
-//! USB audio class and BK emulator audio pipeline.
+//! USB Audio Class 2 device implementation.
 
-pub mod bk_audio;
 pub mod uac2;

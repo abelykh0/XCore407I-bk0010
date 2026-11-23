@@ -12,7 +12,7 @@ use crate::file_browser::{
     INIT_STATE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST, INIT_CANCELLED,
 };
 use crate::usb_host::{note_usb_host_activity, USB_FS_STATUS};
-use crate::keyboard_map::{append_keyboard_char, append_keyboard_text, key_to_ascii, map_russian_layout, special_key_label};
+use xcore407i_blinker::emulator::bk_keyboard::{append_keyboard_char, append_keyboard_text, key_to_ascii, map_russian_layout, special_key_label};
 use xcore407i_blinker::camera::request_camera_mode_toggle;
 use xcore407i_blinker::tusb;
 

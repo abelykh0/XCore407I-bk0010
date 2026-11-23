@@ -1,19 +1,19 @@
 //! USB HID boot-keyboard key translation and display labels.
 
-pub(crate) fn append_keyboard_char(out: &mut [u8; 32], used: &mut usize, ch: u8) {
+pub fn append_keyboard_char(out: &mut [u8; 32], used: &mut usize, ch: u8) {
     if *used < out.len() {
         out[*used] = ch;
         *used += 1;
     }
 }
 
-pub(crate) fn append_keyboard_text(out: &mut [u8; 32], used: &mut usize, text: &[u8]) {
+pub fn append_keyboard_text(out: &mut [u8; 32], used: &mut usize, text: &[u8]) {
     for &ch in text {
         append_keyboard_char(out, used, ch);
     }
 }
 
-pub(crate) fn key_to_ascii(key: u8, shift: bool, caps: bool, num: bool, control_or_alt: bool) -> Option<u8> {
+pub fn key_to_ascii(key: u8, shift: bool, caps: bool, num: bool, control_or_alt: bool) -> Option<u8> {
     // AZBK standard PC-to-BK special-key assignments.
     // Values are the BK control-key codes consumed by the emulator.
     match key {
@@ -81,7 +81,7 @@ pub(crate) fn key_to_ascii(key: u8, shift: bool, caps: bool, num: bool, control_
 
 /// Translate a host-layout ASCII symbol using the BK Russian key map
 /// from esp32-bkEmu's convertSymbol().
-pub(crate) fn map_russian_layout(mut ch: u8, caps: bool) -> u8 {
+pub fn map_russian_layout(mut ch: u8, caps: bool) -> u8 {
     if ch.is_ascii_uppercase() {
         const MAP: &[u8; 26] = b"fiswuapr{oldxt}zjkyegmc~nq";
         return MAP[(ch - b'A') as usize];
@@ -132,7 +132,7 @@ pub(crate) fn map_russian_layout(mut ch: u8, caps: bool) -> u8 {
     }
 }
 
-pub(crate) fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
+pub fn special_key_label(key: u8, num: bool) -> Option<&'static [u8]> {
     match key {
         0x28 => Some(b"[ENTER]"),
         0x29 => Some(b"[ESC]"),
