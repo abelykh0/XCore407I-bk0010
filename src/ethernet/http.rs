@@ -6,7 +6,11 @@ use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 pub(super) const HTTP_RX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_RX_BYTES;
 pub(super) const HTTP_BODY_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_BODY_BYTES;
-const HTTP_DIRECTORY_PAGE_SIZE: usize = 128;
+// Each filename is escaped twice (data-name and visible text). HTML escaping can
+// expand one ASCII byte to six bytes; reserve another 256 bytes per entry for
+// markup and the displayed file size. This keeps a full page within the body buffer.
+const HTTP_DIRECTORY_PAGE_SIZE: usize =
+    HTTP_BODY_BUFFER_SIZE / (littlefs2::consts::FILENAME_MAX_PLUS_ONE as usize * 12 + 256);
 
 static HTTP_UPLOAD_DIAG_STAGE: AtomicU8 = AtomicU8::new(0);
 static HTTP_UPLOAD_DIAG_OFFSET: AtomicU32 = AtomicU32::new(0);
@@ -70,21 +74,28 @@ fn append_http_bytes(buffer: &mut [u8], length: &mut usize, bytes: &[u8]) -> boo
     true
 }
 
-fn append_http_decimal(buffer: &mut [u8], length: &mut usize, mut value: usize) {
+fn append_http_decimal_formatted(
+    buffer: &mut [u8],
+    length: &mut usize,
+    value: usize,
+    grouped: bool,
+) {
     let mut digits = [0u8; 10];
-    let mut count = 0;
-    loop {
-        digits[count] = b'0' + (value % 10) as u8;
-        count += 1;
-        value /= 10;
-        if value == 0 { break; }
-    }
-    while count != 0 {
-        count -= 1;
-        if !append_http_bytes(buffer, length, &digits[count..count + 1]) {
-            break;
+    let digits = crate::format::u32_to_decimal(value as u32, &mut digits);
+    for (index, &digit) in digits.iter().enumerate() {
+        if grouped && index != 0 && (digits.len() - index) % 3 == 0 {
+            append_http_bytes(buffer, length, b",");
         }
+        append_http_bytes(buffer, length, core::slice::from_ref(&digit));
     }
+}
+
+fn append_http_decimal(buffer: &mut [u8], length: &mut usize, value: usize) {
+    append_http_decimal_formatted(buffer, length, value, false);
+}
+
+fn append_http_grouped_decimal(buffer: &mut [u8], length: &mut usize, value: usize) {
+    append_http_decimal_formatted(buffer, length, value, true);
 }
 
 
@@ -564,15 +575,19 @@ impl<'a> super::EthernetNetwork<'a> {
                         emitted += 1;
                         let name = path.strip_prefix(b"/").unwrap_or(path);
                         let name = name.strip_suffix(b"\0").unwrap_or(name);
-                        let mut name_len = core::cmp::min(name.len(), 32);
-                        while name_len > 0 && name_len < name.len()
-                            && name[name_len] & 0xc0 == 0x80
-                        {
-                            name_len -= 1;
+                        append_http_bytes(body, &mut length, b"<li data-name=\"");
+                        for &byte in name {
+                            let escaped = match byte {
+                                b'&' => b"&amp;" as &[u8],
+                                b'<' => b"&lt;",
+                                b'>' => b"&gt;",
+                                b'"' => b"&quot;",
+                                _ => core::slice::from_ref(&byte),
+                            };
+                            append_http_bytes(body, &mut length, escaped);
                         }
-                        append_http_bytes(body, &mut length, b"<li>");
-                        let safe_image_name = name_len == name.len()
-                            && !name.is_empty()
+                        append_http_bytes(body, &mut length, b"\">");
+                        let safe_image_name = !name.is_empty()
                             && name.len() <= 64
                             && name != b"."
                             && name != b".."
@@ -586,7 +601,7 @@ impl<'a> super::EthernetNetwork<'a> {
                             append_http_bytes(body, &mut length, name);
                             append_http_bytes(body, &mut length, b"\">");
                         }
-                        for &byte in &name[..name_len] {
+                        for &byte in name {
                             let escaped = match byte {
                                 b'&' => b"&amp;" as &[u8],
                                 b'<' => b"&lt;",
@@ -596,13 +611,12 @@ impl<'a> super::EthernetNetwork<'a> {
                             };
                             append_http_bytes(body, &mut length, escaped);
                         }
-                        if name_len < name.len() { append_http_bytes(body, &mut length, b"... "); }
                         if image_file { append_http_bytes(body, &mut length, b"</a>"); }
                         if is_dir {
                             append_http_bytes(body, &mut length, b"/");
                         } else {
                             append_http_bytes(body, &mut length, b" (");
-                            append_http_decimal(body, &mut length, size);
+                            append_http_grouped_decimal(body, &mut length, size);
                             append_http_bytes(body, &mut length, b" bytes)");
                         }
                         append_http_bytes(body, &mut length, b"</li>");

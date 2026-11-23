@@ -13,6 +13,67 @@
 
 const ECC_CHUNK_SIZE: usize = 512;
 
+/// Decode a 24-bit STM32 FSMC syndrome using Linux's SM-order Hamming
+/// decoder. FSMC ECC is Linux ECC rotated left by six bits and complemented,
+/// so the syndrome is rotated right by six before decoding.
+fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
+    let linux = ((syndrome >> 6) | (syndrome << 18)) & 0x00FF_FFFF;
+    let b0 = linux as u8;
+    let b1 = (linux >> 8) as u8;
+    let b2 = (linux >> 16) as u8;
+
+    // A 512-byte data-bit syndrome has alternating parity in every
+    // address pair, including both high byte-address bits in b2.
+    if ((b0 ^ (b0 >> 1)) & 0x55) != 0x55
+        || ((b1 ^ (b1 >> 1)) & 0x55) != 0x55
+        || ((b2 ^ (b2 >> 1)) & 0x55) != 0x55
+    {
+        return None;
+    }
+
+    // Linux addressbits[] extracts the odd-positioned bits from each
+    // interleaved parity byte: input bits 1,3,5,7 become output bits 0..3.
+    #[inline]
+    fn address_bits(value: u8) -> usize {
+        (((value >> 1) & 1)
+            | ((value >> 2) & 2)
+            | ((value >> 3) & 4)
+            | ((value >> 4) & 8)) as usize
+    }
+
+    let byte_index = (address_bits(b2 & 0x03) << 8)
+        | (address_bits(b1) << 4)
+        | address_bits(b0);
+    let bit_index = address_bits(b2 >> 2);
+
+    if byte_index >= ECC_CHUNK_SIZE || bit_index >= 8 {
+        return None;
+    }
+    Some((byte_index, bit_index))
+}
+
+pub(crate) fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
+    if data.len() != ECC_CHUNK_SIZE {
+        return false;
+    }
+
+    let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
+    if syndrome == 0 {
+        return true;
+    }
+
+    // A single changed ECC bit is a parity-bit error, not a data-bit error.
+    if syndrome.count_ones() == 1 {
+        return true;
+    }
+
+    let Some((byte_index, bit_index)) = ecc_error_location(syndrome) else {
+        return false;
+    };
+    data[byte_index] ^= 1 << bit_index;
+    true
+}
+
 /// Linux FSMC driver's 512-byte NAND_ECC_SOFT_HAMMING_SM_ORDER
 /// reference algorithm, expressed without alignment-dependent word loads.
 #[cfg(feature = "nand-diagnostics")]
@@ -152,7 +213,6 @@ pub(crate) fn ecc_software_512(data: &[u8]) -> u32 {
     (ecc0 as u32) | ((ecc1 as u32) << 8) | ((ecc2 as u32) << 16)
 }
 
-
 /// Convert 512-byte Linux SM-order Hamming ECC to the STM32 FSMC ECCR layout.
 /// Hardware comparisons establish a six-bit left rotation followed by inversion.
 #[cfg(feature = "nand-diagnostics")]
@@ -165,67 +225,6 @@ fn ecc_linux_to_fsmc(ecc: u32) -> u32 {
 #[cfg(feature = "nand-diagnostics")]
 pub(crate) fn ecc_software_512_fsmc(data: &[u8]) -> u32 {
     ecc_linux_to_fsmc(ecc_software_512(data))
-}
-
-/// Decode a 24-bit STM32 FSMC syndrome using Linux's SM-order Hamming
-/// decoder. FSMC ECC is Linux ECC rotated left by six bits and complemented,
-/// so the syndrome is rotated right by six before decoding.
-fn ecc_error_location(syndrome: u32) -> Option<(usize, usize)> {
-    let linux = ((syndrome >> 6) | (syndrome << 18)) & 0x00FF_FFFF;
-    let b0 = linux as u8;
-    let b1 = (linux >> 8) as u8;
-    let b2 = (linux >> 16) as u8;
-
-    // A 512-byte data-bit syndrome has alternating parity in every
-    // address pair, including both high byte-address bits in b2.
-    if ((b0 ^ (b0 >> 1)) & 0x55) != 0x55
-        || ((b1 ^ (b1 >> 1)) & 0x55) != 0x55
-        || ((b2 ^ (b2 >> 1)) & 0x55) != 0x55
-    {
-        return None;
-    }
-
-    // Linux addressbits[] extracts the odd-positioned bits from each
-    // interleaved parity byte: input bits 1,3,5,7 become output bits 0..3.
-    #[inline]
-    fn address_bits(value: u8) -> usize {
-        (((value >> 1) & 1)
-            | ((value >> 2) & 2)
-            | ((value >> 3) & 4)
-            | ((value >> 4) & 8)) as usize
-    }
-
-    let byte_index = (address_bits(b2 & 0x03) << 8)
-        | (address_bits(b1) << 4)
-        | address_bits(b0);
-    let bit_index = address_bits(b2 >> 2);
-
-    if byte_index >= ECC_CHUNK_SIZE || bit_index >= 8 {
-        return None;
-    }
-    Some((byte_index, bit_index))
-}
-
-pub(crate) fn correct_ecc_chunk(data: &mut [u8], stored: u32, calculated: u32) -> bool {
-    if data.len() != ECC_CHUNK_SIZE {
-        return false;
-    }
-
-    let syndrome = (stored ^ calculated) & 0x00FF_FFFF;
-    if syndrome == 0 {
-        return true;
-    }
-
-    // A single changed ECC bit is a parity-bit error, not a data-bit error.
-    if syndrome.count_ones() == 1 {
-        return true;
-    }
-
-    let Some((byte_index, bit_index)) = ecc_error_location(syndrome) else {
-        return false;
-    };
-    data[byte_index] ^= 1 << bit_index;
-    true
 }
 
 /// Reference vectors from Linux ecc_sw_hamming_calculate() using
