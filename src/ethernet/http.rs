@@ -596,6 +596,9 @@ impl<'a> super::EthernetNetwork<'a> {
                     filesystem,
                     true,
                     |path, is_dir, size| {
+                        if has_more {
+                            return Ok(());
+                        }
                         if seen < listing_offset {
                             seen += 1;
                             return Ok(());
@@ -618,7 +621,6 @@ impl<'a> super::EthernetNetwork<'a> {
                         for &byte in name {
                             let escaped = match byte {
                                 b'&' => b"&amp;" as &[u8],
-
                                 b'<' => b"&lt;",
                                 b'>' => b"&gt;",
                                 b'"' => b"&quot;",
