@@ -215,8 +215,6 @@ pub const fn canvas_width_for(mode: CameraMode) -> usize {
 }
 #[inline]
 pub fn canvas_width() -> usize { canvas_width_for(camera_mode()) }
-#[inline]
-pub const fn canvas_height() -> usize { HEIGHT / 2 }
 
 pub const WIDTH: usize = 512;
 pub const HEIGHT: usize = 512;
@@ -436,12 +434,6 @@ pub fn clear_demo_canvas(color: u8) {
         }
     }
 }
-
-/// Initialize the canvas to black in the currently selected runtime mode.
-pub fn initialize_demo_canvas() {
-    clear_demo_canvas(0);
-}
-
 
 /// Copy a row from the split SRAM/CCM canvas into an aligned temporary row.
 #[inline]

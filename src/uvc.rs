@@ -60,7 +60,6 @@ pub fn active_frame_rate_fps() -> u32 {
 
 pub const FRAME_BYTES: u32 = crate::camera::FRAME_BYTES as u32;
 pub const FRAME_BIT_RATE: u32 = FRAME_BYTES * 8 * FRAME_RATE_FPS;
-pub const UVC_VERSION: u16 = 0x0110;
 pub const PROBE_LENGTH: usize = 34;
 pub const PROBE_LENGTH_UVC_10: usize = 26;
 

@@ -1,5 +1,12 @@
-//! Diagnostic software implementation of the NAND 512-byte Hamming ECC.
+//! NAND 512-byte Hamming ECC calculation and data correction.
 //!
+//! The STM32 FSMC hardware calculates ECC during normal NAND page writes and
+//! reads. The normal read path uses the hardware-generated ECC values with
+//! `correct_ecc_chunk()` to detect and correct single-bit data errors.
+//!
+//! Software ECC calculation and comparison helpers are diagnostic-only and
+//! are enabled by the `nand-diagnostics` feature. They are not used to
+//! generate ECC during normal filesystem operations.
 //! The NAND controller generates and stores ECC during normal page writes.
 //! This module is used only by explicit diagnostics and optional ECC checking;
 //! it is not part of the normal filesystem read/write path.
