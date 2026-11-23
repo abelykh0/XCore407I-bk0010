@@ -601,13 +601,20 @@ impl<'a> super::EthernetNetwork<'a> {
                             return Ok(());
                         }
                         seen += 1;
-                        emitted += 1;
                         let name = path.strip_prefix(b"/").unwrap_or(path);
-                        let name = name.strip_suffix(b"\0").unwrap_or(name);
-                        append_http_bytes(body, &mut length, b"<li data-name=\"");
-                        for &byte in name {
-                            let escaped = match byte {
-                                b'&' => b"&amp;" as &[u8],
+                        let name = name.strip_suffix(b"\\0").unwrap_or(name);
+                        // Check the complete rendered entry before writing any of it.
+                        // Reserve room for the closing list and pagination marker.
+                        let pagination_reserve = b"</ul><span data-next=\\"".len() + 10 + b"\\"></span>".len();
+                        let required = http_directory_entry_len(name, is_dir, size)
+                            + b"</ul>".len() + pagination_reserve;
+                        if required > body.len().saturating_sub(length) {
+                            has_more = true;
+                            return Ok(());
+                        }
+                        seen += 1;
+                        emitted += 1;
+                        append_http_bytes(body, &mut length, b"<li data-name=\\\"");
                                 b'<' => b"&lt;",
                                 b'>' => b"&gt;",
                                 b'"' => b"&quot;",
