@@ -32,7 +32,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use crate::palette::{UV_PALETTE, Y_HASH_TABLE};
+use crate::palette::{UV_PALETTE, Y_HASH_TABLE, GRAYSCALE};
 
 const fn make_duplicated_y_table() -> [u16; 256] {
     let mut table = [0; 256];
@@ -849,13 +849,6 @@ fn draw_text_pixels(text: &[u8; 10], left: usize, top: usize, foreground: u8, ba
     }
 }
 
-const GRAYSCALE: [u8; 64] = [
-    0,6,12,18,61,67,73,79,122,128,134,140,183,189,195,201,
-    18,24,30,36,79,85,91,97,140,146,152,158,201,207,213,219,
-    36,42,48,54,97,103,109,115,158,164,170,176,219,225,231,237,
-    54,60,66,72,115,121,127,133,176,182,188,194,237,243,249,255,
-];
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Packet {
     pub len: usize,
@@ -964,7 +957,6 @@ impl Drop for Nv12DemoImage {
         CAMERA_IN_USE.store(false, Ordering::Release);
     }
 }
-
 
 impl Nv12DemoImage {
     /// Generate a fixed NV12 "PC CONNECT" frame without reading the emulator canvas.
