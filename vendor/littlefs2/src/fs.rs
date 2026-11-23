@@ -180,7 +180,7 @@ impl<Storage: driver::Storage> Allocation<Storage> {
             file_max,
             attr_max,
             compact_thresh: 0,
-            metadata_max: 0,
+            metadata_max: 8 * 1024,
             inline_max: 0,
             disk_version: DISK_VERSION.into(),
             #[cfg(feature = "unstable-littlefs-patched")]

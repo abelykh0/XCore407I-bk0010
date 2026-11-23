@@ -52,6 +52,8 @@ These allocations are used by both emulator/audio and CDC modes. Their combined 
 | Dhara C page buffer | Main SRAM, .bss | 2,048 B | NAND page buffer used by the Dhara storage layer |
 | LittleFS mount allocation | Main SRAM, .bss | 4,568 B | Read cache (2,048 B), program cache (2,048 B), lookahead buffer (32 B), and remaining filesystem/configuration storage and alignment |
 
+LittleFS `metadata_max` is configured to **8 KiB**. This is a limit on metadata-pair size, not an 8 KiB RAM buffer, so it does not add 8 KiB to the static RAM allocation shown above.
+
 ## Emulator / audio (main mode)
 
 | Block | Region | Size | Purpose |
