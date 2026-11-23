@@ -654,6 +654,7 @@ fn service_sender(
         return false;
     };
     let mut finished = false;
+    let mut aborted = false;
 
     for _ in 0..8 {
         match sender.poll() {
@@ -726,6 +727,7 @@ fn service_sender(
             }
             Action::Event(Event::Aborted) => {
                 super::console::write_status(b"\r\nZMODEM send aborted or failed.\r\n> ");
+                aborted = true;
                 finished = true;
                 break;
             }
@@ -834,6 +836,11 @@ fn service_sender(
         }
         state.send_wire_len = 0;
         state.send_wire_pos = 0;
+        if aborted {
+            // Discard any remaining ZMODEM cancellation/trailer bytes before
+            // the console resumes parsing CDC input.
+            state.discard_input_until_ms = now_ms.wrapping_add(1_000);
+        }
     } else {
         state.sender = Some(sender);
     }

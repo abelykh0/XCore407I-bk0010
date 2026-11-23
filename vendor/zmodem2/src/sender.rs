@@ -4,7 +4,7 @@
 
 //! ZMODEM sender state machine.
 
-use crate::ABORT_SEQUENCE;
+use crate::{ABORT_SEQUENCE, ZDLE};
 use crate::api::{Action, Event, FileInfo, Position};
 use crate::buffer::Buffer;
 use crate::error::Error;
@@ -48,6 +48,7 @@ pub struct Sender {
     /// `abort()` queued the cancel sequence: it goes out before the
     /// `Aborted` event.
     pending_abort: bool,
+    cancel_count: u8,
 }
 
 impl Sender {
@@ -79,6 +80,7 @@ impl Sender {
             streaming_window: SUBPACKET_PER_ACK,
             streaming_window_enabled: false,
             pending_abort: false,
+            cancel_count: 0,
         };
         sender.queue_zrqinit()?;
         Ok(sender)
@@ -240,14 +242,13 @@ impl Sender {
     /// * [`UnexpectedCrc16`](crate::Error::UnexpectedCrc16) or
     ///   [`UnexpectedCrc32`](crate::Error::UnexpectedCrc32) when corrupted data has been detected
     pub fn submit_wire(&mut self, input: &[u8]) -> Result<usize, Error> {
+        if self.outgoing() || self.state == SenderPhase::Done || self.pending_request.is_some() {
+            return Ok(0);
+        }
+
         let mut reader = SliceReader::new(input);
 
         loop {
-            if self.outgoing() || self.state == SenderPhase::Done || self.pending_request.is_some()
-            {
-                break;
-            }
-
             let before = reader.consumed();
             let header = match self.header_reader.read(&mut reader) {
                 Ok(Some(header)) => header,
@@ -263,9 +264,29 @@ impl Sender {
             if reader.consumed() == before || reader.consumed() == input.len() {
                 break;
             }
+            if self.outgoing() || self.state == SenderPhase::Done || self.pending_request.is_some() {
+                break;
+            }
         }
 
-        Ok(reader.consumed())
+        // Scan only bytes consumed by the parser. The transport may offer a
+        // buffer containing bytes after a complete header; those bytes must
+        // not affect cancellation state until the caller resubmits them.
+        let consumed = reader.consumed();
+        for (index, byte) in input[..consumed].iter().copied().enumerate() {
+            if byte == ZDLE {
+                self.cancel_count = self.cancel_count.saturating_add(1);
+                if self.cancel_count >= 5 {
+                    self.cancel_count = 0;
+                    self.on_abort();
+                    return Ok(index + 1);
+                }
+            } else {
+                self.cancel_count = 0;
+            }
+        }
+
+        Ok(consumed)
     }
 
     /// Returns pending outgoing bytes.
@@ -307,6 +328,7 @@ impl Sender {
     /// other end stops too: [`poll`](Self::poll) returns it as
     /// [`Action::WriteWire`] before [`Event::Aborted`].
     pub fn abort(&mut self) {
+        self.cancel_count = 0;
         self.state = SenderPhase::Done;
         self.pending_request = None;
         self.outgoing.clear();
@@ -571,8 +593,11 @@ impl Sender {
     }
 
     fn on_abort(&mut self) {
+        self.cancel_count = 0;
         self.state = SenderPhase::Done;
         self.pending_request = None;
+        self.outgoing.clear();
+        self.outgoing_offset = 0;
         self.pending_event = Some(SenderEvent::Aborted);
     }
 

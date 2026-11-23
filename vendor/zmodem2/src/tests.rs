@@ -843,6 +843,34 @@ fn test_abort_event() {
     assert_eq!(sender.poll(), Action::Event(Event::Aborted));
 }
 
+
+#[test]
+fn test_sender_detects_raw_cancel_sequence_across_reads() {
+    let mut sender = Sender::new().unwrap();
+    drain_wire_sender(&mut sender);
+
+    // Fewer than five consecutive CAN bytes do not cancel the session.
+    assert_eq!(sender.submit_wire(&[ZDLE, ZDLE]).unwrap(), 2);
+    assert_eq!(sender.poll(), Action::Idle);
+    assert_eq!(sender.submit_wire(&[ZDLE, ZDLE]).unwrap(), 2);
+    assert_eq!(sender.poll(), Action::Idle);
+
+    // The fifth CAN may arrive in a separate transport read.
+    assert_eq!(sender.submit_wire(&[ZDLE]).unwrap(), 1);
+    assert_eq!(sender.poll(), Action::Event(Event::Aborted));
+}
+
+#[test]
+fn test_sender_cancel_sequence_resets_on_intervening_byte() {
+    let mut sender = Sender::new().unwrap();
+    drain_wire_sender(&mut sender);
+
+    assert_eq!(sender.submit_wire(&[ZDLE, ZDLE, 0x41, ZDLE, ZDLE, ZDLE]).unwrap(), 6);
+    assert_eq!(sender.poll(), Action::Idle);
+    assert_eq!(sender.submit_wire(&[ZDLE, ZDLE]).unwrap(), 2);
+    assert_eq!(sender.poll(), Action::Event(Event::Aborted));
+}
+
 #[test]
 fn test_zrinit_advertises_configured_flow_control() {
     // Default construction is unchanged: one-subpacket buffer, no
