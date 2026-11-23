@@ -305,8 +305,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             let sample_phase = resampler.source_phase
                 .wrapping_add((resampler.phase * AUDIO_SAMPLE_PERIOD_PHASE) >> 16);
             resampler.update_blep_edges(sample_phase);
-            // Evaluate the held source level at this resampled timestamp,
-            // after applying every edge up to that exact time.
+            // Use the rendered PCM as the signal; timestamped edges provide
+            // only the BLEP correction at the resampled output time.
             let raw = pcm_ring_sample(tail);
             output = (raw + resampler.blep_edge_correction(sample_phase))
                 .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
