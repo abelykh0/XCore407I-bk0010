@@ -16,7 +16,7 @@ The uploaded `firmware.map` was generated from a release build for `thumbv7em-no
 | Main SRAM static total | `0x20000000` | `0x2001C364` | 115,552 B (112.84 KiB) | 128 KiB / 15,516 B free |
 | CCM `.ccmram` | `0x10000000` | `0x1000FF00` | 65,280 B (63.75 KiB) | 64 KiB / 256 B free |
 
-The main-SRAM `.data` and `.bss` sections are separated by a 4-byte alignment gap. The map reports `.uninit` as zero bytes. The 15,516-byte gap at the top of main SRAM is available for runtime stack/other use; it is not a measured stack high-water mark. The linker defines the initial stack pointer at the top of main SRAM.
+**RAM usage:** 180,832 bytes statically allocated: 115,552 B in main SRAM and 65,280 B in CCM. This leaves 15,516 B in main SRAM and 256 B in CCM for runtime use. The STM32F407 supports a CCM stack, but its placement depends on the linker configuration. CCM is not DMA-accessible.
 
 Flash section sizes: `.vector_table` 392 B, `.text` 280,956 B, `.rodata` 55,208 B, and the `.data` load image 5,204 B. The linked image ends at `0x0805370C`; this includes linker alignment.
 
@@ -41,28 +41,39 @@ These are link-time static figures for this particular build. They do not includ
 
 Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES = 46,848; CANVAS_MAIN_BYTES = 84,224.
 
+## Common allocations (both modes)
+
+These allocations are used by both emulator/audio and CDC modes. Their combined size is shown in each mode table as **Common**; details are listed here once.
+
+| Block | Region | Size | Purpose |
+|---|---|---:|---|
+| VIDEO_BUFFERS[2] | Main SRAM, .bss | 4,608 B | Two UVC transport buffers, each 768 × 3 = 2,304 B |
+| ROW_BUFFERS | Main SRAM, .bss | 1,024 B | Two 512-byte row-conversion scratch buffers |
+| Dhara C page buffer | Main SRAM, .bss | 2,048 B | NAND page buffer used by the Dhara storage layer |
+| LittleFS mount allocation | Main SRAM, .bss | 4,568 B | Read cache (2,048 B), program cache (2,048 B), lookahead buffer (32 B), and remaining filesystem/configuration storage and alignment |
+
 ## Emulator / audio (main mode)
 
 | Block | Region | Size | Purpose |
 |---|---|---:|---|
+| Common | Main SRAM, .bss | 12,248 B | See Common allocations section |
 | DEMO_CANVAS | Main SRAM | 84,224 B reserved | First segment of the shared BK canvas backing store |
 | DEMO_CANVAS_TAIL | CCM | 46,848 B reserved | Second segment of the same canvas backing store; together these are one logical 128 KiB allocation, not a complete UVC frame |
-| VIDEO_BUFFERS[2] | Main SRAM, .bss | 4,608 B | Two UVC transport buffers, each 768 × 3 = 2,304 B |
-| ROW_BUFFERS | Main SRAM, .bss | 1,024 B | Two 512-byte row-conversion scratch buffers |
 | RamBuffer | CCM, .ccmram | 16,384 B | BK-0010 emulated RAM |
 | BK audio edge arrays | Main SRAM, .bss | 2,560 B | 512 32-bit cycle timestamps + 512 8-bit levels |
 | F2 browser file table | Main SRAM, .bss | 990 B | 30 entries × 33 B (`BrowserFile` path + length); shared with CDC mode |
 | USB host/device state | Various | Not measured | TinyUSB state, descriptors, endpoint buffers, host state and class state |
 | Emulator/audio/keyboard state | Various | Not measured | Other C and Rust globals, queues and state |
 
-The F2 browser table is a static allocation shared by emulator and CDC modes. It holds 30 root-level `.bin` paths; each `BrowserFile` occupies 33 bytes (32-byte path plus one-byte length), for 990 bytes total. The previous 17-entry table occupied 561 bytes, so increasing the visible list to 30 costs 429 additional bytes of main SRAM. The display has 32 text rows: row 0 is the title, rows 1–30 show files, and row 31 holds the controls. The audio edge arrays are declared in csrc/bk/platform.c. The 2,560-byte figure excludes other audio state and alignment. DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of the same logical canvas backing store; the split reflects the available main-SRAM and CCM regions. The UVC image is generated and packetized from this backing store on the fly. The firmware does not allocate or retain a complete 512 × 512 NV12 frame (384 KiB) in RAM.
+The common allocations are listed above. The shared F2 browser table holds 30 root-level `.bin` paths (990 B); its 32 display rows comprise a title, 30 file entries, and controls. BK audio edge arrays use 2,560 B, excluding other audio state and alignment. The canvas spans main SRAM and CCM; UVC images are generated and packetized on the fly, without retaining a complete 512 × 512 NV12 frame.
 
 ## CDC mode — UVC static page + CDC + Ethernet HTTP
 
-CDC mode does not run the emulator. It reuses the same physical backing-store allocation. DEMO_CANVAS holds the receiver, DMA ring, HTTP RX/body buffers and the 8 KiB filesystem alternate stack in disjoint ranges. DEMO_CANVAS_TAIL holds CPU-only smoltcp socket metadata and the TCP TX buffer.
+CDC mode reuses the canvas allocation: `DEMO_CANVAS` holds the receiver, DMA ring, HTTP buffers, and 8 KiB alternate stack; `DEMO_CANVAS_TAIL` holds CPU-only socket metadata and the TCP TX buffer.
 
 | Block | Region | Size | Purpose |
 |---|---|---:|---|
+| Common | Main SRAM, .bss | 12,248 B | See Common allocations section |
 | CDC receiver | DEMO_CANVAS, offset 0 | 4,096 B | Heapless ZMODEM receive storage |
 | CDC alternate stack | DEMO_CANVAS, top 8,192 B | 8,192 B | Stack grows down from the end of the main canvas block |
 | CDC receiver (accounting note) | Inside DEMO_CANVAS | 4,096 B claimed | Same receiver allocation; do not count twice |
@@ -72,14 +83,10 @@ CDC mode does not run the emulator. It reuses the same physical backing-store al
 | HTTP TCP TX | DEMO_CANVAS_TAIL, immediately after socket storage | Remaining tail, about 46 KiB | smoltcp TCP transmit buffer; CPU-accessed, not DMA |
 | HTTP TCP RX | DEMO_CANVAS, offset 8,752 | 4,096 B | smoltcp TCP receive buffer |
 | HTTP body | DEMO_CANVAS, offset 12,848 | 63,184 B | Upload chunk and generated response body scratch |
-| VIDEO_BUFFERS[2] | Main SRAM, .bss | 4,608 B | UVC transport buffers for low-rate PC CONNECT static page |
-| ROW_BUFFERS | Main SRAM, .bss | 1,024 B | Camera row-conversion scratch |
 | NAND_PAGE_SCRATCH | Main SRAM, .bss | 2,112 B | 2,048-byte page + 64-byte spare |
-| LittleFS mount allocation | Static storage | Build-dependent | MaybeUninit<LittleFsAllocation>; exact size requires ELF/map or size_of |
-| Dhara C page buffer | Main SRAM, .bss | 2,048 B | One NAND page in csrc/dhara_adapter.c |
 | ZMODEM send buffer | State/stack | 1,024 B | Embedded in CDC ZMODEM state; receiver payload is the separate 4 KiB canvas allocation |
 
-All Ethernet packet, descriptor, socket and HTTP buffers are carved from the reusable canvas backing store. The DMA ring remains in DMA-accessible main SRAM. HTTP RX and body storage use the entire 67,280-byte gap between the DMA ring and the 8 KiB alternate stack: 4 KiB RX and 63,184 B body. The TCP TX buffer was moved into CCM immediately after the socket metadata and now uses the remaining tail (about 46 KiB). The directory response page size is 128 entries instead of 3. The upload chunk size and browser chunk size remain 2 KiB. No Ethernet/TCP/HTTP buffers remain as independent .bss statics. The small HTTP response-header and upload-name scratch arrays are automatic locals on the CDC alternate stack.
+Ethernet and HTTP buffers are carved from the canvas. The DMA ring is in DMA-accessible main SRAM; HTTP RX (4 KiB) and body storage (63,184 B) fill the space before the 8 KiB alternate stack. CCM holds socket metadata and the TCP TX buffer. Directory responses support 128 entries; upload and browser chunks remain 2 KiB. HTTP header/name scratch arrays are locals on the alternate stack.
 
 ## Source-verifiable allocation subtotals
 
