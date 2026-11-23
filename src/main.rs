@@ -21,6 +21,7 @@ use xcore407i_blinker::rtc;
 use board::{
     configure_board_pins, configure_exception_priorities, system_clock_168mhz, TICKS,
 };
+use xcore407i_blinker::SYSTEM_CORE_CLOCK_HZ;
 use board::enable_cycle_counter;
 use file_browser::{
     draw_file_browser, load_tetris_from_path, BROWSER_FILES,
@@ -43,7 +44,7 @@ use usb_host::{
 #[cfg(feature = "cpu-cycle-diag")]
 use xcore407i_blinker::camera::show_pdp_cycles_per_second;
 #[cfg(feature = "cpu-cycle-diag")]
-use board::{read_dwt_cycle_count, SYSTEM_CORE_CLOCK_HZ};
+use board::read_dwt_cycle_count;
 
 const PDP_CYCLES_PER_SECOND: u32 = 3_010_000;
 
@@ -219,7 +220,7 @@ fn main() -> ! {
     // Start the 1 ms timebase before TinyUSB initialization. TinyUSB's
     // no-RTOS port uses this clock during controller initialization.
     core.SYST.set_clock_source(SystClkSource::Core);
-    core.SYST.set_reload(168_000 - 1); // 1 ms at 168 MHz
+    core.SYST.set_reload(SYSTEM_CORE_CLOCK_HZ / 1_000 - 1); // 1 ms
     core.SYST.clear_current();
     configure_exception_priorities(&mut core.SCB);
     core.SYST.enable_interrupt();

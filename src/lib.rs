@@ -26,6 +26,9 @@ mod list_diag;
 #[cfg(feature = "list-profile")]
 mod write_diag;
 
+/// System core clock frequency used by the board clock setup and cycle timing.
+pub const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;
+
 /// Single source of truth for the USB audio and BK emulator sample rate.
 pub const AUDIO_KHZ: u32 = 24;
 pub const AUDIO_SAMPLE_RATE_HZ: u32 = AUDIO_KHZ * 1_000;

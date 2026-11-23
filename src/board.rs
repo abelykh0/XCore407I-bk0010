@@ -14,8 +14,7 @@ pub extern "C" fn tusb_time_millis_api() -> u32 {
     TICKS.load(Ordering::Relaxed)
 }
 
-// Shared system-clock frequency used by the CMSIS symbol and diagnostics.
-pub(crate) const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;
+use xcore407i_blinker::SYSTEM_CORE_CLOCK_HZ;
 
 #[unsafe(no_mangle)]
 pub static SystemCoreClock: u32 = SYSTEM_CORE_CLOCK_HZ;

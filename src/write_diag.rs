@@ -3,7 +3,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-const CORE_CLOCK_HZ: u32 = 168_000_000;
+const CORE_CLOCK_HZ: u32 = crate::SYSTEM_CORE_CLOCK_HZ;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static TRANSFER_US: AtomicU32 = AtomicU32::new(0);
 static ZMODEM_POLL_CALLS: AtomicU32 = AtomicU32::new(0);

@@ -773,7 +773,7 @@ fn report_list_profile(
     stats: crate::list_diag::Snapshot,
 ) {
     fn cycles_to_us(cycles: u32) -> usize {
-        ((cycles as u64 * 1_000_000) / 168_000_000) as usize
+        ((cycles as u64 * 1_000_000) / crate::SYSTEM_CORE_CLOCK_HZ as u64) as usize
     }
     fn line(label: &[u8], cycles: u32) {
         write_status(label);
