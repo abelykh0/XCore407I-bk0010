@@ -1,8 +1,8 @@
-//! BK-0010 speaker-edge capture and deferred PCM16 rendering for TinyUSB UAC2.
+//! BK-0010 speaker-edge capture and adaptive USB audio resampling.
 //!
-//! The emulator publishes timestamped speaker transitions. The main-loop audio
-//! worker renders raw 24 kHz PCM into a ring buffer. The USB completion ISR
-//! resamples that PCM and applies BLEP using the original edge timestamps.
+//! The emulator publishes timestamped speaker transitions. A lightweight
+//! main-loop worker advances the source-time queue; the USB completion ISR
+//! reconstructs the BK signal at resampled timestamps and applies BLEP.
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
@@ -21,24 +21,12 @@ const AUDIO_SAMPLE_PERIOD_PHASE: u32 =
 const _: () = assert!(crate::AUDIO_SAMPLE_RATE_HZ % USB_MICROFRAMES_PER_SECOND == 0);
 const _: () = assert!(PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE % crate::AUDIO_SAMPLE_RATE_HZ == 0);
 const AUDIO_AMPLITUDE: i16 = 12_000;
-const PCM_RING_CAPACITY: u16 = 2048;
-const PCM_RING_MASK: u16 = PCM_RING_CAPACITY - 1;
-const _: () = assert!(PCM_RING_CAPACITY.is_power_of_two());
+const SOURCE_QUEUE_CAPACITY: u16 = 2048;
+const _: () = assert!(SOURCE_QUEUE_CAPACITY.is_power_of_two());
 const _: () = assert!(PACKET_BYTES <= crate::usb_device::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
-static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
-static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
-static mut PCM_RING: [i16; PCM_RING_CAPACITY as usize] = [0; PCM_RING_CAPACITY as usize];
-
-#[inline(always)]
-fn pcm_ring_sample(index: u16) -> i32 {
-    unsafe {
-        core::ptr::addr_of!(PCM_RING)
-            .cast::<i16>()
-            .add((index & PCM_RING_MASK) as usize)
-            .read() as i32
-    }
-}
+static SOURCE_HEAD: AtomicU16 = AtomicU16::new(0);
+static SOURCE_TAIL: AtomicU16 = AtomicU16::new(0);
 
 const RESAMPLER_ONE: u32 = 1 << 16;
 const RESAMPLER_TARGET_OCCUPANCY: i32 = 72;
@@ -51,18 +39,20 @@ struct PcmResampler {
     step: u32,
     control_packets: u8,
     source_phase: u32,
+    source_level: bool,
     last_sample: i16,
     previous_edge: Option<(u32, i32)>,
     pending_edge: Option<(u32, bool)>,
 }
 
 impl PcmResampler {
-    const fn new(source_phase: u32) -> Self {
+    const fn new(source_phase: u32, source_level: bool) -> Self {
         Self {
             phase: 0,
             step: RESAMPLER_ONE,
             control_packets: 0,
             source_phase,
+            source_level,
             last_sample: 0,
             previous_edge: None,
             pending_edge: None,
@@ -102,6 +92,7 @@ impl PcmResampler {
                     edge_phase,
                     if edge_level { 1 } else { -1 },
                 ));
+                self.source_level = edge_level;
                 self.pending_edge = None;
             } else {
                 break;
@@ -138,7 +129,7 @@ impl PcmResampler {
     }
 }
 
-static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new(0);
+static mut PCM_RESAMPLER: PcmResampler = PcmResampler::new(0, false);
 
 unsafe extern "C" {
     safe fn bk_audio_start() -> u8;
@@ -183,21 +174,21 @@ impl BkEmulatorAudio {
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 unsafe {
                     core::ptr::addr_of_mut!(PCM_RESAMPLER)
-                        .write(PcmResampler::new(self.next_sample_phase));
+                        .write(PcmResampler::new(self.next_sample_phase, self.sample_level));
                 }
-                PCM_TAIL.store(0, Ordering::Relaxed);
-                PCM_HEAD.store(0, Ordering::Release);
+                SOURCE_TAIL.store(0, Ordering::Relaxed);
+                SOURCE_HEAD.store(0, Ordering::Release);
                 self.active = true;
             }
         } else if self.active {
             self.active = false;
             self.pending_edge = None;
             unsafe {
-                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(0));
+                core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(0, false));
             }
             bk_audio_stop();
-            PCM_TAIL.store(0, Ordering::Relaxed);
-            PCM_HEAD.store(0, Ordering::Release);
+            SOURCE_TAIL.store(0, Ordering::Relaxed);
+            SOURCE_HEAD.store(0, Ordering::Release);
         }
     }
 
@@ -210,8 +201,8 @@ impl BkEmulatorAudio {
         }
     }
 
-    /// Render at most max_samples whose emulated timestamps are due.
-    /// This runs in the main loop, never in the USB interrupt.
+    /// Advance the source-time queue by at most max_samples due samples.
+    /// This drains the render-side edge queue in the main loop, never in the USB interrupt.
     pub fn render_available(&mut self, max_samples: usize) -> usize {
         if !self.active {
             return 0;
@@ -220,13 +211,13 @@ impl BkEmulatorAudio {
         // Emulator execution and rendering are sequential in the main loop, so
         // an empty edge queue stays empty for the rest of this render batch.
         self.edge_queue_empty = false;
-        // Keep producer indices local and publish the new head once per batch.
-        // A stale tail is conservative: the USB consumer can only advance it.
-        let mut head = PCM_HEAD.load(Ordering::Relaxed);
-        let tail = PCM_TAIL.load(Ordering::Acquire);
+        // This queue tracks source-time availability for adaptive resampling;
+        // it stores no PCM data. Publish the producer index once per batch.
+        let mut head = SOURCE_HEAD.load(Ordering::Relaxed);
+        let tail = SOURCE_TAIL.load(Ordering::Acquire);
         let mut rendered = 0usize;
         while rendered < max_samples {
-            if head.wrapping_sub(tail) >= PCM_RING_CAPACITY {
+            if head.wrapping_sub(tail) >= SOURCE_QUEUE_CAPACITY {
                 break;
             }
 
@@ -236,20 +227,13 @@ impl BkEmulatorAudio {
             }
 
             self.apply_edges_through(sample_phase);
-            let sample = if self.sample_level { AUDIO_AMPLITUDE } else { -AUDIO_AMPLITUDE };
-            unsafe {
-                core::ptr::addr_of_mut!(PCM_RING)
-                    .cast::<i16>()
-                    .add((head & PCM_RING_MASK) as usize)
-                    .write(sample);
-            }
             head = head.wrapping_add(1);
             self.next_sample_phase = self.next_sample_phase
                 .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
             rendered += 1;
         }
         if rendered != 0 {
-            PCM_HEAD.store(head, Ordering::Release);
+            SOURCE_HEAD.store(head, Ordering::Release);
         }
         rendered
     }
@@ -280,8 +264,8 @@ impl BkEmulatorAudio {
 
 }
 
-/// Resample the producer PCM and apply timestamped BLEP correction at the
-/// final USB sample positions. The existing PCM and edge rings are reused.
+/// Reconstruct the BK speaker level at each adaptively resampled source
+/// timestamp, then apply BLEP correction using the original edge timestamps.
 ///
 /// # Safety
 /// If non-null and sufficiently large, `buffer` must point to a valid,
@@ -292,8 +276,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     }
 
     let buffer = unsafe { core::slice::from_raw_parts_mut(buffer, capacity as usize) };
-    let mut tail = PCM_TAIL.load(Ordering::Relaxed);
-    let head = PCM_HEAD.load(Ordering::Acquire);
+    let mut tail = SOURCE_TAIL.load(Ordering::Relaxed);
+    let head = SOURCE_HEAD.load(Ordering::Acquire);
     let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
     resampler.update_rate(head.wrapping_sub(tail));
 
@@ -305,9 +289,12 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             let sample_phase = resampler.source_phase
                 .wrapping_add((resampler.phase * AUDIO_SAMPLE_PERIOD_PHASE) >> 16);
             resampler.update_blep_edges(sample_phase);
-            // Use the rendered PCM as the signal; timestamped edges provide
-            // only the BLEP correction at the resampled output time.
-            let raw = pcm_ring_sample(tail);
+            // Reconstruct the held BK speaker level at this exact source time.
+            let raw = if resampler.source_level {
+                AUDIO_AMPLITUDE as i32
+            } else {
+                -(AUDIO_AMPLITUDE as i32)
+            };
             output = (raw + resampler.blep_edge_correction(sample_phase))
                 .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
 
@@ -325,7 +312,11 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
             let sample_phase = resampler.source_phase
                 .wrapping_add((resampler.phase * AUDIO_SAMPLE_PERIOD_PHASE) >> 16);
             resampler.update_blep_edges(sample_phase);
-            let raw = pcm_ring_sample(tail);
+            let raw = if resampler.source_level {
+                AUDIO_AMPLITUDE as i32
+            } else {
+                -(AUDIO_AMPLITUDE as i32)
+            };
             output = (raw + resampler.blep_edge_correction(sample_phase))
                 .clamp(-(AUDIO_AMPLITUDE as i32), AUDIO_AMPLITUDE as i32) as i16;
         }
@@ -336,7 +327,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         buffer[index * 2 + 1] = bytes[1];
     }
 
-    PCM_TAIL.store(tail, Ordering::Release);
+    SOURCE_TAIL.store(tail, Ordering::Release);
     unsafe {
         core::ptr::addr_of_mut!(PCM_RESAMPLER).write(resampler);
     }
