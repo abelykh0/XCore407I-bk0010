@@ -1,8 +1,35 @@
 # RAM allocation by operating mode
 
-This is a source-level inventory for the ethernet branch. Values are allocation sizes from declarations, not final ELF section totals. Alignment, linker placement, compiler retention, USB library state, and stack reservations affect actual usage.
+This document combines a source-level inventory with a linker-map snapshot. Source-level values describe declared allocations; linker-map values describe the actual linked release image and include compiler retention and linker alignment. Runtime stack high-water usage is not measured by the map.
 
 STM32F407 memory: 128 KiB main SRAM (DMA-accessible) and 64 KiB CCM SRAM (not Ethernet-DMA-accessible).
+
+## Linker-map snapshot
+
+The uploaded `firmware.map` was generated from a release build for `thumbv7em-none-eabihf`. It confirms the following static allocation:
+
+| Region / section | Start | End (exclusive) | Size | Capacity / remaining |
+|---|---:|---:|---:|---:|
+| Flash image (vector table, text, rodata, data load image) | `0x08000000` | `0x0805370C` | 341,772 B (333.76 KiB) | 1 MiB / 706,804 B free |
+| Main SRAM `.data` | `0x20000000` | `0x20001454` | 5,204 B | |
+| Main SRAM `.bss` | `0x20001458` | `0x2001C364` | 110,348 B | |
+| Main SRAM static total | `0x20000000` | `0x2001C364` | 115,552 B (112.84 KiB) | 128 KiB / 15,516 B free |
+| CCM `.ccmram` | `0x10000000` | `0x1000FF00` | 65,280 B (63.75 KiB) | 64 KiB / 256 B free |
+
+The main-SRAM `.data` and `.bss` sections are separated by a 4-byte alignment gap. The map reports `.uninit` as zero bytes. The 15,516-byte gap at the top of main SRAM is available for runtime stack/other use; it is not a measured stack high-water mark. The linker defines the initial stack pointer at the top of main SRAM.
+
+Flash section sizes: `.vector_table` 392 B, `.text` 280,956 B, `.rodata` 55,208 B, and the `.data` load image 5,204 B. The linked image ends at `0x0805370C`; this includes linker alignment.
+
+CCM is nearly full. Its `.ccmram` output section contains:
+- `VOLUME_MARKER_BUFFER`: 2,048 B at `0x10000000`.
+- `DEMO_CANVAS_TAIL`: 46,848 B at `0x10000800`.
+- `RamBuffer`: 16,384 B at `0x1000BF00`.
+
+These allocations total 65,280 B, leaving 256 B in the 64 KiB CCM region. CCM is not accessible to Ethernet DMA.
+
+The map confirms `DEMO_CANVAS` is 84,224 B in main SRAM, `DEMO_CANVAS_TAIL` is 46,848 B in CCM, and together they form the 131,072-byte logical canvas backing store. It also confirms `VIDEO_BUFFERS` is 4,608 B, `ROW_BUFFERS` is 1,024 B, `NAND_PAGE_SCRATCH` is 2,112 B, and `LITTLEFS_MOUNT_ALLOCATION` is 4,568 B.
+
+These are link-time static figures for this particular build. They do not include runtime stack depth, transient call frames, or any runtime allocation not represented as a static linker section. Rebuild the map after changes that affect features, source, compiler, or linker configuration.
 
 ## Shared backing regions and mode-dependent reuse
 
@@ -76,4 +103,4 @@ These values are not summed into per-mode totals: some are mutually exclusive, s
 
 In emulator mode, DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of one logical BK canvas backing store. The UVC frame is packetized/generated on the fly; the firmware does not hold a complete 512 × 512 NV12 frame in RAM. In CDC mode, that same 131,072-byte backing allocation is reused. DEMO_CANVAS holds, in order, the receiver (4,096 B), DMA ring (4,656 B), HTTP RX/body storage (67,280 B), and alternate stack (8,192 B). DEMO_CANVAS_TAIL holds CPU-only smoltcp socket metadata followed by the TCP TX buffer, which consumes the remaining CCM tail. Compile-time assertions verify the main-SRAM HTTP arena ends exactly at the reserved 8 KiB stack boundary and that the socket metadata plus TCP TX fit in CCM.
 
-To explain the USB enumeration regression conclusively, inspect the actual ELF/map output for .data, .bss, .ccmram, USB endpoint buffers, and stack reservations. This source inventory alone does not establish remaining free SRAM or prove the root cause.
+The linker map now provides the static RAM baseline for this release build: 115,552 B in main SRAM and 65,280 B in CCM. It does not establish runtime stack high-water usage or, by itself, identify the cause of a USB enumeration failure.
