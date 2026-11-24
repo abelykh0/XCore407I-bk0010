@@ -33,6 +33,7 @@ void bk_audio_stop(void);
 uint8_t bk_audio_pop_edge(uint32_t *cycles, uint8_t *level);
 uint32_t bk_audio_diag_count(void);
 uint32_t bk_audio_diag_dropped_count(void);
+void bk_audio_diag_freeze(void);
 uint8_t bk_audio_diag_read(uint32_t newest_offset, uint32_t *cycles,
                            uint8_t *level, uint8_t *dropped);
 
