@@ -890,9 +890,9 @@ fn main() -> ! {
                         while prepare_next_video_batch(&mut video_renderer) {}
                     }
 
-                    // Advance the source-time queue in thread context.
-                    // The USB completion callback reconstructs the BK signal
-                    // from timestamped edges and applies BLEP.
+                    // Convert queued BK speaker transitions into PCM in thread
+                    // context. The USB audio completion callback only drains
+                    // this ring and must never perform sample rendering itself.
                     xcore407i_blinker::usb_device::audio_uac2::xcore_tud_audio_render();
 
                     service_keyboard_frame_pacing();
