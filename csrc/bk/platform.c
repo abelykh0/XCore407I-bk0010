@@ -195,12 +195,12 @@ static void bk_audio_record_level(uint8_t level)
     uint8_t dropped =
         (uint16_t)(head - bk_audio_oldest_tail()) >= BK_AUDIO_EDGE_CAPACITY;
 
-    uint32_t diag_slot = bk_audio_diag_head & BK_AUDIO_DIAG_MASK;
-    bk_audio_diag_cycles[diag_slot] = cycles;
-    bk_audio_diag_levels[diag_slot] = level;
-    bk_audio_diag_dropped_flags[diag_slot] = dropped;
-    bk_audio_diag_head++;
-    if (dropped) bk_audio_diag_dropped++;
+    if (bk_audio_diag_recording) {
+        uint32_t diag_slot = bk_audio_diag_head & BK_AUDIO_DIAG_MASK;
+        bk_audio_diag_store(diag_slot, cycles, level, dropped);
+        bk_audio_diag_head++;
+        if (dropped) bk_audio_diag_dropped++;
+    }
 
     if (dropped) return;
 
