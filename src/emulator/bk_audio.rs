@@ -21,10 +21,11 @@ const AUDIO_SAMPLE_PERIOD_PHASE: u32 =
 const _: () = assert!(crate::AUDIO_SAMPLE_RATE_HZ % USB_MICROFRAMES_PER_SECOND == 0);
 const _: () = assert!(PDP_CLOCK_HZ * PHASE_UNITS_PER_CYCLE % crate::AUDIO_SAMPLE_RATE_HZ == 0);
 const AUDIO_AMPLITUDE: i16 = 12_000;
+const SOURCE_QUEUE_CAPACITY: u16 = 2048;
 const _: () = assert!(PACKET_BYTES <= crate::usb_device::uvc::USB_HS_DMA_BUFFER_LIMIT);
 
-static PCM_HEAD: AtomicU16 = AtomicU16::new(0);
-static PCM_TAIL: AtomicU16 = AtomicU16::new(0);
+static SOURCE_HEAD: AtomicU16 = AtomicU16::new(0);
+static SOURCE_TAIL: AtomicU16 = AtomicU16::new(0);
 
 const RESAMPLER_ONE: u32 = 1 << 16;
 const RESAMPLER_TARGET_OCCUPANCY: i32 = 72;
@@ -174,8 +175,8 @@ impl BkEmulatorAudio {
                     core::ptr::addr_of_mut!(PCM_RESAMPLER)
                         .write(PcmResampler::new(self.next_sample_phase, self.sample_level));
                 }
-                PCM_TAIL.store(0, Ordering::Relaxed);
-                PCM_HEAD.store(0, Ordering::Release);
+                SOURCE_TAIL.store(0, Ordering::Relaxed);
+                SOURCE_HEAD.store(0, Ordering::Release);
                 self.active = true;
             }
         } else if self.active {
@@ -215,7 +216,7 @@ impl BkEmulatorAudio {
         let tail = PCM_TAIL.load(Ordering::Acquire);
         let mut rendered = 0usize;
         while rendered < max_samples {
-            if head.wrapping_sub(tail) >= 2048 {
+            if head.wrapping_sub(tail) >= SOURCE_QUEUE_CAPACITY {
                 break;
             }
 
