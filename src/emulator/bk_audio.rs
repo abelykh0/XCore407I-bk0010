@@ -92,8 +92,7 @@ impl PcmResampler {
                     if edge_level { 1 } else { -1 },
                 ));
                 self.source_level = edge_level;
-                self.pending_edge = None;
-            } else {
+                } else {
                 break;
             }
         }
@@ -134,16 +133,12 @@ unsafe extern "C" {
     safe fn bk_audio_start() -> u8;
     safe fn bk_timing_cycles() -> u32;
     safe fn bk_audio_stop();
-    fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
     fn bk_audio_pop_blep_edge(cycles: *mut u32, level: *mut u8) -> u8;
 }
 
 pub struct BkEmulatorAudio {
     // Quarter-cycle units preserve exact sample timing; at 24 kHz each sample is 125 PDP cycles.
     next_sample_phase: u32,
-    sample_level: bool,
-    pending_edge: Option<(u32, bool)>,
-    edge_queue_empty: bool,
     active: bool,
 }
 
@@ -151,9 +146,6 @@ impl BkEmulatorAudio {
     pub const fn new() -> Self {
         Self {
             next_sample_phase: 0,
-            sample_level: false,
-            pending_edge: None,
-            edge_queue_empty: false,
             active: false,
         }
     }
@@ -167,13 +159,12 @@ impl BkEmulatorAudio {
     pub fn tinyusb_set_active(&mut self, active: bool) {
         if active {
             if !self.active {
-                self.sample_level = bk_audio_start() != 0;
-                self.pending_edge = None;
+                let source_level = bk_audio_start() != 0;
                 self.next_sample_phase = Self::cycle_phase()
                     .wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE + AUDIO_PREFILL_PHASE);
                 unsafe {
                     core::ptr::addr_of_mut!(PCM_RESAMPLER)
-                        .write(PcmResampler::new(self.next_sample_phase, self.sample_level));
+                        .write(PcmResampler::new(self.next_sample_phase, source_level));
                 }
                 SOURCE_TAIL.store(0, Ordering::Relaxed);
                 SOURCE_HEAD.store(0, Ordering::Release);
@@ -200,67 +191,36 @@ impl BkEmulatorAudio {
         }
     }
 
-    /// Advance the source-time queue by at most max_samples due samples.
+    /// Advance source-time availability using elapsed emulated time.
     /// This runs in the main loop, never in the USB interrupt.
     pub fn render_available(&mut self, max_samples: usize) -> usize {
-        if !self.active {
+        if !self.active || max_samples == 0 {
             return 0;
         }
+
         let render_until = Self::cycle_phase().wrapping_sub(AUDIO_STARTUP_LATENCY_PHASE);
-        // Emulator execution and rendering are sequential in the main loop, so
-        // an empty edge queue stays empty for the rest of this render batch.
-        self.edge_queue_empty = false;
-        // Track source-time availability for adaptive resampling; no PCM is stored.
-        // Publish the producer index once per batch.
+        let distance = render_until.wrapping_sub(self.next_sample_phase) as i32;
+        if distance < 0 {
+            return 0;
+        }
+
         let mut head = SOURCE_HEAD.load(Ordering::Relaxed);
         let tail = SOURCE_TAIL.load(Ordering::Acquire);
-        let mut rendered = 0usize;
-        while rendered < max_samples {
-            if head.wrapping_sub(tail) >= SOURCE_QUEUE_CAPACITY {
-                break;
-            }
-
-            let sample_phase = self.next_sample_phase;
-            if (render_until.wrapping_sub(sample_phase) as i32) < 0 {
-                break;
-            }
-
-            self.apply_edges_through(sample_phase);
-            head = head.wrapping_add(1);
-            self.next_sample_phase = self.next_sample_phase
-                .wrapping_add(AUDIO_SAMPLE_PERIOD_PHASE);
-            rendered += 1;
+        let occupied = head.wrapping_sub(tail);
+        let capacity = SOURCE_QUEUE_CAPACITY.saturating_sub(occupied) as usize;
+        let due = distance as u32 / AUDIO_SAMPLE_PERIOD_PHASE + 1;
+        let advance = (due as usize).min(max_samples).min(capacity);
+        if advance == 0 {
+            return 0;
         }
-        if rendered != 0 {
-            SOURCE_HEAD.store(head, Ordering::Release);
-        }
-        rendered
+
+        let advance = advance as u32;
+        head = head.wrapping_add(advance as u16);
+        self.next_sample_phase = self.next_sample_phase
+            .wrapping_add(advance.wrapping_mul(AUDIO_SAMPLE_PERIOD_PHASE));
+        SOURCE_HEAD.store(head, Ordering::Release);
+        advance as usize
     }
-    fn apply_edges_through(&mut self, sample_phase: u32) {
-        loop {
-            if self.pending_edge.is_none() {
-                if self.edge_queue_empty {
-                    break;
-                }
-                let mut cycles = 0u32;
-                let mut level = 0u8;
-                if unsafe { bk_audio_pop_edge(&mut cycles, &mut level) } == 0 {
-                    self.edge_queue_empty = true;
-                    break;
-                }
-                self.pending_edge = Some((cycles, level != 0));
-            }
-
-            let (edge_cycle, edge_level) = self.pending_edge.unwrap();
-            if sample_phase.wrapping_sub(edge_cycle.wrapping_mul(PHASE_UNITS_PER_CYCLE)) as i32 >= 0 {
-                self.sample_level = edge_level;
-                self.pending_edge = None;
-            } else {
-                break;
-            }
-        }
-    }
-
 }
 
 /// Reconstruct the BK signal at each adaptively resampled source timestamp,
