@@ -103,6 +103,8 @@ unsafe extern "C" {
     fn bk_reset();
     safe fn bk_timing_cycles() -> u32;
     safe fn bk_timer_update();
+    safe fn bk_audio_diag_freeze();
+    safe fn bk_audio_diag_end();
 }
 
 
