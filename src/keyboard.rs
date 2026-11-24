@@ -24,6 +24,7 @@ static KEY_REPEAT_DEADLINE: AtomicU32 = AtomicU32::new(0);
 const KEY_REPEAT_INITIAL_DELAY_MS: u32 = 500;
 const KEY_REPEAT_INTERVAL_MS: u32 = 150;
 static RESET_REQUESTED: AtomicBool = AtomicBool::new(false);
+pub(crate) static AUDIO_DIAG_SAVE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 static mut PREVIOUS_KEYS: [u8; 6] = [0; 6];
 static mut PREVIOUS_MODIFIERS: u8 = 0;
@@ -558,6 +559,13 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
                 }
                 FILE_BROWSER_ACTION.store(action, Ordering::Release);
             }
+            continue;
+        }
+
+        // Shift+F3 saves the recent BK speaker-edge history to NAND.
+        // Plain F3 retains its existing RAM-save dialog.
+        if key == 0x3c && shift {
+            AUDIO_DIAG_SAVE_REQUESTED.store(true, Ordering::Release);
             continue;
         }
 
