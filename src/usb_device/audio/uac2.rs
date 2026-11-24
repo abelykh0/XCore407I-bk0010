@@ -1,4 +1,4 @@
-//! TinyUSB UAC2 audio callbacks and BK emulator edge-based audio rendering.
+//! TinyUSB UAC2 audio class callbacks and BK emulator PCM packet handling.
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -50,7 +50,7 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
     })
 }
 
-/// Advance a bounded batch of source-time samples from the main loop.
+/// Render a bounded batch of PCM samples from the main loop.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_render() {
     if let Some(state) = audio_state_ptr() {
@@ -58,7 +58,7 @@ pub extern "C" fn xcore_tud_audio_render() {
     }
 }
 
-/// USB completion callback: adaptively resample the BK signal and apply BLEP.
+/// USB completion callback: copy pre-rendered PCM samples only.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
     unsafe { crate::emulator::bk_audio::fill_usb_packet(buffer, capacity) }
