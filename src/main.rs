@@ -748,9 +748,9 @@ fn main() -> ! {
         if keyboard::AUDIO_DIAG_SAVE_REQUESTED.swap(false, Ordering::AcqRel) {
             // Stop modifying the ring before reading it. Keep canvas ownership
             // until the export finishes so diagnostic overlays cannot corrupt it.
-            unsafe { bk_audio_diag_freeze(); }
+            bk_audio_diag_freeze();
             let result = file_browser::save_audio_edge_diagnostics();
-            unsafe { bk_audio_diag_end(); }
+            bk_audio_diag_end();
             clear_demo_canvas(0x10);
             show_usb_status(if result.is_ok() { b"AUDIO EDGES SAVED: /audio_edges.txt" } else { b"AUDIO EDGE SAVE FAILED" });
         }
