@@ -159,6 +159,13 @@ uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 // same timestamped edges; the oldest consumer cursor controls slot reuse.
 #define BK_AUDIO_EDGE_CAPACITY 512u
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
+#define BK_AUDIO_DIAG_CAPACITY 64u
+#define BK_AUDIO_DIAG_MASK (BK_AUDIO_DIAG_CAPACITY - 1u)
+static uint32_t bk_audio_diag_cycles[BK_AUDIO_DIAG_CAPACITY];
+static uint8_t bk_audio_diag_levels[BK_AUDIO_DIAG_CAPACITY];
+static uint8_t bk_audio_diag_dropped_flags[BK_AUDIO_DIAG_CAPACITY];
+static uint32_t bk_audio_diag_head;
+static uint32_t bk_audio_diag_dropped;
 static volatile uint16_t bk_audio_edge_head;
 static volatile uint16_t bk_audio_edge_render_tail;
 static volatile uint16_t bk_audio_edge_blep_tail;
@@ -178,23 +185,60 @@ static void bk_audio_record_level(uint8_t level)
     level = level ? 1u : 0u;
     if (level == bk_audio_level) return;
 
+    uint32_t cycles = bk_timing_cycles();
     uint16_t head = bk_audio_edge_head;
-    if ((uint16_t)(head - bk_audio_oldest_tail()) >= BK_AUDIO_EDGE_CAPACITY) {
-        return;
-    }
+    uint8_t dropped =
+        (uint16_t)(head - bk_audio_oldest_tail()) >= BK_AUDIO_EDGE_CAPACITY;
+
+    uint32_t diag_slot = bk_audio_diag_head & BK_AUDIO_DIAG_MASK;
+    bk_audio_diag_cycles[diag_slot] = cycles;
+    bk_audio_diag_levels[diag_slot] = level;
+    bk_audio_diag_dropped_flags[diag_slot] = dropped;
+    bk_audio_diag_head++;
+    if (dropped) bk_audio_diag_dropped++;
+
+    if (dropped) return;
 
     bk_audio_level = level;
     uint16_t slot = head & BK_AUDIO_EDGE_MASK;
-    bk_audio_edge_cycles[slot] = bk_timing_cycles();
+    bk_audio_edge_cycles[slot] = cycles;
     bk_audio_edge_levels[slot] = level;
     __asm volatile("dmb" ::: "memory");
-    bk_audio_edge_head = (uint16_t)(head + 1u);
+}
+
+uint32_t bk_audio_diag_count(void)
+{
+    return bk_audio_diag_head < BK_AUDIO_DIAG_CAPACITY
+        ? bk_audio_diag_head : BK_AUDIO_DIAG_CAPACITY;
+}
+
+uint32_t bk_audio_diag_dropped_count(void)
+{
+    return bk_audio_diag_dropped;
+}
+
+uint8_t bk_audio_diag_read(uint32_t newest_offset, uint32_t *cycles,
+                           uint8_t *level, uint8_t *dropped)
+{
+    uint32_t count = bk_audio_diag_count();
+    if (newest_offset >= count || cycles == NULL || level == NULL ||
+        dropped == NULL) {
+        return 0u;
+    }
+
+    uint32_t slot = (bk_audio_diag_head - 1u - newest_offset) & BK_AUDIO_DIAG_MASK;
+    *cycles = bk_audio_diag_cycles[slot];
+    *level = bk_audio_diag_levels[slot];
+    *dropped = bk_audio_diag_dropped_flags[slot];
+    return 1u;
 }
 
 uint8_t bk_audio_start(void)
 {
     bk_audio_edge_render_tail = bk_audio_edge_head;
     bk_audio_edge_blep_tail = bk_audio_edge_head;
+    bk_audio_diag_head = 0;
+    bk_audio_diag_dropped = 0;
     bk_audio_level = (port0177716 & 0x0040u) ? 1u : 0u;
     __asm volatile("dmb" ::: "memory");
     bk_audio_enabled = 1u;
@@ -383,6 +427,8 @@ void bk_reset(void)
     bk_audio_edge_head = 0;
     bk_audio_edge_render_tail = 0;
     bk_audio_edge_blep_tail = 0;
+    bk_audio_diag_head = 0;
+    bk_audio_diag_dropped = 0;
     stop_irq_pending = 0;
     io_stop_happened = 0;
     last_branch = 0;
