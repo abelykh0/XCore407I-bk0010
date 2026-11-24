@@ -227,6 +227,21 @@ uint32_t bk_audio_diag_dropped_count(void)
     return bk_audio_diag_dropped;
 }
 
+extern uint8_t bk_audio_diag_load(uint32_t slot, uint32_t *cycles,
+                                  uint8_t *level, uint8_t *dropped);
+
+uint8_t bk_audio_diag_read(uint32_t newest_offset, uint32_t *cycles,
+                           uint8_t *level, uint8_t *dropped)
+{
+    uint32_t count = bk_audio_diag_count();
+    if (newest_offset >= count || cycles == NULL || level == NULL ||
+        dropped == NULL) {
+        return 0u;
+    }
+    uint32_t slot = (bk_audio_diag_head - 1u - newest_offset) & BK_AUDIO_DIAG_MASK;
+    return bk_audio_diag_load(slot, cycles, level, dropped);
+}
+
 
 
 uint8_t bk_audio_start(void)
