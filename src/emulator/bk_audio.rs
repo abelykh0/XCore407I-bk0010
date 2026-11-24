@@ -345,8 +345,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
 /// Draw a compact snapshot of the most recent BK speaker transitions.
 /// This is observational only: it does not consume or modify the audio queues.
 pub fn show_diagnostics() {
-    let count = unsafe { bk_audio_diag_count() };
-    let dropped = unsafe { bk_audio_diag_dropped_count() };
+    let count = bk_audio_diag_count();
+    let dropped = bk_audio_diag_dropped_count();
 
     let mut line = [b' '; 32];
     line[..5].copy_from_slice(b"AUDIO");
