@@ -913,7 +913,9 @@ fn main() -> ! {
                     {
                         let now = TICKS.load(Ordering::Relaxed);
                         if now.wrapping_sub(audio_diag_last_tick) >= 250 {
-                            xcore407i_blinker::emulator::bk_audio::show_diagnostics();
+                            if !xcore407i_blinker::camera::audio_history_active() {
+                                xcore407i_blinker::emulator::bk_audio::show_diagnostics();
+                            }
                             audio_diag_last_tick = now;
                         }
                     }
