@@ -547,6 +547,8 @@ fn main() -> ! {
     let mut keyboard_host_ready_last = USB_FS_READY.load(Ordering::Acquire);
     let mut pacing_start_ms = TICKS.load(Ordering::Relaxed);
     let mut pacing_start_cycles = if emulator_enabled { bk_timing_cycles() } else { 0 };
+    #[cfg(feature = "cpu-cycle-diag")]
+    let mut audio_diag_last_tick = pacing_start_ms;
     let mut emulator_was_paused = false;
     let mut format_screen_state = FORMAT_IDLE;
     let mut init_screen_state = INIT_IDLE;
@@ -894,6 +896,15 @@ fn main() -> ! {
                     // context. The USB audio completion callback only drains
                     // this ring and must never perform sample rendering itself.
                     xcore407i_blinker::usb_device::audio_uac2::xcore_tud_audio_render();
+
+                    #[cfg(feature = "cpu-cycle-diag")]
+                    {
+                        let now = TICKS.load(Ordering::Relaxed);
+                        if now.wrapping_sub(audio_diag_last_tick) >= 250 {
+                            xcore407i_blinker::emulator::bk_audio::show_diagnostics();
+                            audio_diag_last_tick = now;
+                        }
+                    }
 
                     service_keyboard_frame_pacing();
                 }
