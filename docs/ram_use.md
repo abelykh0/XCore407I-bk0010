@@ -35,8 +35,8 @@ These are link-time static figures for this particular build. They do not includ
 
 | Allocation | Region | Size | Emulator mode | CDC mode |
 |---|---|---:|---|---|
-| DEMO_CANVAS | Main SRAM, .bss | 84,224 B reserved | First physical segment of the logical BK canvas backing store | CDC receiver + Ethernet DMA ring + HTTP buffers + alternate stack |
-| DEMO_CANVAS_TAIL | CCM, .ccmram.canvas | 46,848 B reserved | Second physical segment of the same logical BK canvas backing store | Reused for CPU-only smoltcp socket metadata + HTTP TCP TX buffer |
+| DEMO_CANVAS | Main SRAM, .bss | 84,224 B reserved | First physical segment of the logical BK canvas backing store; during audio diagnostics this is part of the history ring | CDC receiver + Ethernet DMA ring + HTTP buffers + alternate stack |
+| DEMO_CANVAS_TAIL | CCM, .ccmram.canvas | 46,848 B reserved | Second segment of the logical BK canvas; also holds audio history during capture | Reused for CPU-only smoltcp socket metadata + HTTP TCP TX buffer |
 | Combined | Main SRAM + CCM | 131,072 B reserved | One logical 512 × 256-byte BK canvas backing store split across two memory regions; not a full 512 × 512 NV12 frame | Same physical allocation reused, not allocated again |
 
 Derived from camera.rs: CANVAS_BYTES = 512 × 256 = 131,072; CANVAS_TAIL_BYTES = 46,848; CANVAS_MAIN_BYTES = 84,224.
@@ -62,12 +62,12 @@ LittleFS `metadata_max` is configured to **8 KiB**. This is a limit on metadata-
 | DEMO_CANVAS | Main SRAM | 84,224 B reserved | First segment of the shared BK canvas backing store |
 | DEMO_CANVAS_TAIL | CCM | 46,848 B reserved | Second segment of the same canvas backing store; together these are one logical 128 KiB allocation, not a complete UVC frame |
 | RamBuffer | CCM, .ccmram | 16,384 B | BK-0010 emulated RAM |
-| BK audio edge arrays | Main SRAM, .bss | 2,560 B | 512 32-bit cycle timestamps + 512 8-bit levels |
+| BK audio edge history | Existing canvas (main SRAM + CCM) | 0 B additional | Up to 16,384 eight-byte timestamp/level/drop records; temporarily replaces the canvas while capturing music-only programs |
 | F2 browser file table | Main SRAM, .bss | 990 B | 30 entries × 33 B (`BrowserFile` path + length); shared with CDC mode |
 | USB host/device state | Various | Not measured | TinyUSB state, descriptors, endpoint buffers, host state and class state |
 | Emulator/audio/keyboard state | Various | Not measured | Other C and Rust globals, queues and state |
 
-The common allocations are listed above. The shared F2 browser table holds 30 root-level `.bin` paths (990 B); its 32 display rows comprise a title, 30 file entries, and controls. BK audio edge arrays use 2,560 B, excluding other audio state and alignment. The canvas spans main SRAM and CCM; UVC images are generated and packetized on the fly, without retaining a complete 512 × 512 NV12 frame.
+The common allocations are listed above. The shared F2 browser table holds 30 root-level `.bin` paths (990 B); its 32 display rows comprise a title, 30 file entries, and controls. BK audio edge history reuses the existing 128 KiB canvas, adding no static RAM. It retains up to 16,384 eight-byte records (timestamps, level, and dropped flag), equivalent to 131,072 bytes of storage. The canvas spans main SRAM and CCM; UVC images are generated and packetized on the fly, without retaining a complete 512 × 512 NV12 frame.
 
 ## CDC mode — UVC static page + CDC + Ethernet HTTP
 
@@ -102,7 +102,7 @@ Ethernet and HTTP buffers are carved from the canvas. The 4 KiB ZMODEM storage i
 | NAND page scratch | 2,112 B |
 | Dhara C page buffer | 2,048 B |
 | BK emulator RAM | 16,384 B |
-| BK audio edge arrays | 2,560 B |
+| BK audio edge history (canvas reuse) | 0 B additional |
 | F2 browser file table (30 entries) | 990 B |
 
 These values are not summed into per-mode totals: some are mutually exclusive, some are embedded in reused canvas regions, and others omit build-dependent state, USB allocations, alignment, and stack usage.
