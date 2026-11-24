@@ -159,13 +159,18 @@ uint16_t port0177664 = 01330;   // Screen Scroll / Offset Register
 // same timestamped edges; the oldest consumer cursor controls slot reuse.
 #define BK_AUDIO_EDGE_CAPACITY 512u
 #define BK_AUDIO_EDGE_MASK (BK_AUDIO_EDGE_CAPACITY - 1u)
-#define BK_AUDIO_DIAG_CAPACITY 64u
+// The complete 128 KiB video canvas is reused as a compact audio history
+// while the music-only program is running. Each entry occupies eight bytes.
+#define BK_AUDIO_DIAG_CAPACITY 16384u
 #define BK_AUDIO_DIAG_MASK (BK_AUDIO_DIAG_CAPACITY - 1u)
-static uint32_t bk_audio_diag_cycles[BK_AUDIO_DIAG_CAPACITY];
-static uint8_t bk_audio_diag_levels[BK_AUDIO_DIAG_CAPACITY];
-static uint8_t bk_audio_diag_dropped_flags[BK_AUDIO_DIAG_CAPACITY];
 static uint32_t bk_audio_diag_head;
 static uint32_t bk_audio_diag_dropped;
+static uint8_t bk_audio_diag_recording;
+
+extern void bk_audio_diag_begin(void);
+extern void bk_audio_diag_freeze(void);
+extern void bk_audio_diag_store(uint32_t slot, uint32_t cycles,
+                                uint8_t level, uint8_t dropped);
 static volatile uint16_t bk_audio_edge_head;
 static volatile uint16_t bk_audio_edge_render_tail;
 static volatile uint16_t bk_audio_edge_blep_tail;
