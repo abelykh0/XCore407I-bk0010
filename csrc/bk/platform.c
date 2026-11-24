@@ -168,7 +168,6 @@ static uint32_t bk_audio_diag_dropped;
 static uint8_t bk_audio_diag_recording;
 
 extern void bk_audio_diag_begin(void);
-extern void bk_audio_diag_freeze(void);
 extern void bk_audio_diag_store(uint32_t slot, uint32_t cycles,
                                 uint8_t level, uint8_t dropped);
 static volatile uint16_t bk_audio_edge_head;
