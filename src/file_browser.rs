@@ -353,7 +353,7 @@ pub(crate) fn save_audio_edge_diagnostics() -> Result<(), xcore407i_blinker::nan
                         }
                     }
 
-                    let count = unsafe { bk_audio_diag_count() }.min(64);
+                    let count = unsafe { bk_audio_diag_count() }.min(16_384);
                     let lost = unsafe { bk_audio_diag_dropped_count() };
                     write_all(file, b"BK AUDIO EDGE HISTORY\r\n")?;
                     let mut line = [0u8; 40];
