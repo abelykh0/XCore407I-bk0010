@@ -221,7 +221,6 @@ void bk_audio_diag_freeze(void)
 {
     bk_audio_diag_recording = 0u;
     __asm volatile("dmb" ::: "memory");
-    bk_audio_diag_freeze();
 }
 
 uint32_t bk_audio_diag_dropped_count(void)
