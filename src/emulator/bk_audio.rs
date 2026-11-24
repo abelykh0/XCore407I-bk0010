@@ -136,6 +136,14 @@ unsafe extern "C" {
     safe fn bk_audio_stop();
     fn bk_audio_pop_edge(cycles: *mut u32, level: *mut u8) -> u8;
     fn bk_audio_pop_blep_edge(cycles: *mut u32, level: *mut u8) -> u8;
+    safe fn bk_audio_diag_count() -> u32;
+    safe fn bk_audio_diag_dropped_count() -> u32;
+    fn bk_audio_diag_read(
+        newest_offset: u32,
+        cycles: *mut u32,
+        level: *mut u8,
+        dropped: *mut u8,
+    ) -> u8;
 }
 
 pub struct BkEmulatorAudio {
@@ -332,6 +340,57 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         core::ptr::addr_of_mut!(PCM_RESAMPLER).write(resampler);
     }
     PACKET_BYTES as u16
+}
+
+/// Draw a compact snapshot of the most recent BK speaker transitions.
+/// This is observational only: it does not consume or modify the audio queues.
+pub fn show_diagnostics() {
+    let count = unsafe { bk_audio_diag_count() };
+    let dropped = unsafe { bk_audio_diag_dropped_count() };
+
+    let mut line = [b' '; 32];
+    line[..5].copy_from_slice(b"AUDIO");
+    line[6..11].copy_from_slice(b"EDGE ");
+    write_hex(&mut line[12..20], count);
+    line[21..26].copy_from_slice(b"LOST ");
+    write_hex(&mut line[27..31], dropped);
+    crate::camera::show_file_browser_line(25, &line, false);
+
+    for row in 0..4u32 {
+        line.fill(b' ');
+        if row < count.min(4) {
+            let offset = count.min(4) - 1 - row;
+            let mut cycles = 0u32;
+            let mut level = 0u8;
+            let mut was_dropped = 0u8;
+            if unsafe {
+                bk_audio_diag_read(offset, &mut cycles, &mut level, &mut was_dropped)
+            } != 0 {
+                line[..2].copy_from_slice(b"E ");
+                write_hex(&mut line[2..10], cycles);
+                line[11] = b'L';
+                line[12] = b'0' + level;
+                line[14] = if was_dropped != 0 { b'!' } else { b' ' };
+                line[16..21].copy_from_slice(b"AGE ");
+                let mut newest = 0u32;
+                let mut newest_level = 0u8;
+                let mut newest_dropped = 0u8;
+                unsafe {
+                    bk_audio_diag_read(0, &mut newest, &mut newest_level, &mut newest_dropped);
+                }
+                write_hex(&mut line[21..29], newest.wrapping_sub(cycles));
+            }
+        }
+        crate::camera::show_file_browser_line(26 + row as usize, &line, false);
+    }
+}
+
+fn write_hex(out: &mut [u8], value: u32) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for (index, byte) in out.iter_mut().enumerate() {
+        let shift = (out.len() - index - 1) * 4;
+        *byte = HEX[((value >> shift) & 0x0F) as usize];
+    }
 }
 
 impl Default for BkEmulatorAudio {
