@@ -50,7 +50,7 @@ pub extern "C" fn xcore_tud_audio_set_interface(interface: u8, alternate: u8) ->
     })
 }
 
-/// Render a bounded batch of PCM samples from the main loop.
+/// Advance the source-time availability counter from the main loop.
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_audio_render() {
     if let Some(state) = audio_state_ptr() {
@@ -58,7 +58,7 @@ pub extern "C" fn xcore_tud_audio_render() {
     }
 }
 
-/// USB completion callback: copy pre-rendered PCM samples only.
+/// USB completion callback: reconstruct and resample the BK signal, then apply BLEP.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xcore_tud_audio_fill_packet(buffer: *mut u8, capacity: u16) -> u16 {
     unsafe { crate::emulator::bk_audio::fill_usb_packet(buffer, capacity) }
