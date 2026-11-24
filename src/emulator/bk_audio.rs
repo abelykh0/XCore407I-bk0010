@@ -387,8 +387,9 @@ pub fn show_diagnostics() {
 
 fn write_hex(out: &mut [u8], value: u32) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let len = out.len();
     for (index, byte) in out.iter_mut().enumerate() {
-        let shift = (out.len() - index - 1) * 4;
+        let shift = (len - index - 1) * 4;
         *byte = HEX[((value >> shift) & 0x0F) as usize];
     }
 }
