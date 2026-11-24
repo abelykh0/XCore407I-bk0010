@@ -62,6 +62,7 @@ LittleFS `metadata_max` is configured to **8 KiB**. This is a limit on metadata-
 | DEMO_CANVAS | Main SRAM | 84,224 B reserved | First segment of the shared BK canvas backing store |
 | DEMO_CANVAS_TAIL | CCM | 46,848 B reserved | Second segment of the same canvas backing store; together these are one logical 128 KiB allocation, not a complete UVC frame |
 | RamBuffer | CCM, .ccmram | 16,384 B | BK-0010 emulated RAM |
+| BK audio edge queue arrays | Main SRAM, .bss | 2,560 B | 512 32-bit timestamps + 512 8-bit levels for the live audio queue |
 | BK audio edge history | Existing canvas (main SRAM + CCM) | 0 B additional | Up to 16,384 eight-byte timestamp/level/drop records; temporarily replaces the canvas while capturing music-only programs |
 | F2 browser file table | Main SRAM, .bss | 990 B | 30 entries × 33 B (`BrowserFile` path + length); shared with CDC mode |
 | USB host/device state | Various | Not measured | TinyUSB state, descriptors, endpoint buffers, host state and class state |
@@ -102,6 +103,7 @@ Ethernet and HTTP buffers are carved from the canvas. The 4 KiB ZMODEM storage i
 | NAND page scratch | 2,112 B |
 | Dhara C page buffer | 2,048 B |
 | BK emulator RAM | 16,384 B |
+| BK audio edge queue arrays | 2,560 B |
 | BK audio edge history (canvas reuse) | 0 B additional |
 | F2 browser file table (30 entries) | 990 B |
 
