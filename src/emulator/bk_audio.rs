@@ -186,8 +186,8 @@ impl BkEmulatorAudio {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(0, false));
             }
             bk_audio_stop();
-            PCM_TAIL.store(0, Ordering::Relaxed);
-            PCM_HEAD.store(0, Ordering::Release);
+            SOURCE_TAIL.store(0, Ordering::Relaxed);
+            SOURCE_HEAD.store(0, Ordering::Release);
         }
     }
 
@@ -212,8 +212,8 @@ impl BkEmulatorAudio {
         self.edge_queue_empty = false;
         // Track source-time availability for adaptive resampling; no PCM is stored.
         // Publish the producer index once per batch.
-        let mut head = PCM_HEAD.load(Ordering::Relaxed);
-        let tail = PCM_TAIL.load(Ordering::Acquire);
+        let mut head = SOURCE_HEAD.load(Ordering::Relaxed);
+        let tail = SOURCE_TAIL.load(Ordering::Acquire);
         let mut rendered = 0usize;
         while rendered < max_samples {
             if head.wrapping_sub(tail) >= SOURCE_QUEUE_CAPACITY {
@@ -232,7 +232,7 @@ impl BkEmulatorAudio {
             rendered += 1;
         }
         if rendered != 0 {
-            PCM_HEAD.store(head, Ordering::Release);
+            SOURCE_HEAD.store(head, Ordering::Release);
         }
         rendered
     }
@@ -275,8 +275,8 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
     }
 
     let buffer = unsafe { core::slice::from_raw_parts_mut(buffer, capacity as usize) };
-    let mut tail = PCM_TAIL.load(Ordering::Relaxed);
-    let head = PCM_HEAD.load(Ordering::Acquire);
+    let mut tail = SOURCE_TAIL.load(Ordering::Relaxed);
+    let head = SOURCE_HEAD.load(Ordering::Acquire);
     let mut resampler = unsafe { core::ptr::addr_of!(PCM_RESAMPLER).read() };
     resampler.update_rate(head.wrapping_sub(tail));
 
@@ -327,7 +327,7 @@ pub unsafe fn fill_usb_packet(buffer: *mut u8, capacity: u16) -> u16 {
         buffer[index * 2 + 1] = bytes[1];
     }
 
-    PCM_TAIL.store(tail, Ordering::Release);
+    SOURCE_TAIL.store(tail, Ordering::Release);
     unsafe {
         core::ptr::addr_of_mut!(PCM_RESAMPLER).write(resampler);
     }
