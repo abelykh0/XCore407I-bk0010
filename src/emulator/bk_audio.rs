@@ -371,7 +371,7 @@ pub fn show_diagnostics() {
                 line[11] = b'L';
                 line[12] = b'0' + level;
                 line[14] = if was_dropped != 0 { b'!' } else { b' ' };
-                line[16..21].copy_from_slice(b"AGE ");
+                line[16..20].copy_from_slice(b"AGE ");
                 let mut newest = 0u32;
                 let mut newest_level = 0u8;
                 let mut newest_dropped = 0u8;
