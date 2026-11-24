@@ -743,6 +743,14 @@ fn main() -> ! {
 
         file_browser::process_save_dialog();
 
+        if keyboard::AUDIO_DIAG_SAVE_REQUESTED.swap(false, Ordering::AcqRel) {
+            clear_demo_canvas(0x10);
+            show_usb_status(b"SAVING AUDIO EDGE HISTORY");
+            let result = file_browser::save_audio_edge_diagnostics();
+            clear_demo_canvas(0x10);
+            show_usb_status(if result.is_ok() { b"AUDIO EDGES SAVED: /audio_edges.txt" } else { b"AUDIO EDGE SAVE FAILED" });
+        }
+
         let opening_browser = browser_action == FILE_BROWSER_OPEN && !browser_open;
         if opening_browser {
             keyboard_queue_discard();
