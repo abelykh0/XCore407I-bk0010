@@ -337,7 +337,7 @@ pub(crate) fn save_audio_edge_diagnostics() -> Result<(), xcore407i_blinker::nan
                 path,
                 allocation,
                 |file| {
-                    fn write_all(file: &mut impl littlefs2::io::Write, bytes: &[u8]) -> littlefs2::io::Result<()> {
+                    fn write_all(file: &impl littlefs2::io::Write, bytes: &[u8]) -> littlefs2::io::Result<()> {
                         let mut offset = 0;
                         while offset < bytes.len() {
                             let count = file.write(&bytes[offset..])?;
