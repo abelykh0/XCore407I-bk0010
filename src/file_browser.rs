@@ -325,6 +325,96 @@ pub(crate) fn save_ram_to_path(
     }
 }
 
+
+/// Save the complete observational BK speaker-edge history as a text file.
+pub(crate) fn save_audio_edge_diagnostics() -> Result<(), xcore407i_blinker::nand_fs::FsAccessError> {
+    let path = littlefs2::path::Path::from_bytes_with_nul(b"/audio_edges.txt\0")
+        .map_err(|_| xcore407i_blinker::nand_fs::FsAccessError::Operation(-22))?;
+    let result = xcore407i_blinker::nand_fs::with_mounted_detailed(|fs| {
+        with_file_browser_file_allocation(|allocation| {
+            fs.open_file_with_options_and_then_with_allocation(
+                |options| options.write(true).create(true).truncate(true),
+                path,
+                allocation,
+                |file| {
+                    fn write_all(file: &mut impl littlefs2::io::Write, bytes: &[u8]) -> littlefs2::io::Result<()> {
+                        let mut offset = 0;
+                        while offset < bytes.len() {
+                            let count = file.write(&bytes[offset..])?;
+                            if count == 0 { return Err(littlefs2::io::Error::IO); }
+                            offset += count;
+                        }
+                        Ok(())
+                    }
+                    fn hex8(out: &mut [u8; 8], value: u32) {
+                        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                        for (i, byte) in out.iter_mut().enumerate() {
+                            *byte = HEX[((value >> ((7 - i) * 4)) & 0x0f) as usize];
+                        }
+                    }
+
+                    let count = unsafe { bk_audio_diag_count() }.min(64);
+                    let lost = unsafe { bk_audio_diag_dropped_count() };
+                    write_all(file, b"BK AUDIO EDGE HISTORY\r\n")?;
+                    let mut line = [0u8; 40];
+                    line[..6].copy_from_slice(b"COUNT ");
+                    let mut digits = [0u8; 10];
+                    let count_text = xcore407i_blinker::format::u32_to_decimal(count, &mut digits);
+                    let mut len = 6;
+                    line[len..len + count_text.len()].copy_from_slice(count_text);
+                    len += count_text.len();
+                    line[len..len + 6].copy_from_slice(b" LOST ");
+                    len += 6;
+                    let lost_text = xcore407i_blinker::format::u32_to_decimal(lost, &mut digits);
+                    line[len..len + lost_text.len()].copy_from_slice(lost_text);
+                    len += lost_text.len();
+                    line[len..len + 2].copy_from_slice(b"\r\n");
+                    len += 2;
+                    write_all(file, &line[..len])?;
+                    write_all(file, b"OFFSET TIMESTAMP LEVEL DROPPED\r\n")?;
+
+                    for offset in (0..count).rev() {
+                        let mut cycles = 0u32;
+                        let mut level = 0u8;
+                        let mut dropped = 0u8;
+                        if unsafe { bk_audio_diag_read(offset, &mut cycles, &mut level, &mut dropped) } == 0 {
+                            continue;
+                        }
+                        let mut row = [0u8; 32];
+                        row[..2].copy_from_slice(b"  ");
+                        let offset_text = xcore407i_blinker::format::u32_to_decimal(offset, &mut digits);
+                        let mut pos = 2;
+                        row[pos..pos + offset_text.len()].copy_from_slice(offset_text);
+                        pos += offset_text.len();
+                        row[pos..pos + 1].copy_from_slice(b" ");
+                        pos += 1;
+                        let mut timestamp = [0u8; 8];
+                        hex8(&mut timestamp, cycles);
+                        row[pos..pos + 8].copy_from_slice(&timestamp);
+                        pos += 8;
+                        row[pos..pos + 2].copy_from_slice(if level != 0 { b" 1" } else { b" 0" });
+                        pos += 2;
+                        row[pos..pos + 2].copy_from_slice(if dropped != 0 { b" *" } else { b" -" });
+                        pos += 2;
+                        row[pos..pos + 2].copy_from_slice(b"\r\n");
+                        pos += 2;
+                        write_all(file, &row[..pos])?;
+                    }
+                    Ok(())
+                },
+            )
+        })
+    });
+    result.map_err(xcore407i_blinker::nand_fs::FsAccessError::from)
+}
+
+unsafe extern "C" {
+    safe fn bk_audio_diag_count() -> u32;
+    safe fn bk_audio_diag_dropped_count() -> u32;
+    fn bk_audio_diag_read(newest_offset: u32, cycles: *mut u32, level: *mut u8, dropped: *mut u8) -> u8;
+}
+
+
 /// Draw the F3 filename entry or overwrite confirmation screen.
 pub(crate) unsafe fn draw_save_dialog(state: u8) {
     clear_demo_canvas(0);
