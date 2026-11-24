@@ -850,7 +850,9 @@ fn main() -> ! {
                     (elapsed_pdp as u64 * DWT_CYCLES_PER_SECOND as u64
                         / elapsed_dwt as u64) as u32;
 
-                show_pdp_cycles_per_second(pdp_cycles_per_second);
+                if !xcore407i_blinker::camera::audio_history_active() {
+                    show_pdp_cycles_per_second(pdp_cycles_per_second);
+                }
                 diagnostic_last_dwt = now_dwt;
                 diagnostic_last_pdp = now_pdp;
             }
