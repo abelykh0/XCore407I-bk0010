@@ -172,7 +172,6 @@ impl BkEmulatorAudio {
             }
         } else if self.active {
             self.active = false;
-            self.pending_edge = None;
             unsafe {
                 core::ptr::addr_of_mut!(PCM_RESAMPLER).write(PcmResampler::new(0, false));
             }
