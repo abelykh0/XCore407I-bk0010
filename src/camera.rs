@@ -389,6 +389,75 @@ fn canvas_write_chunk(offset: usize) -> (*mut u8, usize) {
     }
 }
 
+
+// Audio diagnostics temporarily own the complete logical canvas. The game
+// being measured is music-only, so no video writes compete with this storage.
+const AUDIO_HISTORY_ENTRY_BYTES: usize = 8;
+const AUDIO_HISTORY_CAPACITY: usize = CANVAS_BYTES / AUDIO_HISTORY_ENTRY_BYTES;
+static AUDIO_HISTORY_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn audio_history_active() -> bool {
+    AUDIO_HISTORY_ACTIVE.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bk_audio_diag_begin() {
+    AUDIO_HISTORY_ACTIVE.store(true, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bk_audio_diag_end() {
+    AUDIO_HISTORY_ACTIVE.store(false, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bk_audio_diag_store(
+    slot: u32,
+    cycles: u32,
+    level: u8,
+    dropped: u8,
+) {
+    let slot = slot as usize;
+    if slot >= AUDIO_HISTORY_CAPACITY {
+        return;
+    }
+    let offset = slot * AUDIO_HISTORY_ENTRY_BYTES;
+    let mut entry = [0u8; AUDIO_HISTORY_ENTRY_BYTES];
+    entry[..4].copy_from_slice(&cycles.to_le_bytes());
+    entry[4] = level;
+    entry[5] = dropped;
+    let (destination, available) = canvas_write_chunk(offset);
+    debug_assert!(available >= AUDIO_HISTORY_ENTRY_BYTES);
+    unsafe {
+        core::ptr::copy_nonoverlapping(entry.as_ptr(), destination, AUDIO_HISTORY_ENTRY_BYTES);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bk_audio_diag_load(
+    slot: u32,
+    cycles: *mut u32,
+    level: *mut u8,
+    dropped: *mut u8,
+) -> u8 {
+    let slot = slot as usize;
+    if slot >= AUDIO_HISTORY_CAPACITY || cycles.is_null() || level.is_null() || dropped.is_null() {
+        return 0;
+    }
+    let offset = slot * AUDIO_HISTORY_ENTRY_BYTES;
+    let (source, available) = canvas_read_chunk(offset);
+    if available < AUDIO_HISTORY_ENTRY_BYTES {
+        return 0;
+    }
+    let mut entry = [0u8; AUDIO_HISTORY_ENTRY_BYTES];
+    unsafe {
+        core::ptr::copy_nonoverlapping(source, entry.as_mut_ptr(), AUDIO_HISTORY_ENTRY_BYTES);
+        cycles.write(u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]));
+        level.write(entry[4]);
+        dropped.write(entry[5]);
+    }
+    1
+}
 /// Fill the entire canvas with one uniform palette color.
 ///
 /// `color` is a palette index (0..63), matching `set_pixel()`.
