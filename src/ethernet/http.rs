@@ -549,6 +549,20 @@ impl<'a> super::EthernetNetwork<'a> {
         }
         let (_, request_ready) = parse_request(&upload_body[..http_upload.rx_len]);
 
+        // A request that still cannot be parsed after consuming the entire
+        // buffer cannot make progress: there is nowhere to receive more data.
+        // Reject it and release the single HTTP socket for the next client.
+        if !request_ready && http_upload.rx_len == HTTP_RX_BUFFER_SIZE {
+            if socket.can_send() {
+                let _ = socket.send_slice(
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad request",
+                );
+            }
+            http_upload.rx_len = 0;
+            socket.close();
+            return;
+        }
+
         HTTP_POLL_DIAG_QUEUE.store(socket.recv_queue() as u32, Ordering::Release);
         HTTP_POLL_DIAG_CAPACITY.store(socket.recv_capacity() as u32, Ordering::Release);
         let tcp_state = match socket.state() {
