@@ -44,6 +44,7 @@ pub struct State {
     send_wire_pos: usize,
     send_last_activity_ms: u32,
     send_last_handshake_ms: u32,
+    send_abort_local: bool,
     file_allocation: FileAllocation<ActiveStorage>,
     final_path: [u8; NAME_CAPACITY + 2],
     final_path_len: usize,
@@ -103,6 +104,7 @@ impl State {
             send_wire_pos: 0,
             send_last_activity_ms: 0,
             send_last_handshake_ms: 0,
+            send_abort_local: false,
             file_allocation: FileAllocation::new(),
             final_path: [0; NAME_CAPACITY + 2],
             final_path_len: 0,
@@ -270,6 +272,7 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     state.send_path_len = 0;
     state.send_wire_len = 0;
     state.send_wire_pos = 0;
+    state.send_abort_local = false;
     state.final_path_len = 0;
     // A committed receive notification survives a CDC disconnect. The
     // normal console path will deliver it after the host reconnects.
@@ -626,12 +629,23 @@ pub fn start_send(
     state.send_wire_pos = 0;
     state.send_last_activity_ms = now_ms;
     state.send_last_handshake_ms = now_ms;
+    state.send_abort_local = false;
     state.session_complete_pending = false;
     state.sender = Some(sender);
     Ok(())
 }
 
 /// Drive the sender while the CDC terminal receives the file.
+fn abort_sender(sender: &mut Sender) {
+    // Sender::abort() drops protocol bytes that have not reached the
+    // transport. Clear TinyUSB's separate CDC FIFO too, so buffered file
+    // data is not transmitted after the peer has abandoned ZMODEM.
+    unsafe {
+        let _ = tusb::tud_cdc_n_write_clear(0);
+    }
+    sender.abort();
+}
+
 fn service_sender(
     fs: &Filesystem<'_, ActiveStorage>,
     state: &mut State,
@@ -683,11 +697,13 @@ fn service_sender(
             }
             Action::ReadFile { offset, max_len } => {
                 let Some(send_buffer) = state.send_buffer else {
-                    sender.abort();
+                    abort_sender(&mut sender);
+                    state.send_abort_local = true;
                     break;
                 };
                 if state.send_path_len == 0 || max_len == 0 || max_len > FILE_BUFFER_CAPACITY {
-                    sender.abort();
+                    abort_sender(&mut sender);
+                    state.send_abort_local = true;
                     break;
                 }
                 let send_buffer = unsafe {
@@ -701,13 +717,15 @@ fn service_sender(
                 match read_result {
                     Ok(count) if count != 0 => {
                         if sender.submit_file(&send_buffer[..count]).is_err() {
-                            sender.abort();
+                            abort_sender(&mut sender);
+                            state.send_abort_local = true;
                             break;
                         }
                         state.send_last_activity_ms = now_ms;
                     }
                     _ => {
-                        sender.abort();
+                        abort_sender(&mut sender);
+                        state.send_abort_local = true;
                         break;
                     }
                 }
@@ -716,7 +734,8 @@ fn service_sender(
                 // This command sends exactly one file. Once the receiver
                 // acknowledges ZEOF with ZRINIT, finish the ZMODEM session.
                 if sender.finish().is_err() {
-                    sender.abort();
+                    abort_sender(&mut sender);
+                    state.send_abort_local = true;
                     break;
                 }
             }
@@ -726,18 +745,28 @@ fn service_sender(
                 state.session_complete_pending = true;
             }
             Action::Event(Event::Aborted) => {
+                // A peer abort does not queue a cancel sequence. Drop stale
+                // queued file bytes before resuming interactive console output.
+                if !state.send_abort_local {
+                    unsafe {
+                        let _ = tusb::tud_cdc_n_write_clear(0);
+                    }
+                }
+                state.send_abort_local = false;
                 super::console::write_status(b"\r\nZMODEM send aborted or failed.\r\n> ");
                 aborted = true;
                 finished = true;
                 break;
             }
             Action::Event(_) | Action::WriteFile(_) => {
-                sender.abort();
+                abort_sender(&mut sender);
+                state.send_abort_local = true;
                 break;
             }
             Action::Idle => {
                 if now_ms.wrapping_sub(state.send_last_activity_ms) >= TRANSFER_TIMEOUT_MS {
-                    sender.abort();
+                    abort_sender(&mut sender);
+                    state.send_abort_local = true;
                     continue;
                 }
 
@@ -780,25 +809,9 @@ fn service_sender(
                             }
                             state.send_last_activity_ms = now_ms;
                         }
-                        Err(error) => {
-                            let message: &[u8] = match error {
-                                ZmodemError::MalformedEncoding(_) => b"\r\nZMODEM send: malformed receiver encoding\r\n",
-                                ZmodemError::MalformedFileSize => b"\r\nZMODEM send: malformed receiver file size\r\n",
-                                ZmodemError::MalformedFileName => b"\r\nZMODEM send: malformed receiver filename\r\n",
-                                ZmodemError::MalformedFrame(_) => b"\r\nZMODEM send: malformed receiver frame\r\n",
-                                ZmodemError::MalformedHeader => b"\r\nZMODEM send: malformed receiver header\r\n",
-                                ZmodemError::MalformedPacket(_) => b"\r\nZMODEM send: malformed receiver packet\r\n",
-                                ZmodemError::InvalidState => b"\r\nZMODEM send: invalid sender state\r\n",
-                                ZmodemError::Backpressure => b"\r\nZMODEM send: protocol backpressure\r\n",
-                                ZmodemError::OutOfMemory => b"\r\nZMODEM send: protocol buffer exhausted\r\n",
-                                ZmodemError::UnexpectedCrc16 => b"\r\nZMODEM send: receiver CRC-16 mismatch\r\n",
-                                ZmodemError::UnexpectedCrc32 => b"\r\nZMODEM send: receiver CRC-32 mismatch\r\n",
-                                ZmodemError::UnexpectedEof => b"\r\nZMODEM send: unexpected receiver EOF\r\n",
-                                ZmodemError::UnsupportedFeature => b"\r\nZMODEM send: unsupported receiver feature\r\n",
-                                ZmodemError::SubpacketTooLarge => b"\r\nZMODEM send: receiver packet too large\r\n",
-                            };
-                            super::console::write_status(message);
-                            sender.abort();
+                        Err(_) => {
+                            abort_sender(&mut sender);
+                            state.send_abort_local = true;
                         }
                     }
                 } else if now_ms.wrapping_sub(state.send_last_handshake_ms) >= 2_000 {
@@ -811,7 +824,8 @@ fn service_sender(
             // Action is non-exhaustive; fail closed if the protocol crate adds
             // an action this integration does not understand.
             _ => {
-                sender.abort();
+                abort_sender(&mut sender);
+                state.send_abort_local = true;
                 break;
             }
         }
@@ -836,6 +850,7 @@ fn service_sender(
         }
         state.send_wire_len = 0;
         state.send_wire_pos = 0;
+        state.send_abort_local = false;
         if aborted {
             // Discard any remaining ZMODEM cancellation/trailer bytes before
             // the console resumes parsing CDC input.
