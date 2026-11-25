@@ -16,9 +16,14 @@ static DIRECTORY_CDC_CYCLES: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy)]
 pub(crate) struct Snapshot {
-    pub dhara_reads: u32, pub dhara_cycles: u32,
-    pub nand_reads: u32, pub nand_bytes: u32, pub nand_cycles: u32,
-    pub cdc_calls: u32, pub cdc_bytes: u32, pub cdc_cycles: u32,
+    pub dhara_reads: u32,
+    pub dhara_cycles: u32,
+    pub nand_reads: u32,
+    pub nand_bytes: u32,
+    pub nand_cycles: u32,
+    pub cdc_calls: u32,
+    pub cdc_bytes: u32,
+    pub cdc_cycles: u32,
     pub directory_cdc_cycles: u32,
 }
 
@@ -26,7 +31,9 @@ pub(crate) struct Snapshot {
 pub(crate) fn cycle_count() -> u32 {
     cortex_m::peripheral::DWT::cycle_count()
 }
-pub(crate) fn is_active() -> bool { ACTIVE.load(Ordering::Relaxed) }
+pub(crate) fn is_active() -> bool {
+    ACTIVE.load(Ordering::Relaxed)
+}
 pub(crate) fn set_directory_active(active: bool) {
     DIRECTORY_ACTIVE.store(active, Ordering::Relaxed);
 }

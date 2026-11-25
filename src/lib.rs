@@ -21,10 +21,6 @@ mod font8x8;
 #[path = "../resources/rom.rs"]
 pub mod rom;
 
-#[cfg(feature = "list-profile")]
-mod list_diag;
-#[cfg(feature = "list-profile")]
-mod write_diag;
 
 /// System core clock frequency used by the board clock setup and cycle timing.
 pub const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;

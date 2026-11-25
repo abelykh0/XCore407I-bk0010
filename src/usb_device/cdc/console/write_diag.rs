@@ -51,14 +51,29 @@ pub(crate) fn begin() {
     ACTIVE.store(false, Ordering::Release);
     for counter in [
         &TRANSFER_US,
-        &ZMODEM_POLL_CALLS, &ZMODEM_POLL_US,
-        &ZMODEM_SUBMIT_CALLS, &ZMODEM_SUBMIT_US,
-        &LFS_CREATE_US, &LFS_APPEND_US, &LFS_APPEND_CALLS,
-        &LFS_OPEN_US, &LFS_CALLBACK_US, &LFS_CLOSE_US, &LFS_COMMIT_US,
-        &LFS_WRITE_CALLS, &LFS_WRITE_BYTES, &LFS_WRITE_US,
-        &DHARA_WRITE_CALLS, &DHARA_WRITE_PAGES, &DHARA_WRITE_US,
-        &NAND_PROGRAM_CALLS, &NAND_PROGRAM_US, &NAND_FIFO_WAIT_US,
-        &NAND_BUSY_WAIT_US, &NAND_ERASE_CALLS, &NAND_ERASE_US,
+        &ZMODEM_POLL_CALLS,
+        &ZMODEM_POLL_US,
+        &ZMODEM_SUBMIT_CALLS,
+        &ZMODEM_SUBMIT_US,
+        &LFS_CREATE_US,
+        &LFS_APPEND_US,
+        &LFS_APPEND_CALLS,
+        &LFS_OPEN_US,
+        &LFS_CALLBACK_US,
+        &LFS_CLOSE_US,
+        &LFS_COMMIT_US,
+        &LFS_WRITE_CALLS,
+        &LFS_WRITE_BYTES,
+        &LFS_WRITE_US,
+        &DHARA_WRITE_CALLS,
+        &DHARA_WRITE_PAGES,
+        &DHARA_WRITE_US,
+        &NAND_PROGRAM_CALLS,
+        &NAND_PROGRAM_US,
+        &NAND_FIFO_WAIT_US,
+        &NAND_BUSY_WAIT_US,
+        &NAND_ERASE_CALLS,
+        &NAND_ERASE_US,
     ] {
         counter.store(0, Ordering::Relaxed);
     }
@@ -81,7 +96,9 @@ pub(crate) fn record_zmodem_submit(cycles: u32) {
     add(&ZMODEM_SUBMIT_US, cycles_to_us(cycles));
 }
 
-pub(crate) fn record_lfs_create(cycles: u32) { add(&LFS_CREATE_US, cycles_to_us(cycles)); }
+pub(crate) fn record_lfs_create(cycles: u32) {
+    add(&LFS_CREATE_US, cycles_to_us(cycles));
+}
 pub(crate) fn record_lfs_append_open(cycles: u32) {
     add(&LFS_OPEN_US, cycles_to_us(cycles));
 }
@@ -93,14 +110,15 @@ pub(crate) fn record_lfs_append_callback(cycles: u32) {
 pub(crate) fn record_lfs_append_close(cycles: u32) {
     add(&LFS_CLOSE_US, cycles_to_us(cycles));
 }
-pub(crate) fn record_lfs_commit(cycles: u32) { add(&LFS_COMMIT_US, cycles_to_us(cycles)); }
+pub(crate) fn record_lfs_commit(cycles: u32) {
+    add(&LFS_COMMIT_US, cycles_to_us(cycles));
+}
 
 pub(crate) fn record_lfs_write(cycles: u32, bytes: usize) {
     add(&LFS_WRITE_CALLS, 1);
     add(&LFS_WRITE_BYTES, bytes as u32);
     add(&LFS_WRITE_US, cycles_to_us(cycles));
 }
-
 
 pub(crate) fn record_dhara_write(cycles: u32, pages: usize) {
     add(&DHARA_WRITE_CALLS, 1);

@@ -437,8 +437,8 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
         return false;
     }
     #[cfg(feature = "list-profile")]
-    let read_started = if crate::list_diag::is_active() {
-        Some(crate::list_diag::cycle_count())
+    let read_started = if crate::usb_device::cdc::console::list_diag::is_active() {
+        Some(crate::usb_device::cdc::console::list_diag::cycle_count())
     } else {
         None
     };
@@ -452,8 +452,8 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
         record_nand_device_failure(1, page, 0);
         #[cfg(feature = "list-profile")]
         if let Some(started) = read_started {
-            crate::list_diag::record_nand_read(
-                crate::list_diag::cycle_count().wrapping_sub(started),
+            crate::usb_device::cdc::console::list_diag::record_nand_read(
+                crate::usb_device::cdc::console::list_diag::cycle_count().wrapping_sub(started),
                 out.len(),
             );
         }
@@ -462,8 +462,8 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
     for byte in out.iter_mut() { *byte = read_data(); }
     #[cfg(feature = "list-profile")]
     if let Some(started) = read_started {
-        crate::list_diag::record_nand_read(
-            crate::list_diag::cycle_count().wrapping_sub(started),
+        crate::usb_device::cdc::console::list_diag::record_nand_read(
+            crate::usb_device::cdc::console::list_diag::cycle_count().wrapping_sub(started),
             out.len(),
         );
     }
@@ -472,7 +472,7 @@ fn read_page_with_timeout(page: u32, column: u16, out: &mut [u8], timeout: u32) 
 
 pub(crate) fn erase_physical_block(block: u16) -> bool {
     #[cfg(feature = "list-profile")]
-    let erase_started = crate::write_diag::cycle_count();
+    let erase_started = crate::usb_device::cdc::console::write_diag::cycle_count();
     let first_page = block as u32 * PAGES_PER_BLOCK;
     command(0x60);
     address(first_page as u8);
@@ -489,8 +489,8 @@ pub(crate) fn erase_physical_block(block: u16) -> bool {
         return false;
     }
     #[cfg(feature = "list-profile")]
-    crate::write_diag::record_nand_erase(
-        crate::write_diag::cycle_count().wrapping_sub(erase_started),
+    crate::usb_device::cdc::console::write_diag::record_nand_erase(
+        crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(erase_started),
     );
     true
 }
@@ -651,7 +651,7 @@ fn ecc_data_fingerprint(data: &[u8]) -> u32 {
 pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     if data.len() != PAGE_SIZE { return false; }
     #[cfg(feature = "list-profile")]
-    let program_started = crate::write_diag::cycle_count();
+    let program_started = crate::usb_device::cdc::console::write_diag::cycle_count();
     #[cfg(feature = "list-profile")]
     let mut fifo_wait_cycles = 0u32;
     #[cfg(feature = "list-profile")]
@@ -709,10 +709,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
             sequence_trace.status_before_wait[chunk_index] = unsafe { read_volatile(fsmc_sr2()) };
         }
         #[cfg(feature = "list-profile")]
-        let fifo_started = crate::write_diag::cycle_count();
+        let fifo_started = crate::usb_device::cdc::console::write_diag::cycle_count();
         let (fifo_empty, fifo_polls) = wait_fsmc_fifo_empty();
         #[cfg(feature = "list-profile")]
-        { fifo_wait_cycles = fifo_wait_cycles.wrapping_add(crate::write_diag::cycle_count().wrapping_sub(fifo_started)); }
+        { fifo_wait_cycles = fifo_wait_cycles.wrapping_add(crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(fifo_started)); }
         if sequence_trace_enabled {
             sequence_trace.fifo_poll_count[chunk_index] = fifo_polls;
         }
@@ -759,10 +759,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         sequence_trace.oob_status_before_wait = unsafe { read_volatile(fsmc_sr2()) };
     }
     #[cfg(feature = "list-profile")]
-    let oob_fifo_started = crate::write_diag::cycle_count();
+    let oob_fifo_started = crate::usb_device::cdc::console::write_diag::cycle_count();
     let (oob_fifo_empty, oob_fifo_polls) = wait_fsmc_fifo_empty();
     #[cfg(feature = "list-profile")]
-    { fifo_wait_cycles = fifo_wait_cycles.wrapping_add(crate::write_diag::cycle_count().wrapping_sub(oob_fifo_started)); }
+    { fifo_wait_cycles = fifo_wait_cycles.wrapping_add(crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(oob_fifo_started)); }
     if sequence_trace_enabled {
         sequence_trace.oob_fifo_poll_count = oob_fifo_polls;
     }
@@ -778,10 +778,10 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
     }
     command(0x10);
     #[cfg(feature = "list-profile")]
-    let busy_started = crate::write_diag::cycle_count();
+    let busy_started = crate::usb_device::cdc::console::write_diag::cycle_count();
     let ready = wait_ready_rb();
     #[cfg(feature = "list-profile")]
-    { busy_wait_cycles = crate::write_diag::cycle_count().wrapping_sub(busy_started); }
+    { busy_wait_cycles = crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(busy_started); }
     if !ready {
         record_nand_device_failure(4, page, 0);
         return false;
@@ -793,8 +793,8 @@ pub(crate) fn program_physical_page(page: u32, data: &[u8]) -> bool {
         return false;
     }
     #[cfg(feature = "list-profile")]
-    crate::write_diag::record_nand_program(
-        crate::write_diag::cycle_count().wrapping_sub(program_started),
+    crate::usb_device::cdc::console::write_diag::record_nand_program(
+        crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(program_started),
         fifo_wait_cycles,
         busy_wait_cycles,
     );

@@ -324,7 +324,7 @@ fn create_new_file(
 fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
     if state.file_allocation.is_open() {
         #[cfg(feature = "list-profile")]
-        let close_started = crate::write_diag::cycle_count();
+        let close_started = crate::usb_device::cdc::console::write_diag::cycle_count();
         if unsafe { state.file_allocation.close(fs) }.is_err() {
             if state.last_error == 0 {
                 state.last_error = 8;
@@ -332,8 +332,8 @@ fn remove_partial_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) {
             return;
         }
         #[cfg(feature = "list-profile")]
-        crate::write_diag::record_lfs_append_close(
-            crate::write_diag::cycle_count().wrapping_sub(close_started),
+        crate::usb_device::cdc::console::write_diag::record_lfs_append_close(
+            crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(close_started),
         );
     }
     if state.final_path_len != 0 {
@@ -358,7 +358,7 @@ fn create_temp_file(
     }
     create_new_file(fs, allocation, TEMP_PATH).map_err(|stage| if stage == 1 { 3 } else { 4 })?;
     #[cfg(feature = "list-profile")]
-    let open_started = crate::write_diag::cycle_count();
+    let open_started = crate::usb_device::cdc::console::write_diag::cycle_count();
     let open_result = unsafe {
         allocation.open_with_options(
             fs,
@@ -367,8 +367,8 @@ fn create_temp_file(
         )
     };
     #[cfg(feature = "list-profile")]
-    crate::write_diag::record_lfs_append_open(
-        crate::write_diag::cycle_count().wrapping_sub(open_started),
+    crate::usb_device::cdc::console::write_diag::record_lfs_append_open(
+        crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(open_started),
     );
     if open_result.is_err() {
         let _ = fs.remove(path);
@@ -389,11 +389,11 @@ fn commit_temp_file(fs: &Filesystem<'_, ActiveStorage>, state: &mut State) -> Re
     }
     if state.file_allocation.is_open() {
         #[cfg(feature = "list-profile")]
-        let close_started = crate::write_diag::cycle_count();
+        let close_started = crate::usb_device::cdc::console::write_diag::cycle_count();
         unsafe { state.file_allocation.close(fs) }.map_err(|error| (5, error.code()))?;
         #[cfg(feature = "list-profile")]
-        crate::write_diag::record_lfs_append_close(
-            crate::write_diag::cycle_count().wrapping_sub(close_started),
+        crate::usb_device::cdc::console::write_diag::record_lfs_append_close(
+            crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(close_started),
         );
     }
     fs.rename(temp, final_path).map_err(|error| (4, error.code()))?;
@@ -407,16 +407,16 @@ fn append_file(
     data: &[u8],
 ) -> Result<(), i32> {
     #[cfg(feature = "list-profile")]
-    let append_started = crate::write_diag::cycle_count();
+    let append_started = crate::usb_device::cdc::console::write_diag::cycle_count();
     let mut written = 0usize;
     while written < data.len() {
         #[cfg(feature = "list-profile")]
-        let write_started = crate::write_diag::cycle_count();
+        let write_started = crate::usb_device::cdc::console::write_diag::cycle_count();
         let count = unsafe { allocation.write(fs, &data[written..]) }
             .map_err(|error| error.code())?;
         #[cfg(feature = "list-profile")]
-        crate::write_diag::record_lfs_write(
-            crate::write_diag::cycle_count().wrapping_sub(write_started), count,
+        crate::usb_device::cdc::console::write_diag::record_lfs_write(
+            crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(write_started), count,
         );
         if count == 0 {
             return Err(LfsError::IO.code());
@@ -426,8 +426,8 @@ fn append_file(
     // littlefs2's Write::flush is intentionally a no-op. The persistent
     // handle is synchronized once, when it is closed at commit/abort.
     #[cfg(feature = "list-profile")]
-    crate::write_diag::record_lfs_append_callback(
-        crate::write_diag::cycle_count().wrapping_sub(append_started),
+    crate::usb_device::cdc::console::write_diag::record_lfs_append_callback(
+        crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(append_started),
     );
     Ok(())
 }
@@ -894,11 +894,11 @@ pub fn service(
         }
 
         #[cfg(feature = "list-profile")]
-        let poll_started = crate::write_diag::cycle_count();
+        let poll_started = crate::usb_device::cdc::console::write_diag::cycle_count();
         let action = receiver.poll();
         #[cfg(feature = "list-profile")]
-        crate::write_diag::record_zmodem_poll(
-            crate::write_diag::cycle_count().wrapping_sub(poll_started),
+        crate::usb_device::cdc::console::write_diag::record_zmodem_poll(
+            crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(poll_started),
         );
         match action {
             Action::WriteWire(bytes) => {
@@ -985,13 +985,13 @@ pub fn service(
                         Ok(path) if fs.exists(path) => Some(3),
                         Ok(_) => {
                             #[cfg(feature = "list-profile")]
-                            crate::write_diag::begin();
+                            crate::usb_device::cdc::console::write_diag::begin();
                             #[cfg(feature = "list-profile")]
-                            let create_started = crate::write_diag::cycle_count();
+                            let create_started = crate::usb_device::cdc::console::write_diag::cycle_count();
                             let create_result = create_temp_file(fs, &mut state.file_allocation);
                             #[cfg(feature = "list-profile")]
-                            crate::write_diag::record_lfs_create(
-                                crate::write_diag::cycle_count().wrapping_sub(create_started),
+                            crate::usb_device::cdc::console::write_diag::record_lfs_create(
+                                crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(create_started),
                             );
                             create_result.err().map(|stage| stage + 3)
                         },
@@ -1038,11 +1038,11 @@ pub fn service(
             }
             Action::Event(Event::FileCompleted) => {
                 #[cfg(feature = "list-profile")]
-                let commit_started = crate::write_diag::cycle_count();
+                let commit_started = crate::usb_device::cdc::console::write_diag::cycle_count();
                 let commit_result = commit_temp_file(fs, state);
                 #[cfg(feature = "list-profile")]
-                crate::write_diag::record_lfs_commit(
-                    crate::write_diag::cycle_count().wrapping_sub(commit_started),
+                crate::usb_device::cdc::console::write_diag::record_lfs_commit(
+                    crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(commit_started),
                 );
                 if let Err((stage, error)) = commit_result {
                     state.last_error = 5;
@@ -1075,7 +1075,7 @@ pub fn service(
                 state.receive_pending_name_len = 0;
                 state.receive_file_committed = true;
                 #[cfg(feature = "list-profile")]
-                crate::write_diag::finish(receive_elapsed_ms);
+                crate::usb_device::cdc::console::write_diag::finish(receive_elapsed_ms);
             }
             Action::Event(Event::SessionCompleted) => {
                 // Receiver::poll() surfaces events before queued wire bytes.
@@ -1122,11 +1122,11 @@ pub fn service(
                     let input = &state.wire[state.wire_pos..state.wire_len];
 
                     #[cfg(feature = "list-profile")]
-                    let submit_started = crate::write_diag::cycle_count();
+                    let submit_started = crate::usb_device::cdc::console::write_diag::cycle_count();
                     let submit_result = receiver.submit_wire(input);
                     #[cfg(feature = "list-profile")]
-                    crate::write_diag::record_zmodem_submit(
-                        crate::write_diag::cycle_count().wrapping_sub(submit_started),
+                    crate::usb_device::cdc::console::write_diag::record_zmodem_submit(
+                        crate::usb_device::cdc::console::write_diag::cycle_count().wrapping_sub(submit_started),
                     );
                     match submit_result {
                         Ok(consumed) if consumed != 0 => {
