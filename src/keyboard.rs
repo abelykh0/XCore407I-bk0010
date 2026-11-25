@@ -322,12 +322,11 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
     let shift = modifiers & 0x22 != 0;
     let control = modifiers & 0x11 != 0;
     let alt = modifiers & 0x44 != 0;
-    let gui = modifiers & 0x88 != 0;
     let control_or_alt = modifiers & 0xdd != 0;
     // Right Alt may be reported as Ctrl+Alt by AltGr keyboard layouts.
     // Treat either Alt key as АР2, not as Ctrl.
     let previous_modifiers = unsafe { PREVIOUS_MODIFIERS };
-    let gui_pressed = gui && previous_modifiers & 0x88 == 0;
+    let left_gui_pressed = modifiers & !previous_modifiers & 0x08 != 0;
     let locks_before = KEYBOARD_LOCKS.load(Ordering::Acquire);
     let mut locks = locks_before;
     let mut text = [b' '; 32];
@@ -338,6 +337,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
     let previous = unsafe { PREVIOUS_KEYS };
     let mut current = [0u8; 6];
     current.copy_from_slice(&report[2..8]);
+    let application_pressed = current.contains(&0x65) && !previous.contains(&0x65);
 
     // F4 is a machine-wide reset command. Recognize a fresh press before
     // modal dialogs and every other keyboard action can consume the report.
@@ -363,17 +363,15 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
         || FILE_BROWSER_ACTIVE.load(Ordering::Acquire)
 ;
     // АР2 is a modifier (Alt/AltGr), not a standalone BK key code.
-    if !keyboard_captured && gui_pressed {
-        // A single Win key toggles the language. Read the live BK flag so
-        // changes made by the emulator itself are respected:
-        // bit 7 set = РУС, clear = ЛАТ.
-        let language_flag = unsafe { RamBuffer[0x23] };
-        let language_key = if language_flag & 0x80 != 0 {
-            0x0f // Currently РУС: request ЛАТ.
-        } else {
-            0x0e // Currently ЛАТ: request РУС.
-        };
-        append_keyboard_char(&mut emulator_input, &mut emulator_used, language_key);
+    // Map left GUI and the HID Application/Menu key independently to BK
+    // language keys so keyboards without right GUI can still select ЛАТ.
+    if !keyboard_captured {
+        if left_gui_pressed {
+            append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x0e); // РУС
+        }
+        if application_pressed {
+            append_keyboard_char(&mut emulator_input, &mut emulator_used, 0x0f); // ЛАТ
+        }
     }
     // USB boot reports normally repeat held keys without changing the report.
     // Generate Windows-like typematic repeats in firmware instead of relying
