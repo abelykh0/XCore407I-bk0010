@@ -243,7 +243,7 @@ pub(crate) fn save_ram_to_path(
 ) -> Result<(), xcore407i_blinker::nand_fs::FsAccessError> {
     // Normal mode exposes RAM through 0x3FFF. Extended mode adds
     // 12 KiB at 0x4000..0x6FFF, backed by the hidden camera-canvas storage.
-    let extended_mode = xcore407i_blinker::emulator::bk_screen::extended_memory_enabled();
+    let extended_mode = xcore407i_blinker::emulator::bk_video::extended_memory_enabled();
     let save_length = if extended_mode {
         SAVE_RAM_EXTENDED_LENGTH
     } else {
@@ -300,7 +300,7 @@ pub(crate) fn save_ram_to_path(
                     while offset < 0x3000 {
                         let count = (0x3000 - offset).min(extended.len());
                         for (index, byte) in extended[..count].iter_mut().enumerate() {
-                            *byte = xcore407i_blinker::camera::bk_extended_ram_read(offset + index);
+                            *byte = xcore407i_blinker::emulator::bk_video::extended_ram_read(offset + index);
                         }
                         let mut written = 0usize;
                         while written < count {

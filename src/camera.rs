@@ -48,45 +48,6 @@ const fn make_duplicated_y_table() -> [u16; 256] {
     table
 }
 const DUPLICATED_Y_TABLE: [u16; 256] = make_duplicated_y_table();
-const fn make_color_to_bw_code_table() -> [u8; 256] {
-    let mut table = [0; 256];
-    table[(UV_PALETTE[48][0] ^ UV_PALETTE[48][1]) as usize] = 1;
-    table[(UV_PALETTE[12][0] ^ UV_PALETTE[12][1]) as usize] = 2;
-    table[(UV_PALETTE[3][0] ^ UV_PALETTE[3][1]) as usize] = 3;
-    table
-}
-const COLOR_TO_BW_CODE: [u8; 256] = make_color_to_bw_code_table();
-
-#[inline(always)]
-unsafe fn convert_color_pair_to_bw(source: *const u8, destination: *mut u8) {
-    let pair = unsafe { source.cast::<u16>().read() };
-    let hash = (pair as u8 ^ (pair >> 8) as u8) as usize;
-    let code = COLOR_TO_BW_CODE[hash];
-    unsafe {
-        destination.write(if code & 2 != 0 { GRAYSCALE[0x3f] } else { GRAYSCALE[0] });
-        destination.add(1).write(if code & 1 != 0 { GRAYSCALE[0x3f] } else { GRAYSCALE[0] });
-    }
-}
-
-#[inline(always)]
-unsafe fn convert_bw_pair_to_color(source: *const u8, destination: *mut u8) {
-    let first = unsafe { source.read() };
-    let second = unsafe { source.add(1).read() };
-    let code = (u8::from(first != 0) << 1) | u8::from(second != 0);
-    let palette_index = match code {
-        0 => 0,
-        1 => 48,
-        2 => 12,
-        _ => 3,
-    };
-    let [u, v] = UV_PALETTE[palette_index];
-    unsafe {
-        destination.write(u);
-        destination.add(1).write(v);
-    }
-}
-
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum CameraMode {
@@ -96,6 +57,16 @@ pub enum CameraMode {
 
 static ACTIVE_CAMERA_MODE: AtomicU32 = AtomicU32::new(CameraMode::Color as u32);
 static PENDING_CAMERA_MODE: AtomicU32 = AtomicU32::new(u32::MAX);
+static VISIBLE_CANVAS_ROWS: AtomicU32 = AtomicU32::new(CANVAS_HEIGHT as u32);
+
+pub(crate) fn set_visible_canvas_rows(rows: usize) {
+    VISIBLE_CANVAS_ROWS.store(rows.min(CANVAS_HEIGHT) as u32, Ordering::Release);
+}
+
+#[inline]
+fn visible_canvas_rows() -> usize {
+    VISIBLE_CANVAS_ROWS.load(Ordering::Acquire) as usize
+}
 #[inline]
 pub fn camera_mode() -> CameraMode {
     if ACTIVE_CAMERA_MODE.load(Ordering::Acquire) == CameraMode::Monochrome as u32 {
@@ -139,73 +110,13 @@ fn apply_pending_camera_mode() -> bool {
     } else {
         CameraMode::Color
     };
-    convert_bk_canvas_mode(old_mode, new_mode);
+    crate::emulator::bk_video::convert_canvas_mode(old_mode, new_mode);
 
     ACTIVE_CAMERA_MODE.store(requested, Ordering::Release);
     USB_STATUS_ROW.store(0, Ordering::Relaxed);
     KEYBOARD_TEXT_COLUMN.store(0, Ordering::Relaxed);
     CLOCK_VERSION.fetch_add(1, Ordering::Relaxed);
     true
-}
-
-/// Re-encode the existing BK image when switching between packed color
-/// (four 2-bit pixels per byte) and monochrome (eight 1-bit pixels per byte).
-/// Both representations occupy the same 512 bytes per 256-pixel source row,
-/// so conversion is in-place. In extended-memory mode only the first 64 rows
-/// are video; the following 12 KiB must remain untouched as BK program RAM.
-fn convert_bk_canvas_mode(old_mode: CameraMode, new_mode: CameraMode) {
-    if old_mode == new_mode {
-        return;
-    }
-
-    let rows = if BK_EXTENDED_MODE.load(Ordering::Acquire) {
-        64
-    } else {
-        CANVAS_HEIGHT
-    };
-
-    for row in 0..rows {
-        let mut offset = row * WIDTH;
-        let mut remaining = WIDTH;
-
-        while remaining != 0 {
-            let (source, available) = canvas_read_chunk(offset);
-            let (destination, writable) = canvas_write_chunk(offset);
-            let count = remaining.min(available).min(writable) & !1;
-
-            unsafe {
-                let mut i = 0;
-                // Four pixel pairs per iteration. Each pair is read before
-                // its in-place writes, and adjacent pairs do not overlap.
-                while i + 8 <= count {
-                    if old_mode == CameraMode::Color {
-                        convert_color_pair_to_bw(source.add(i), destination.add(i));
-                        convert_color_pair_to_bw(source.add(i + 2), destination.add(i + 2));
-                        convert_color_pair_to_bw(source.add(i + 4), destination.add(i + 4));
-                        convert_color_pair_to_bw(source.add(i + 6), destination.add(i + 6));
-                    } else {
-                        convert_bw_pair_to_color(source.add(i), destination.add(i));
-                        convert_bw_pair_to_color(source.add(i + 2), destination.add(i + 2));
-                        convert_bw_pair_to_color(source.add(i + 4), destination.add(i + 4));
-                        convert_bw_pair_to_color(source.add(i + 6), destination.add(i + 6));
-                    }
-                    i += 8;
-                }
-
-                while i < count {
-                    if old_mode == CameraMode::Color {
-                        convert_color_pair_to_bw(source.add(i), destination.add(i));
-                    } else {
-                        convert_bw_pair_to_color(source.add(i), destination.add(i));
-                    }
-                    i += 2;
-                }
-            }
-
-            offset += count;
-            remaining -= count;
-        }
-    }
 }
 
 #[inline]
@@ -328,28 +239,6 @@ pub(crate) fn release_cdc_zmodem_storage() {
 }
 
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);
-static BK_EXTENDED_MODE: AtomicBool = AtomicBool::new(false);
-const BK_EXTENDED_RAM_OFFSET: usize = 64 * WIDTH;
-const BK_EXTENDED_RAM_BYTES: usize = 0x3000;
-
-/// Enable the 64-row BK layout. The canvas backing bytes after row 63 then
-/// serve as the reclaimed 12 KiB BK program-RAM window.
-pub(crate) fn set_bk_extended_mode(enabled: bool) {
-    BK_EXTENDED_MODE.store(enabled, Ordering::Release);
-}
-
-pub fn bk_extended_ram_read(offset: usize) -> u8 {
-    debug_assert!(offset < BK_EXTENDED_RAM_BYTES);
-    unsafe { canvas_read_chunk(BK_EXTENDED_RAM_OFFSET + offset).0.read() }
-}
-
-pub fn bk_extended_ram_write(offset: usize, value: u8) {
-    debug_assert!(offset < BK_EXTENDED_RAM_BYTES);
-    unsafe {
-        let (destination, _) = canvas_write_chunk(BK_EXTENDED_RAM_OFFSET + offset);
-        destination.write(value);
-    }
-}
 
 fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
     unsafe {
@@ -388,6 +277,67 @@ fn canvas_write_chunk(offset: usize) -> (*mut u8, usize) {
     }
 }
 
+/// Read a byte range from the logical canvas, which spans SRAM and CCM.
+pub(crate) fn read_canvas(offset: usize, output: &mut [u8]) -> bool {
+    let Some(end) = offset.checked_add(output.len()) else { return false; };
+    if end > CANVAS_BYTES { return false; }
+    let mut offset = offset;
+    let mut copied = 0;
+    while copied < output.len() {
+        let (source, available) = canvas_read_chunk(offset);
+        let count = available.min(output.len() - copied);
+        unsafe {
+            crate::copy_words::copy_words(source, output.as_mut_ptr().add(copied), count);
+        }
+        offset += count;
+        copied += count;
+    }
+    true
+}
+
+/// Write a byte range into the logical canvas, which spans SRAM and CCM.
+pub(crate) fn write_canvas(offset: usize, input: &[u8]) -> bool {
+    let Some(end) = offset.checked_add(input.len()) else { return false; };
+    if end > CANVAS_BYTES { return false; }
+    let mut offset = offset;
+    let mut copied = 0;
+    while copied < input.len() {
+        let (destination, available) = canvas_write_chunk(offset);
+        let count = available.min(input.len() - copied);
+        unsafe {
+            crate::copy_words::copy_words(input.as_ptr().add(copied), destination, count);
+        }
+        offset += count;
+        copied += count;
+    }
+    true
+}
+
+/// Copy between non-overlapping ranges of the split logical canvas.
+pub(crate) fn copy_canvas(source_offset: usize, destination_offset: usize, bytes: usize) -> bool {
+    let Some(source_end) = source_offset.checked_add(bytes) else { return false; };
+    let Some(destination_end) = destination_offset.checked_add(bytes) else { return false; };
+    if source_end > CANVAS_BYTES
+        || destination_end > CANVAS_BYTES
+        || (source_offset < destination_end && destination_offset < source_end)
+    {
+        return false;
+    }
+    let mut source_offset = source_offset;
+    let mut destination_offset = destination_offset;
+    let mut copied = 0;
+    while copied < bytes {
+        let (source, source_available) = canvas_read_chunk(source_offset);
+        let (destination, destination_available) = canvas_write_chunk(destination_offset);
+        let count = (bytes - copied).min(source_available).min(destination_available);
+        unsafe { crate::copy_words::copy_words(source, destination, count); }
+        source_offset += count;
+        destination_offset += count;
+        copied += count;
+    }
+    true
+}
+
 /// Fill the entire canvas with one uniform palette color.
 ///
 /// `color` is a palette index (0..63), matching `set_pixel()`.
@@ -396,10 +346,10 @@ fn canvas_write_chunk(offset: usize) -> (*mut u8, usize) {
 pub fn clear_demo_canvas(color: u8) {
     let mode = camera_mode();
     let value = color & 0x3f;
-    if BK_EXTENDED_MODE.load(Ordering::Acquire) {
+    if visible_canvas_rows() < CANVAS_HEIGHT {
         // Only the visible 64 rows may be cleared; the following 12 KiB
         // are live BK program RAM in extended mode.
-        let visible_bytes = 64 * WIDTH;
+        let visible_bytes = visible_canvas_rows() * WIDTH;
         unsafe {
             let main = core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>();
             if mode == CameraMode::Monochrome {
@@ -434,131 +384,13 @@ pub fn clear_demo_canvas(color: u8) {
     }
 }
 
-/// Copy a row from the split SRAM/CCM canvas into an aligned temporary row.
-#[inline]
-unsafe fn copy_canvas_row_to(row: usize, destination: *mut u8) {
-    unsafe {
-    copy_canvas_range(row * WIDTH, destination, WIDTH);
-
-    }
-}
-
-/// Copy a temporary row into the split SRAM/CCM canvas.
-#[inline]
-unsafe fn copy_row_to_canvas(source: *const u8, row: usize) {
-    unsafe {
-    let mut offset = row * WIDTH;
-    let mut source = source;
-    let mut remaining = WIDTH;
-    while remaining != 0 {
-        let (destination, available) = if offset < CANVAS_MAIN_BYTES {
-            (
-                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset),
-                CANVAS_MAIN_BYTES - offset,
-            )
-        } else {
-            let tail_offset = offset - CANVAS_MAIN_BYTES;
-            (
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(tail_offset),
-                CANVAS_TAIL_BYTES - tail_offset,
-            )
-        };
-        let run = remaining.min(available);
-        crate::copy_words::copy_words(source, destination, run);
-        source = source.add(run);
-        offset += run;
-        remaining -= run;
-    }
-
-    }
-}
-
-/// Copy one canvas row directly to another, splitting at the SRAM/CCM
-/// boundary independently for source and destination.
-unsafe fn copy_canvas_row(src_row: usize, dst_row: usize) {
-    unsafe {
-    let mut src_offset = src_row * WIDTH;
-    let mut dst_offset = dst_row * WIDTH;
-    let mut remaining = WIDTH;
-    while remaining != 0 {
-        let (source, src_available) = if src_offset < CANVAS_MAIN_BYTES {
-            (
-                core::ptr::addr_of!(DEMO_CANVAS.0).cast::<u8>().add(src_offset),
-                CANVAS_MAIN_BYTES - src_offset,
-            )
-        } else {
-            let offset = src_offset - CANVAS_MAIN_BYTES;
-            (
-                core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(offset),
-                CANVAS_TAIL_BYTES - offset,
-            )
-        };
-        let (destination, dst_available) = if dst_offset < CANVAS_MAIN_BYTES {
-            (
-                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(dst_offset),
-                CANVAS_MAIN_BYTES - dst_offset,
-            )
-        } else {
-            let offset = dst_offset - CANVAS_MAIN_BYTES;
-            (
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(offset),
-                CANVAS_TAIL_BYTES - offset,
-            )
-        };
-        let run = remaining.min(src_available).min(dst_available);
-        crate::copy_words::copy_words(source, destination, run);
-        src_offset += run;
-        dst_offset += run;
-        remaining -= run;
-    }
-
-    }
-}
-
-/// Reverse a range of canvas rows in place, using one temporary row.
-/// A row may straddle the SRAM/CCM boundary, so copies are split as needed.
-unsafe fn reverse_canvas_rows(first: usize, end: usize, temporary: *mut u8) {
-    unsafe {
-    let mut left = first;
-    let mut right = end;
-    while left < right {
-        right -= 1;
-        if left >= right {
-            break;
-        }
-        copy_canvas_row_to(left, temporary);
-        // The rows are disjoint, so the optimized copier can move them directly.
-        copy_canvas_row(right, left);
-        copy_row_to_canvas(temporary, right);
-        left += 1;
-    }
-
-    }
-}
-
-/// Rotate the shared BK canvas upward by whole rows. Three reversals perform
-/// the rotation in O(height) row swaps, independent of the shift distance.
-pub(crate) fn rotate_bk_canvas_rows(rows: usize) {
-    let rows = rows % CANVAS_HEIGHT;
-    if rows == 0 {
-        return;
-    }
-
-    let mut temporary = [0u8; WIDTH];
-    unsafe {
-        reverse_canvas_rows(0, rows, temporary.as_mut_ptr());
-        reverse_canvas_rows(rows, CANVAS_HEIGHT, temporary.as_mut_ptr());
-        reverse_canvas_rows(0, CANVAS_HEIGHT, temporary.as_mut_ptr());
-    }
-}
-
 /// Change one logical color pixel. Every source pixel expands to a 2x2 block
 /// in the 512x512 NV12 stream, as in the original C color mode.
 #[inline]
 pub fn set_pixel(x: usize, y: usize, color: u8) {
     let mode = camera_mode();
     let width = if mode == CameraMode::Monochrome { WIDTH } else { WIDTH / 2 };
-    if x >= width || y >= CANVAS_HEIGHT || (BK_EXTENDED_MODE.load(Ordering::Acquire) && y >= 64) {
+    if x >= width || y >= visible_canvas_rows() {
         return;
     }
 
@@ -585,123 +417,6 @@ pub fn set_pixel(x: usize, y: usize, color: u8) {
             destination.write(u);
             destination.add(1).write(v);
         }
-    }
-}
-
-/// Write one packed BK video byte directly to the compact canvas.
-///
-/// The byte expands to eight luma pixels in monochrome mode or four Cb/Cr
-/// pairs in color mode. The packed group is eight bytes in either mode, and
-/// its aligned offset cannot straddle the SRAM/CCM canvas boundary.
-#[inline]
-pub(crate) fn set_bk_video_byte(byte_x: usize, y: usize, byte: u8, monochrome: bool) -> bool {
-    let mode = camera_mode();
-    if y >= CANVAS_HEIGHT || (BK_EXTENDED_MODE.load(Ordering::Acquire) && y >= 64) {
-        return false;
-    }
-
-    // During a deferred camera-mode transition, preserve set_pixel()'s
-    // original behavior until the new mode becomes active.
-    if (mode == CameraMode::Monochrome) != monochrome {
-        if monochrome {
-            let x = byte_x * 8;
-            if x >= canvas_width_for(mode) { return false; }
-            for i in 0..8 {
-                let color = if byte & (1 << i) != 0 { 0x3f } else { 0x00 };
-                set_pixel(x + i, y, color);
-            }
-        } else {
-            let x = byte_x * 4;
-            if x >= canvas_width_for(mode) { return false; }
-            for i in 0..4 {
-                let color = match (byte >> (i * 2)) & 0x03 {
-                    0 => 0x00, 1 => 0x30, 2 => 0x0c, _ => 0x03,
-                };
-                set_pixel(x + i, y, color);
-            }
-        }
-        return true;
-    }
-
-    let offset = if monochrome {
-        if byte_x >= WIDTH / 8 { return false; }
-        y * WIDTH + byte_x * 8
-    } else {
-        if byte_x >= (WIDTH / 2) / 4 { return false; }
-        (y * (WIDTH / 2) + byte_x * 4) * 2
-    };
-
-    // CANVAS_MAIN_BYTES is divisible by eight, as are all packed-byte
-    // offsets, so this eight-byte span is wholly within one backing region.
-    unsafe {
-        let destination = if offset < CANVAS_MAIN_BYTES {
-            core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
-        } else {
-            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0)
-                .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
-        };
-
-        if monochrome {
-            let set = GRAYSCALE[0x3f];
-            let clear = GRAYSCALE[0];
-            for i in 0..8 {
-                destination.add(i).write(if byte & (1 << i) != 0 { set } else { clear });
-            }
-        } else {
-            for i in 0..4 {
-                let palette_index = match (byte >> (i * 2)) & 0x03 {
-                    0 => 0,
-                    1 => 0x30,
-                    2 => 0x0c,
-                    _ => 0x03,
-                };
-                let [u, v] = UV_PALETTE[palette_index];
-                destination.add(i * 2).write(u);
-                destination.add(i * 2 + 1).write(v);
-            }
-        }
-    }
-    true
-}
-
-/// Read a BK color pixel back from the NV12 source canvas.
-pub(crate) fn get_bk_color_pixel(x: usize, y: usize) -> u8 {
-    if x >= 256 || y >= CANVAS_HEIGHT {
-        return 0;
-    }
-    let offset = (y * 256 + x) * 2;
-    unsafe {
-        let base = core::ptr::addr_of!(DEMO_CANVAS.0).cast::<u8>();
-        let tail = core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>();
-        let (cb, cr) = if offset < CANVAS_MAIN_BYTES {
-            (base.add(offset).read(), base.add(offset + 1).read())
-        } else {
-            let o = offset - CANVAS_MAIN_BYTES;
-            (tail.add(o).read(), tail.add(o + 1).read())
-        };
-        let uv = [cb, cr];
-        if uv == UV_PALETTE[0] { 0x00 }
-        else if uv == UV_PALETTE[48] { 0x30 }
-        else if uv == UV_PALETTE[12] { 0x0c }
-        else if uv == UV_PALETTE[3] { 0x03 }
-        else { 0x00 }
-    }
-}
-
-/// Read a BK monochrome pixel as zero (black) or nonzero (white).
-pub(crate) fn get_bk_bw_pixel(x: usize, y: usize) -> u8 {
-    if x >= WIDTH || y >= CANVAS_HEIGHT {
-        return 0;
-    }
-    let offset = y * WIDTH + x;
-    unsafe {
-        let value = if offset < CANVAS_MAIN_BYTES {
-            core::ptr::addr_of!(DEMO_CANVAS.0).cast::<u8>().add(offset).read()
-        } else {
-            core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>()
-                .add(offset - CANVAS_MAIN_BYTES).read()
-        };
-        if value == 0 { 0 } else { 1 }
     }
 }
 
@@ -1016,7 +731,7 @@ impl Nv12DemoImage {
                 let run = (WIDTH - x)
                     .min(Y_PLANE_BYTES - pos)
                     .min(out.len() - written);
-                if BK_EXTENDED_MODE.load(Ordering::Acquire) && source_row >= 64 {
+                if source_row >= visible_canvas_rows() as u16 {
                     // Keep the extended-memory area neutral light gray in
                     // both display modes; it is not part of the BK video RAM.
                     let background = GRAYSCALE[0x2a];
@@ -1041,7 +756,7 @@ impl Nv12DemoImage {
                 let run = (WIDTH - x).min(FRAME_BYTES - pos).min(out.len() - written);
                 if mode == CameraMode::Monochrome {
                     out[written..written + run].fill(128);
-                } else if BK_EXTENDED_MODE.load(Ordering::Acquire) && source_row >= 64 {
+                } else if source_row >= visible_canvas_rows() {
                     let [u, v] = UV_PALETTE[0x15];
                     for (i, byte) in out[written..written + run].iter_mut().enumerate() {
                         *byte = if (x + i) & 1 == 0 { u } else { v };
