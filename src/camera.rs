@@ -1,7 +1,6 @@
-//! C-style compact color canvas and NV12 UVC packetizer.
+//! Compact color canvas and NV12 UVC packetizer.
 //!
-//! This mirrors the original C canvas: 128 KiB of source data split between
-//! ordinary SRAM and CCM, with one 512-byte luma row cache in SRAM. Color stores
+//! 128 KiB of source data split between ordinary SRAM and CCM, with one 512-byte luma row cache in SRAM. Color stores
 //! packed Cb/Cr pairs at 256x256; BW stores Y at 512x256.
 
 // PACKET_SIZE_NO_HEADER is 1.5 * UVC_WIDTH
@@ -1200,8 +1199,7 @@ unsafe fn y_row_ptr() -> *mut u8 {
     }
 }
 
-
-/// Copy an aligned region from the C-style main SRAM + CCM canvas split.
+/// Copy an aligned region from the SRAM + CCM canvas split.
 unsafe fn copy_canvas_range(mut offset: usize, mut destination: *mut u8, mut bytes: usize) {
     unsafe {
     while bytes != 0 {
