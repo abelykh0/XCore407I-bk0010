@@ -94,22 +94,6 @@ fn hardware_update(seed: u32, data: &[u8]) -> u32 {
     })
 }
 
-/// C ABI used by littlefs2-sys. The input and result are unfinalized,
-/// reflected CRC-32 states, matching littlefs's lfs_crc contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn xcore_lfs_crc32_update(
-    crc: u32,
-    buffer: *const core::ffi::c_void,
-    size: usize,
-) -> u32 {
-    if size == 0 {
-        return update(crc, &[]);
-    }
-    // SAFETY: littlefs passes a readable buffer containing size bytes.
-    let data = unsafe { core::slice::from_raw_parts(buffer.cast::<u8>(), size) };
-    update(crc, data)
-}
-
 /// Compute a complete CRC-32/ISO-HDLC checksum.
 #[inline]
 pub fn checksum(data: &[u8]) -> u32 {
