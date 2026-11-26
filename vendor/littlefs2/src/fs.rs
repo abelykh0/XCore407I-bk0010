@@ -347,7 +347,7 @@ impl<Storage: driver::Storage> Filesystem<'_, Storage> {
     /// The caller supplies a compact bitmap with at least ceil(block_count/8)
     /// bytes. The return value is the number of distinct blocks marked.
     pub fn traverse_blocks(&self, bitmap: &mut [u8]) -> Result<usize> {
-        let required = self.total_blocks().div_ceil(8);
+        let required = (self.total_blocks() + 7) / 8;
         assert!(bitmap.len() >= required, "LittleFS traversal bitmap is too small");
         bitmap.fill(0);
 

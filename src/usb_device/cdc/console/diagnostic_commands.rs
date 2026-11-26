@@ -30,7 +30,7 @@ pub(super) fn handle(
                     write_decimal(capacity as usize);
                     write_status(b" logical free sectors=");
                     write_decimal(capacity.saturating_sub(allocated) as usize);
-                    write_status(b"\r\nNAND since boot: erased blocks=");
+                    write_status(b"\r\nDhara NAND callbacks since boot: erased blocks=");
                     write_decimal(erases as usize);
                     write_status(b" programmed pages=");
                     write_decimal(programs as usize);
@@ -81,7 +81,7 @@ pub(super) fn handle(
                     write_status(stage_name);
                     write_status(b", error 0x");
                     write_hex_u32(error as u32);
-                    write_status(b". Filesystem contents were not intentionally modified.\r\n");
+                    write_status(b". Maintenance stopped; run DHARA STATUS before retrying.\r\n");
                 }
             }
         } else {

@@ -89,6 +89,8 @@ pub(crate) fn reclaim_unused_blocks(
     fs: &Filesystem<'_, crate::nand_fs::ActiveStorage>,
     service: &mut dyn FnMut(),
 ) -> Result<ReclaimStats, (u32, i32)> {
+    let (allocated_before, _, erase_before, program_before) = map_usage();
+
     // Compact/repair LittleFS metadata before using its live-block traversal.
     fs.gc().map_err(|error| (1, error.code()))?;
 
@@ -97,7 +99,6 @@ pub(crate) fn reclaim_unused_blocks(
         .traverse_blocks(&mut used)
         .map_err(|error| (2, error.code()))?;
 
-    let (allocated_before, _, erase_before, program_before) = map_usage();
     let mut trimmed_blocks = 0usize;
     let mut trimmed_sectors = 0usize;
     let mut error = 0i32;
