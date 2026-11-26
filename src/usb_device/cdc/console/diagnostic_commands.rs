@@ -45,7 +45,7 @@ fn run_crc32_test() {
                     input.len(),
                 )
             };
-            let hardware = crate::crc32::hardware_checksum(input);
+            let hardware = xcore407i_blinker::crc32::hardware_checksum(input);
             let matches = zmodem == littlefs && zmodem == hardware;
             if matches {
                 passed += 1;
