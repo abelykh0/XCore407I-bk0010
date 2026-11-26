@@ -67,6 +67,14 @@ impl Crc32 {
         self.crc = stm32f4_crc32::update(self.crc, data);
     }
 
+    /// Update the CRC and return (hardware words, software fallback bytes).
+    pub fn update_with_stats(&mut self, data: &[u8]) -> (u32, u32) {
+        let (crc, hardware_words, fallback_bytes) =
+            stm32f4_crc32::update_with_stats(self.crc, data);
+        self.crc = crc;
+        (hardware_words, fallback_bytes)
+    }
+
     /// Updates the CRC state with a single byte.
     pub fn update_byte(&mut self, byte: u8) {
         self.crc = stm32f4_crc32::update(self.crc, &[byte]);
