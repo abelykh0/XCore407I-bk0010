@@ -48,7 +48,7 @@ pub(super) fn handle(
         write_status(b"> ");
     } else if command_is(line, b"DHARA RECLAIM") {
         if let Some(fs) = fs {
-            write_status(b"\r\nDHARA RECLAIM: compacting LittleFS, trimming unreferenced logical blocks, then syncing Dhara...\r\n");
+            write_status(b"\r\nDHARA RECLAIM: scanning LittleFS, trimming unreferenced logical sectors, then syncing Dhara...\r\n");
             match crate::dhara_fs::reclaim_unused_blocks(fs, _service_background) {
                 Ok(stats) => {
                     write_status(b"DHARA RECLAIM complete: LittleFS used blocks=");
@@ -71,10 +71,9 @@ pub(super) fn handle(
                 }
                 Err((stage, error)) => {
                     let stage_name: &[u8] = match stage {
-                        1 => b"LittleFS GC",
-                        2 => b"LittleFS traversal",
-                        3 => b"Dhara trim",
-                        4 => b"Dhara sync",
+                        1 => b"LittleFS traversal",
+                        2 => b"Dhara trim",
+                        3 => b"Dhara sync",
                         _ => b"unknown",
                     };
                     write_status(b"DHARA RECLAIM FAILED at ");

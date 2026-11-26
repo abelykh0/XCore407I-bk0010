@@ -91,13 +91,15 @@ pub(crate) fn reclaim_unused_blocks(
 ) -> Result<ReclaimStats, (u32, i32)> {
     let (allocated_before, _, erase_before, program_before) = map_usage();
 
-    // Compact/repair LittleFS metadata before using its live-block traversal.
-    fs.gc().map_err(|error| (1, error.code()))?;
-
+    // Traversal is read-only. Do not run lfs_fs_gc here: it can perform
+    // additional synchronous metadata writes and is not required to identify
+    // the blocks currently referenced by the mounted filesystem.
     let mut used = [0u8; (LITTLEFS_BLOCK_COUNT + 7) / 8];
     let used_blocks = fs
         .traverse_blocks(&mut used)
-        .map_err(|error| (2, error.code()))?;
+        .map_err(|error| (1, error.code()))?;
+
+    service();
 
     let mut unused_blocks_scanned = 0usize;
     let mut trim_requests = 0usize;
@@ -113,21 +115,23 @@ pub(crate) fn reclaim_unused_blocks(
         for sector in first_sector..(first_sector + SECTORS_PER_LITTLEFS_BLOCK) {
             let result = unsafe { xcore_dhara_map_trim(sector as u32, &mut error) };
             if result != 0 {
-                return Err((3, if error != 0 { error } else { result }));
+                return Err((2, if error != 0 { error } else { result }));
             }
             trim_requests += 1;
+
+            // Keep USB/UVC foreground work responsive during the long
+            // per-sector Dhara trim sequence.
+            if trim_requests % 8 == 0 {
+                service();
+            }
         }
         unused_blocks_scanned += 1;
 
-        // Keep foreground USB/video servicing responsive during a full scan.
-        if block % 8 == 7 {
-            service();
-        }
     }
 
     let sync_result = unsafe { xcore_dhara_map_sync(&mut error) };
     if sync_result != 0 {
-        return Err((4, if error != 0 { error } else { sync_result }));
+        return Err((3, if error != 0 { error } else { sync_result }));
     }
 
     let (_, _, _, sync_steps) = map_sync_diagnostic();
