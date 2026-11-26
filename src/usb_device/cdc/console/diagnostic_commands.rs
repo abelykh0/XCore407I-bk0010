@@ -50,7 +50,6 @@ pub(super) fn handle(
         if let Some(fs) = fs {
             write_status(b"\r\nDHARA RECLAIM: scanning LittleFS, trimming unreferenced logical sectors, then syncing Dhara...\r\n");
             let mut report_progress = |used_blocks: usize, scanned: usize, trims: usize| {
-                _service_background();
                 let total = crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks);
                 let percent = if total == 0 { 100 } else { scanned * 100 / total };
                 write_status(b"DHARA RECLAIM progress: ");
