@@ -105,3 +105,17 @@ int xcore_dhara_map_sync(int32_t *error)
 		*error = (int32_t)err;
 	return ret;
 }
+
+int xcore_dhara_map_gc(int32_t *error)
+{
+	dhara_error_t err = DHARA_E_NONE;
+	const int ret = dhara_map_gc(&xcore_map, &err);
+	if (error)
+		*error = (int32_t)err;
+	return ret;
+}
+
+uint32_t xcore_dhara_map_size(void)
+{
+	return xcore_initialized ? dhara_map_size(&xcore_map) : 0;
+}
