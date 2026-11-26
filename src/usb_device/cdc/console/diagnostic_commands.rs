@@ -49,7 +49,26 @@ pub(super) fn handle(
     } else if command_is(line, b"DHARA RECLAIM") {
         if let Some(fs) = fs {
             write_status(b"\r\nDHARA RECLAIM: scanning LittleFS, trimming unreferenced logical sectors, then syncing Dhara...\r\n");
-            match crate::dhara_fs::reclaim_unused_blocks(fs, _service_background) {
+            let mut report_progress = |used_blocks: usize, scanned: usize, trims: usize| {
+                _service_background();
+                let total = crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks);
+                let percent = if total == 0 { 100 } else { scanned * 100 / total };
+                write_status(b"DHARA RECLAIM progress: ");
+                write_decimal(scanned);
+                write_status(b"/");
+                write_decimal(total);
+                write_status(b" blocks (");
+                write_decimal(percent);
+                write_status(b"%) trims=");
+                write_decimal(trims);
+                write_status(b"\\r\\n");
+                _service_background();
+            };
+            match crate::dhara_fs::reclaim_unused_blocks(
+                fs,
+                _service_background,
+                &mut report_progress,
+            ) {
                 Ok(stats) => {
                     write_status(b"DHARA RECLAIM complete: LittleFS used blocks=");
                     write_decimal(stats.used_blocks);

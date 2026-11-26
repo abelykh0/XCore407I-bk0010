@@ -88,6 +88,7 @@ pub(crate) struct ReclaimStats {
 pub(crate) fn reclaim_unused_blocks(
     fs: &Filesystem<'_, crate::nand_fs::ActiveStorage>,
     service: &mut dyn FnMut(),
+    progress: &mut dyn FnMut(usize, usize, usize),
 ) -> Result<ReclaimStats, (u32, i32)> {
     let (allocated_before, _, erase_before, program_before) = map_usage();
 
@@ -127,8 +128,19 @@ pub(crate) fn reclaim_unused_blocks(
         }
         unused_blocks_scanned += 1;
 
+        // Report coarse progress so CDC output stays small. The service
+        // callback above continues to run much more frequently for UVC.
+        if unused_blocks_scanned % 32 == 0
+            || unused_blocks_scanned == LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks)
+        {
+            progress(used_blocks, unused_blocks_scanned, trim_requests);
+            service();
+        }
     }
 
+    // Give the USB/UVC foreground one final pass before the potentially
+    // expensive journal synchronization.
+    service();
     let sync_result = unsafe { xcore_dhara_map_sync(&mut error) };
     if sync_result != 0 {
         return Err((3, if error != 0 { error } else { sync_result }));
