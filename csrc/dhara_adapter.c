@@ -106,10 +106,15 @@ int xcore_dhara_map_sync(int32_t *error)
 	return ret;
 }
 
-int xcore_dhara_map_gc(int32_t *error)
+int xcore_dhara_map_gc(int32_t *error, int32_t *progress)
 {
 	dhara_error_t err = DHARA_E_NONE;
+	const dhara_page_t old_head = xcore_map.journal.head;
+	const dhara_page_t old_tail = xcore_map.journal.tail;
 	const int ret = dhara_map_gc(&xcore_map, &err);
+	if (progress)
+		*progress = (old_head != xcore_map.journal.head) ||
+			    (old_tail != xcore_map.journal.tail);
 	if (error)
 		*error = (int32_t)err;
 	return ret;
