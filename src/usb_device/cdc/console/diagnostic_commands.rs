@@ -72,7 +72,7 @@ fn run_crc32_test() {
     write_status(b" passed, ");
     write_decimal(failed as usize);
     write_status(if failed == 0 {
-        b" failed. ALL CRC32 IMPLEMENTATIONS MATCH.\r\n> "
+        b" failed. ALL CRC32 IMPLEMENTATIONS MATCH.\r\n> " as &[u8]
     } else {
         b" failed. CRC32 MISMATCH DETECTED.\r\n> "
     });
@@ -85,7 +85,9 @@ pub(super) fn handle(
     zmodem: &mut cdc_zmodem::State,
     _service_background: &mut dyn FnMut(),
 ) -> bool {
-    if command_is(line, b"CRC32TEST") {\n        run_crc32_test();\n    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
+    if command_is(line, b"CRC32TEST") {
+        run_crc32_test();
+    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
         write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
     } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ OFF") {
