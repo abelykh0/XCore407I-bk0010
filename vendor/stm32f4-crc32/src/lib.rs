@@ -120,6 +120,50 @@ pub fn checksum(data: &[u8]) -> u32 {
 mod tests {
     use super::{checksum, update};
 
+    fn emulate_f407_update(mut state: u32, data: &[u8]) -> u32 {
+        const POLY: u32 = 0x04C1_1DB7;
+        let full_len = data.len() & !3;
+        for bytes in data[..full_len].chunks_exact(4) {
+            let word = (bytes[0].reverse_bits() as u32) << 24
+                | (bytes[1].reverse_bits() as u32) << 16
+                | (bytes[2].reverse_bits() as u32) << 8
+                | bytes[3].reverse_bits() as u32;
+            for bit in (0..32).rev() {
+                let mix = ((state >> 31) ^ (word >> bit)) & 1;
+                state = (state << 1) ^ if mix != 0 { POLY } else { 0 };
+            }
+        }
+        let reflected = state.reverse_bits();
+        super::software_update(reflected, &data[full_len..])
+    }
+
+    #[test]
+    fn f407_word_order_matches_reflected_crc32() {
+        for data in [
+            &b"1234"[..],
+            &b"12345678"[..],
+            &b"123456789"[..],
+            &b"unaligned tail"[..],
+            &b"littlefs and zmodem share the STM32 CRC unit"[..],
+        ] {
+            assert_eq!(
+                !emulate_f407_update(0xFFFF_FFFF, data),
+                checksum(data)
+            );
+        }
+    }
+
+    #[test]
+    fn f407_incremental_word_updates_match() {
+        let data = b"four-byte chunks can continue across calls";
+        let split = 8;
+        let state = emulate_f407_update(0xFFFF_FFFF, &data[..split]);
+        assert_eq!(
+            !emulate_f407_update(state, &data[split..]),
+            checksum(data)
+        );
+    }
+
     #[test]
     fn standard_crc32_check_value() {
         assert_eq!(checksum(b"123456789"), 0xCBF4_3926);
