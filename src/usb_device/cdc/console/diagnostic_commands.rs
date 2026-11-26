@@ -1,6 +1,6 @@
 use super::super::zmodem as cdc_zmodem;
 use super::commands::{command_is, parse_hex_u32};
-use super::output::{write_decimal, write_hex_u32, write_status};
+use super::output::{write_decimal, write_decimal_grouped, write_hex_u32, write_status};
 use super::*;
 use crate::nand_fs::ActiveStorage;
 use littlefs2::fs::Filesystem;
@@ -19,21 +19,21 @@ pub(super) fn handle(
                 Ok(used_blocks) => {
                     let (allocated, capacity, erases, programs) = crate::dhara_fs::map_usage();
                     write_status(b"\r\nDHARA STATUS (read-only)\r\nLittleFS: used blocks=");
-                    write_decimal(used_blocks);
+                    write_decimal_grouped(used_blocks);
                     write_status(b" free blocks=");
-                    write_decimal(crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks));
+                    write_decimal_grouped(crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks));
                     write_status(b" total blocks=");
-                    write_decimal(crate::dhara_fs::LITTLEFS_BLOCK_COUNT);
+                    write_decimal_grouped(crate::dhara_fs::LITTLEFS_BLOCK_COUNT);
                     write_status(b"\r\nDhara: allocated sectors=");
-                    write_decimal(allocated as usize);
+                    write_decimal_grouped(allocated as usize);
                     write_status(b" capacity=");
-                    write_decimal(capacity as usize);
+                    write_decimal_grouped(capacity as usize);
                     write_status(b" logical free sectors=");
-                    write_decimal(capacity.saturating_sub(allocated) as usize);
+                    write_decimal_grouped(capacity.saturating_sub(allocated) as usize);
                     write_status(b"\r\nDhara NAND callbacks since boot: erased blocks=");
-                    write_decimal(erases as usize);
+                    write_decimal_grouped(erases as usize);
                     write_status(b" programmed pages=");
-                    write_decimal(programs as usize);
+                    write_decimal_grouped(programs as usize);
                     write_status(b"\r\n");
                 }
                 Err(error) => {
@@ -53,13 +53,13 @@ pub(super) fn handle(
                 let total = crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks);
                 let percent = if total == 0 { 100 } else { scanned * 100 / total };
                 write_status(b"DHARA RECLAIM progress: ");
-                write_decimal(scanned);
+                write_decimal_grouped(scanned);
                 write_status(b"/");
-                write_decimal(total);
+                write_decimal_grouped(total);
                 write_status(b" blocks (");
                 write_decimal(percent);
                 write_status(b"%) trims=");
-                write_decimal(trims);
+                write_decimal_grouped(trims);
                 write_status(b"\r\n");
             };
             match crate::dhara_fs::reclaim_unused_blocks(
@@ -69,21 +69,21 @@ pub(super) fn handle(
             ) {
                 Ok(stats) => {
                     write_status(b"DHARA RECLAIM complete: LittleFS used blocks=");
-                    write_decimal(stats.used_blocks);
+                    write_decimal_grouped(stats.used_blocks);
                     write_status(b" unreferenced LittleFS blocks scanned=");
-                    write_decimal(stats.unused_blocks_scanned);
+                    write_decimal_grouped(stats.unused_blocks_scanned);
                     write_status(b" Dhara trim requests=");
-                    write_decimal(stats.trim_requests);
+                    write_decimal_grouped(stats.trim_requests);
                     write_status(b"\r\nDhara allocated sectors: ");
-                    write_decimal(stats.allocated_before as usize);
+                    write_decimal_grouped(stats.allocated_before as usize);
                     write_status(b" -> ");
-                    write_decimal(stats.allocated_after as usize);
+                    write_decimal_grouped(stats.allocated_after as usize);
                     write_status(b"\r\nPhysical NAND operations: erased blocks=");
-                    write_decimal(stats.erased_blocks as usize);
+                    write_decimal_grouped(stats.erased_blocks as usize);
                     write_status(b" programmed pages=");
-                    write_decimal(stats.programmed_pages as usize);
+                    write_decimal_grouped(stats.programmed_pages as usize);
                     write_status(b" sync steps=");
-                    write_decimal(stats.sync_steps as usize);
+                    write_decimal_grouped(stats.sync_steps as usize);
                     write_status(b"\r\nRun DHARA STATUS and repeat the same RECEIVE benchmark to compare.\r\n");
                 }
                 Err((stage, error)) => {
