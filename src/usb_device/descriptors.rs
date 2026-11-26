@@ -332,20 +332,28 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
     let bitrate = FRAME_BYTES * 8 * active_frame_rate_fps();
     let descriptor = core::ptr::addr_of_mut!(CDC_CONFIGURATION_DESCRIPTOR).cast::<u8>();
     unsafe {
-        // Uncompressed frame descriptor starts at byte 106:
-        // dwMinBitRate=115, dwMaxBitRate=119,
-        // dwDefaultFrameInterval=127, dwFrameInterval[0]=132.
         for (offset, value) in [
-            (115usize, bitrate),
-            (119, bitrate),
-            (127, interval),
-            (132, interval),
+            // Uncompressed frame descriptor starts at byte 106:
+            // dwMinBitRate=115, dwMaxBitRate=119,
+            // dwDefaultFrameInterval=127, dwFrameInterval[0]=132.
+            (115usize, bitrate as u8),
+            (116, (bitrate >> 8) as u8),
+            (117, (bitrate >> 16) as u8),
+            (118, (bitrate >> 24) as u8),
+            (119, bitrate as u8),
+            (120, (bitrate >> 8) as u8),
+            (121, (bitrate >> 16) as u8),
+            (122, (bitrate >> 24) as u8),
+            (127, interval as u8),
+            (128, (interval >> 8) as u8),
+            (129, (interval >> 16) as u8),
+            (130, (interval >> 24) as u8),
+            (132, interval as u8),
+            (133, (interval >> 8) as u8),
+            (134, (interval >> 16) as u8),
+            (135, (interval >> 24) as u8),
         ] {
-            core::ptr::copy_nonoverlapping(
-                value.to_le_bytes().as_ptr(),
-                descriptor.add(offset),
-                4,
-            );
+            descriptor.add(offset).write(value);
         }
     }
     descriptor
