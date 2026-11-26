@@ -104,8 +104,9 @@ pub fn checksum(data: &[u8]) -> u32 {
 mod tests {
     use super::{checksum, update};
 
-    fn emulate_f407_update(mut state: u32, data: &[u8]) -> u32 {
+    fn emulate_f407_update(seed: u32, data: &[u8]) -> u32 {
         const POLY: u32 = 0x04C1_1DB7;
+        let mut state = seed.reverse_bits();
         let full_len = data.len() & !3;
         for bytes in data[..full_len].chunks_exact(4) {
             let word = (bytes[0].reverse_bits() as u32) << 24
