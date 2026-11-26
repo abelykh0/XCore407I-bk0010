@@ -298,7 +298,7 @@ pub fn reset_rx_crc32_diagnostics() {
     RX_CRC32_FAILED.store(0, Ordering::Relaxed);
 }
 
-/// (mode_is_hardware, crc_bytes, software_bytes, hardware_bytes,
+/// (mode_is_hardware, crc_input_bytes, software_bytes, batched_bytes,
 /// hardware_batches, crc_passes, crc_failures, hardware_words,
 /// hardware_fallback_bytes).
 pub fn rx_crc32_diagnostics() -> (bool, u32, u32, u32, u32, u32, u32, u32, u32) {
