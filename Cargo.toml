@@ -27,12 +27,15 @@ smoltcp = { version = "0.14.0", default-features = false, features = ["medium-et
 
 [profile.release]
 codegen-units = 1
-debug = 2
+debug = 0
 lto = true
 opt-level = 3
 panic = "abort"
+strip = true
 
 [profile.dev]
+debug = 2
+opt-level = 1
 panic = "abort"
 
 [patch.crates-io]

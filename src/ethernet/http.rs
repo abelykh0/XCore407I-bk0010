@@ -48,7 +48,6 @@ pub fn http_poll_diagnostics() -> (u8, u32, u32, u32, u32, u32, u32, u32, u8) {
     )
 }
 
-
 const HTTP_PAGE: &[u8] = include_bytes!("../../resources/http_page.html");
 
 fn http_name_ends_with(name: &[u8], suffix: &[u8]) -> bool {
@@ -131,7 +130,6 @@ fn append_http_grouped_decimal(buffer: &mut [u8], length: &mut usize, value: usi
     append_http_decimal_formatted(buffer, length, value, true);
 }
 
-
 const HTTP_UPLOAD_CHUNK_SIZE: usize = 2048;
 
 pub struct HttpDownloadState {
@@ -188,7 +186,6 @@ impl HttpDownloadState {
         true
     }
 }
-
 pub struct HttpUploadState {
     allocation: littlefs2::fs::FileAllocation<crate::nand_fs::ActiveStorage>,
     temp_path: [u8; 80],
