@@ -55,7 +55,7 @@ pub(super) fn handle(
                 break;
             }
         }
-        write_status(b"\r\nDHARA GC: passes=");
+        write_status(b"\r\nDHARA GC: steps=");
         write_decimal(completed as usize);
         write_status(b" erased_blocks=");
         write_decimal(erased_blocks as usize);
