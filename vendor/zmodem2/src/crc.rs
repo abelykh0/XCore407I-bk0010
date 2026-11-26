@@ -69,7 +69,7 @@ impl Crc32 {
 
     /// Updates the CRC state with a single byte.
     pub fn update_byte(&mut self, byte: u8) {
-        self.crc = crc32_update(self.crc, byte);
+        self.crc = stm32f4_crc32::update(self.crc, &[byte]);
     }
 
     /// Finalizes the CRC calculation and returns the checksum.
@@ -88,21 +88,6 @@ const fn crc16_update(mut crc: u16, byte: u8) -> u16 {
             crc = (crc << 1) ^ 0x1021;
         } else {
             crc <<= 1;
-        }
-        i += 1;
-    }
-    crc
-}
-
-/// Performs a single byte update for CRC-32-ISO-HDLC.
-const fn crc32_update(mut crc: u32, byte: u8) -> u32 {
-    crc ^= byte as u32;
-    let mut i = 0;
-    while i < 8 {
-        if (crc & 1) != 0 {
-            crc = (crc >> 1) ^ 0xEDB8_8320;
-        } else {
-            crc >>= 1;
         }
         i += 1;
     }
