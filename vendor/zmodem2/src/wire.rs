@@ -267,6 +267,7 @@ impl<const N: usize> Write for BufferWriter<'_, N> {
 const RX_CRC32_BATCH_SIZE: usize = 64;
 static RX_CRC32_HARDWARE: AtomicBool = AtomicBool::new(false);
 static RX_CRC32_BYTES: AtomicU32 = AtomicU32::new(0);
+static RX_CRC16_BYTES: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_SOFTWARE_BYTES: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_HARDWARE_BYTES: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_BATCHES: AtomicU32 = AtomicU32::new(0);
@@ -289,6 +290,7 @@ pub fn rx_crc32_hardware_enabled() -> bool {
 /// Reset receive CRC-32 diagnostics without changing the selected mode.
 pub fn reset_rx_crc32_diagnostics() {
     RX_CRC32_BYTES.store(0, Ordering::Relaxed);
+    RX_CRC16_BYTES.store(0, Ordering::Relaxed);
     RX_CRC32_SOFTWARE_BYTES.store(0, Ordering::Relaxed);
     RX_CRC32_HARDWARE_BYTES.store(0, Ordering::Relaxed);
     RX_CRC32_BATCHES.store(0, Ordering::Relaxed);
@@ -298,13 +300,14 @@ pub fn reset_rx_crc32_diagnostics() {
     RX_CRC32_FAILED.store(0, Ordering::Relaxed);
 }
 
-/// (mode_is_hardware, crc_input_bytes, software_bytes, batched_bytes,
-/// hardware_batches, crc_passes, crc_failures, hardware_words,
+/// (mode_is_hardware, crc32_input_bytes, crc16_input_bytes, software_bytes,
+/// batched_bytes, hardware_batches, crc_passes, crc_failures, hardware_words,
 /// hardware_fallback_bytes).
-pub fn rx_crc32_diagnostics() -> (bool, u32, u32, u32, u32, u32, u32, u32, u32) {
+pub fn rx_crc32_diagnostics() -> (bool, u32, u32, u32, u32, u32, u32, u32, u32, u32) {
     (
         rx_crc32_hardware_enabled(),
         RX_CRC32_BYTES.load(Ordering::Relaxed),
+        RX_CRC16_BYTES.load(Ordering::Relaxed),
         RX_CRC32_SOFTWARE_BYTES.load(Ordering::Relaxed),
         RX_CRC32_HARDWARE_BYTES.load(Ordering::Relaxed),
         RX_CRC32_BATCHES.load(Ordering::Relaxed),
@@ -373,6 +376,7 @@ impl RxCrc {
                 RX_CRC32_SOFTWARE_BYTES.fetch_add(1, Ordering::Relaxed);
             }
         } else {
+            RX_CRC16_BYTES.fetch_add(1, Ordering::Relaxed);
             self.calc16.update_byte(byte);
         }
     }
