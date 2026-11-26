@@ -23,7 +23,7 @@ use crate::file_browser::{
     FORMAT_CONFIRM_FINAL, FORMAT_DONE, FORMAT_ERROR, FORMAT_FAILED, FORMAT_IDLE, FORMAT_REQUEST,
     FORMAT_STATE, INIT_CANCELLED, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_DONE, INIT_FAILED,
     INIT_IDLE, INIT_REQUEST, INIT_STATE, SAVE_DIALOG_IDLE, SAVE_DIALOG_STATE, draw_file_browser,
-    draw_format_confirmation, draw_init_confirmation, load_tetris_from_path, reset_emulator_ui,
+    draw_format_confirmation, draw_init_confirmation, load_file_from_path, reset_emulator_ui,
 };
 use crate::keyboard::{
     keyboard_queue_discard, service_keyboard_frame_pacing, service_keyboard_repeat,
@@ -824,7 +824,7 @@ pub fn run() -> ! {
                 FILE_BROWSER_ENTER if browser_count != 0 => {
                     let file = &browser_files[browser_selected];
                     let path_len = file.len as usize;
-                    let result = load_tetris_from_path(&file.path[..path_len]);
+                    let result = load_file_from_path(&file.path[..path_len]);
                     browser_open = false;
                     FILE_BROWSER_ACTIVE.store(false, Ordering::Release);
                     clear_demo_canvas(0x10);

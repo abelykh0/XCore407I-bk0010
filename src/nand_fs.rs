@@ -968,31 +968,6 @@ pub(crate) fn ecc_scan_reset_page_probe() -> ([[bool; 3]; 8], [[bool; 3]; 8], [[
     (reset_ok, read_ok, data)
 }
 
-/// Read-only classification helpers used by the whole-device ECC scan.
-#[cfg(feature = "nand-diagnostics")]
-pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<u8> {
-    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
-
-    // Use exactly the same marker read as Dhara's block_is_bad(): one byte
-    // at spare-area column PAGE_SIZE. Do not change FSMC timing or the NAND
-    // service hook here; the diagnostic must not use a different bus path.
-    let mut marker = [0xFFu8; 1];
-    if !read_page(page, PAGE_SIZE as u16, &mut marker) {
-        return None;
-    }
-    Some(marker[0])
-}
-
-#[cfg(feature = "nand-diagnostics")]
-pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
-    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
-    let mut tag = [0u8; 2];
-    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16, &mut tag) {
-        return None;
-    }
-    Some(tag == ECC_TAG)
-}
-
 /// Read one tagged physical page and compare stored ECC with independent
 /// software ECC. The FSMC ECC engine remains disabled throughout this scan,
 /// isolating raw NAND reads and software calculation from the hardware ECC/FIFO path.
@@ -1307,7 +1282,6 @@ pub fn with_mounted_detailed_with_progress<R>(
     mounted.map_err(|error| FsAccessError::Operation(error.code()))
 }
 
-
 /// Visit each entry in the LittleFS root directory using one shared iterator.
 /// The path slice includes its trailing NUL; size is meaningful for files.
 pub fn read_root_directory(
@@ -1404,4 +1378,29 @@ pub fn format_existing_littlefs() -> Result<(), InitError> {
         .map_err(|_| InitError::MountFailed)?;
     mount_with_shared_allocation(&mut storage, |_| Ok(()))
         .map_err(|_| InitError::MountFailed)
+}
+
+/// Read-only classification helpers used by the whole-device ECC scan.
+#[cfg(feature = "nand-diagnostics")]
+pub(crate) fn ecc_scan_block_marker(page: u32) -> Option<u8> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
+
+    // Use exactly the same marker read as Dhara's block_is_bad(): one byte
+    // at spare-area column PAGE_SIZE. Do not change FSMC timing or the NAND
+    // service hook here; the diagnostic must not use a different bus path.
+    let mut marker = [0xFFu8; 1];
+    if !read_page(page, PAGE_SIZE as u16, &mut marker) {
+        return None;
+    }
+    Some(marker[0])
+}
+
+#[cfg(feature = "nand-diagnostics")]
+pub(crate) fn ecc_scan_page_tagged(page: u32) -> Option<bool> {
+    if page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK { return None; }
+    let mut tag = [0u8; 2];
+    if !read_page(page, PAGE_SIZE as u16 + ECC_OOB_OFFSET + ECC_OOB_BYTES as u16, &mut tag) {
+        return None;
+    }
+    Some(tag == ECC_TAG)
 }

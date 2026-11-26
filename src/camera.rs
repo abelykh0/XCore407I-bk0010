@@ -414,68 +414,6 @@ pub fn show_file_browser_line(row: usize, message: &[u8], _selected: bool) {
     }
 }
 
-/// Show the measured PDP clock rate over a one-second DWT interval.
-#[cfg(feature = "cpu-cycle-diag")]
-pub fn show_pdp_cycles_per_second(pdp_cycles_per_second: u32) {
-    let mut line = [b' '; 32];
-    let mut pos = 0usize;
-    append_bytes(&mut line, &mut pos, b"PDP ");
-    append_decimal(&mut line, &mut pos, pdp_cycles_per_second);
-    show_file_browser_line(30, &line[..pos], false);
-}
-
-#[cfg(feature = "cpu-cycle-diag")]
-fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
-    for &byte in bytes {
-        if *pos == out.len() { break; }
-        out[*pos] = byte;
-        *pos += 1;
-    }
-}
-
-#[cfg(feature = "cpu-cycle-diag")]
-fn append_decimal(out: &mut [u8; 32], pos: &mut usize, value: u32) {
-    let mut digits = [0u8; 10];
-    let digits = crate::format::u32_to_decimal(value, &mut digits);
-    append_bytes(out, pos, digits);
-}
-
-/// Update the top-center clock text directly in the source canvas.
-pub fn update_clock_from_rtc() {
-    let text = crate::rtc::display_time();
-    const CLOCK_ATTRIBUTE: u16 = 0x2a10;
-
-    let width = canvas_width();
-    let left = (width - text.len() * 8) / 2;
-    let top = CANVAS_HEIGHT - 8;
-    let foreground = (CLOCK_ATTRIBUTE >> 8) as u8 & 0x3f;
-    let background = CLOCK_ATTRIBUTE as u8 & 0x3f;
-    draw_text_pixels(&text, left, top, foreground, background);
-
-    CLOCK_VERSION.fetch_add(1, Ordering::Relaxed);
-}
-
-fn draw_text_pixels(text: &[u8; 10], left: usize, top: usize, foreground: u8, background: u8) {
-    use crate::font8x8::FONT8X8;
-
-    // B/W mode has a 512x256 one-byte-per-pixel canvas. Draw native 8x8
-    // glyphs centered horizontally in the final (31st) text row.
-    for (character_index, character) in text.iter().enumerate() {
-        let glyph = (*character as usize - 1) * 8;
-        for row in 0..8 {
-            let bits = FONT8X8[glyph + row];
-            for column in 0..8 {
-                let color = if bits & (0x80 >> column) != 0 {
-                    foreground
-                } else {
-                    background
-                };
-                set_pixel(left + character_index * 8 + column, top + row, color);
-            }
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Packet {
     pub len: usize,
@@ -853,3 +791,28 @@ unsafe fn copy_canvas_range(mut offset: usize, mut destination: *mut u8, mut byt
     }
 }
 
+/// Show the measured PDP clock rate over a one-second DWT interval.
+#[cfg(feature = "cpu-cycle-diag")]
+pub fn show_pdp_cycles_per_second(pdp_cycles_per_second: u32) {
+    let mut line = [b' '; 32];
+    let mut pos = 0usize;
+    append_bytes(&mut line, &mut pos, b"PDP ");
+    append_decimal(&mut line, &mut pos, pdp_cycles_per_second);
+    show_file_browser_line(30, &line[..pos], false);
+}
+
+#[cfg(feature = "cpu-cycle-diag")]
+fn append_bytes(out: &mut [u8; 32], pos: &mut usize, bytes: &[u8]) {
+    for &byte in bytes {
+        if *pos == out.len() { break; }
+        out[*pos] = byte;
+        *pos += 1;
+    }
+}
+
+#[cfg(feature = "cpu-cycle-diag")]
+fn append_decimal(out: &mut [u8; 32], pos: &mut usize, value: u32) {
+    let mut digits = [0u8; 10];
+    let digits = crate::format::u32_to_decimal(value, &mut digits);
+    append_bytes(out, pos, digits);
+}

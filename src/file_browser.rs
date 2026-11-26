@@ -390,7 +390,7 @@ pub(crate) fn draw_save_dialog(state: u8, file: &BrowserFile) {
 }
 
 /// Load a selected .bin file using the BK monitor's tape-image conventions.
-pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
+pub(crate) fn load_file_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     let path = littlefs2::path::Path::from_bytes_with_nul(path_bytes).map_err(|_| ())?;
     xcore407i_blinker::nand_fs::with_mounted(|fs| {
         with_file_browser_file_allocation(|allocation| {
@@ -471,7 +471,6 @@ pub(crate) fn load_tetris_from_path(path_bytes: &[u8]) -> Result<(), ()> {
     .map_err(|_| ())
 }
 
-
 /// Display the exact LittleFS mount failure and the two-step destructive confirmation.
 pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
     clear_demo_canvas(0);
@@ -522,7 +521,6 @@ pub(crate) fn draw_format_confirmation(final_confirmation: bool, error: i32) {
         show_file_browser_line(27, b"Y CONTINUE  N/ESC CANCEL", false);
     }
 }
-
 
 /// Display the two-step confirmation for first-time NAND provisioning.
 pub(crate) fn draw_init_confirmation(final_confirmation: bool) {

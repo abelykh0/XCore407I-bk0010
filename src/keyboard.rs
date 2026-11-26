@@ -63,7 +63,6 @@ pub(crate) fn keyboard_is_mounted() -> bool {
     KEYBOARD_DEVICE.load(Ordering::Acquire) != 0
 }
 
-
 pub(crate) fn boot_selection() -> u8 {
     BOOT_SELECTION.load(Ordering::Acquire)
 }
@@ -116,15 +115,18 @@ fn keyboard_queue_push(bytes: &[u8]) {
         KEYBOARD_QUEUE_HEAD.store(head.wrapping_add(1), Ordering::Release);
     }
 }
+
 fn keyboard_queue_peek() -> Option<u8> {
     let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
     if tail == KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire) { return None; }
     Some(KEYBOARD_QUEUE[(tail & KEYBOARD_QUEUE_MASK) as usize].load(Ordering::Relaxed))
 }
+
 fn keyboard_queue_pop() {
     let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
     KEYBOARD_QUEUE_TAIL.store(tail.wrapping_add(1), Ordering::Release);
 }
+
 pub(crate) fn keyboard_queue_discard() {
     let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire);
     KEYBOARD_QUEUE_TAIL.store(head, Ordering::Release);

@@ -8,11 +8,11 @@ pub mod nand_fs;
 pub mod dhara_fs;
 pub mod ethernet;
 pub mod libc_shims;
-mod memory;
 pub mod rtc;
 pub mod tusb;
 pub mod usb_device;
 
+mod memory;
 mod nand_ecc;
 mod copy_words;
 mod palette;
@@ -21,7 +21,6 @@ mod palette;
 mod font8x8;
 #[path = "../resources/rom.rs"]
 pub mod rom;
-
 
 /// System core clock frequency used by the board clock setup and cycle timing.
 pub const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;

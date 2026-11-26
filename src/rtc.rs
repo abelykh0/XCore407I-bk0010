@@ -1,13 +1,9 @@
-
 // ! STM32F407 RTC initialization and cached 24-hour clock display.
 //
 // Register access goes through the STM32F407 PAC. The RTC remains backed by
 // LSE and the backup-domain calendar is only initialized on first use.
 
-use core::sync::atomic::{AtomicU32, Ordering};
 use stm32f4::stm32f407::{PWR, RCC, RTC};
-
-static DISPLAY_HHMMSS: AtomicU32 = AtomicU32::new(0);
 
 /// Start the LSE-backed RTC and initialize it to 00:00:00 only if its calendar
 /// has never been initialized. Existing backup-domain time is preserved.
@@ -108,7 +104,6 @@ pub fn initialize(rcc: &RCC, pwr: &PWR, rtc: &RTC) -> bool {
         return false;
     }
 
-    refresh_display_time(rtc);
     true
 }
 
@@ -124,55 +119,6 @@ fn write_protection_key(
     });
 }
 
-/// Refresh the overlay's cached time. Call this about once per second.
-pub fn refresh_display_time(rtc: &RTC) {
-
-    let time = rtc.tr().read().bits();
-
-    // Reading the date after the time completes the shadow-register sequence.
-    let _date = rtc.dr().read().bits();
-
-    let Some(hours) = decode_bcd((time >> 16) & 0x3f) else {
-        return;
-    };
-    let Some(minutes) = decode_bcd((time >> 8) & 0x7f) else {
-        return;
-    };
-    let Some(seconds) = decode_bcd(time & 0x7f) else {
-        return;
-    };
-
-    if hours >= 24 || minutes >= 60 || seconds >= 60 {
-        return;
-    }
-
-    DISPLAY_HHMMSS.store(
-        (hours as u32) * 10_000 + (minutes as u32) * 100 + seconds as u32,
-        Ordering::Relaxed,
-    );
-}
-
-/// Return the cached time with one blank character on each side.
-pub(crate) fn display_time() -> [u8; 10] {
-    let time = DISPLAY_HHMMSS.load(Ordering::Relaxed);
-    let hours = (time / 10_000) as u8;
-    let minutes = ((time / 100) % 100) as u8;
-    let seconds = (time % 100) as u8;
-
-    [
-        b' ',
-        b'0' + hours / 10,
-        b'0' + hours % 10,
-        b':',
-        b'0' + minutes / 10,
-        b'0' + minutes % 10,
-        b':',
-        b'0' + seconds / 10,
-        b'0' + seconds % 10,
-        b' ',
-    ]
-}
-
 fn decode_bcd(value: u32) -> Option<u8> {
     let units = (value & 0x0f) as u8;
     let tens = ((value >> 4) & 0x0f) as u8;
@@ -183,7 +129,6 @@ fn decode_bcd(value: u32) -> Option<u8> {
 
     Some(tens * 10 + units)
 }
-
 
 /// Return the STM32 RTC calendar as Unix milliseconds (UTC), modulo 2^32.
 /// Read SSR, TR, then DR so the subsecond and calendar fields form one snapshot.

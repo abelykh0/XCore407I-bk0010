@@ -45,13 +45,6 @@ pub(crate) fn configure_exception_priorities(scb: &mut SCB) {
     }
 }
 
-#[cfg(feature = "cpu-cycle-diag")]
-#[inline]
-pub(crate) fn read_dwt_cycle_count() -> u32 {
-    // DWT::cycle_count() performs the volatile register read through cortex-m.
-    cortex_m::peripheral::DWT::cycle_count()
-}
-
 pub(crate) fn enable_cycle_counter(core: &mut cortex_m::Peripherals) {
     // DWT access is provided by cortex-m; global trace must be enabled first.
     core.DCB.enable_trace();
@@ -97,7 +90,6 @@ pub(crate) fn system_clock_168mhz(rcc: &pac::RCC, pwr: &pac::PWR, flash: &pac::F
 
     while rcc.cfgr().read().sws().bits() != 2 {}
 }
-
 
 /// Configure the STM32F407 RMII pin muxes for the XCore407I.
 ///
@@ -248,4 +240,11 @@ pub(crate) fn configure_board_pins(
         h.ph4.into_alternate::<10>().speed(Speed::VeryHigh),  // NXT
         i.pi11.into_alternate::<10>().speed(Speed::VeryHigh), // DIR
     );
+}
+
+#[cfg(feature = "cpu-cycle-diag")]
+#[inline]
+pub(crate) fn read_dwt_cycle_count() -> u32 {
+    // DWT::cycle_count() performs the volatile register read through cortex-m.
+    cortex_m::peripheral::DWT::cycle_count()
 }
