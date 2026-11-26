@@ -61,7 +61,6 @@ pub(super) fn handle(
                 write_status(b"%) trims=");
                 write_decimal(trims);
                 write_status(b"\r\n");
-                _service_background();
             };
             match crate::dhara_fs::reclaim_unused_blocks(
                 fs,
