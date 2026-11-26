@@ -57,8 +57,11 @@ pub(crate) fn map_sync_diagnostic() -> (u32, u32, u32, u32) {
     (stage, page, error, steps)
 }
 
-static mut NAND_PAGE_SCRATCH: [u8; PAGE_SIZE + SPARE_SIZE] =
-    [0; PAGE_SIZE + SPARE_SIZE];
+#[repr(C, align(4))]
+struct AlignedNandPageScratch([u8; PAGE_SIZE + SPARE_SIZE]);
+
+static mut NAND_PAGE_SCRATCH: AlignedNandPageScratch =
+    AlignedNandPageScratch([0; PAGE_SIZE + SPARE_SIZE]);
 #[unsafe(link_section = ".ccmram.nand")]
 static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
 
@@ -291,7 +294,7 @@ pub extern "C" fn dhara_nand_is_free(nand: *const DharaNand, page: u32) -> c_int
     if !valid_nand(nand) || page >= PHYSICAL_BLOCKS * PAGES_PER_BLOCK {
         return 0;
     }
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
+    let scratch = unsafe { &mut (*core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH)).0 };
     if !nand_fs::read_page(page, 0, scratch) {
         return 0;
     }
@@ -317,14 +320,20 @@ pub extern "C" fn dhara_nand_read(
         return -1;
     }
 
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
+    let scratch = unsafe { &mut (*core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH)).0 };
     if !nand_fs::read_data_page(page, scratch) {
         unsafe { set_error(error, DHARA_E_ECC); }
         return -1;
     }
     if length != 0 {
+        // Dhara may supply an unaligned destination or a partial-page range.
+        // The helper copies only an aligned middle with the FPU word engine.
         unsafe {
-            core::ptr::copy_nonoverlapping(scratch.as_ptr().add(offset), data, length);
+            crate::copy_words::copy_bytes(
+                scratch.as_ptr().add(offset),
+                data,
+                length,
+            );
         }
     }
     unsafe { set_error(error, 0); }
@@ -346,7 +355,7 @@ pub extern "C" fn dhara_nand_copy(
         return -1;
     }
 
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH) };
+    let scratch = unsafe { &mut (*core::ptr::addr_of_mut!(NAND_PAGE_SCRATCH)).0 };
     if !nand_fs::read_data_page(source, scratch) {
         unsafe { set_error(error, DHARA_E_ECC); }
         return -1;

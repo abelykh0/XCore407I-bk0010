@@ -133,3 +133,59 @@ pub(crate) unsafe fn copy_words(src: *const u8, dst: *mut u8, bytes: usize) {
         copy_words_u32(src.cast(), dst.cast(), bytes >> 2);
     }
 }
+
+/// Copy an arbitrary byte span, using the word-copy engine for its aligned
+/// middle when source and destination have matching alignment.
+///
+/// Small spans and pointers with different alignment are copied bytewise by
+/// the compiler's normal memcpy lowering. This avoids alignment assumptions
+/// at network and filesystem API boundaries.
+///
+/// # Safety
+/// - Both pointers must be valid for `bytes` bytes and non-overlapping.
+/// - The caller must ensure the copy runs in a context where the FPU is usable.
+#[inline(always)]
+pub(crate) unsafe fn copy_bytes(src: *const u8, dst: *mut u8, bytes: usize) {
+    const WORD_COPY_THRESHOLD: usize = 64;
+
+    if bytes < WORD_COPY_THRESHOLD || ((src as usize) ^ (dst as usize)) & 3 != 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, dst, bytes);
+        }
+        return;
+    }
+
+    let prefix = (4 - ((src as usize) & 3)) & 3;
+    if prefix >= bytes {
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, dst, bytes);
+        }
+        return;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(src, dst, prefix);
+    }
+
+    let word_bytes = (bytes - prefix) & !3;
+    if word_bytes != 0 {
+        unsafe {
+            copy_words(
+                src.add(prefix),
+                dst.add(prefix),
+                word_bytes,
+            );
+        }
+    }
+
+    let tail_start = prefix + word_bytes;
+    if tail_start < bytes {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                src.add(tail_start),
+                dst.add(tail_start),
+                bytes - tail_start,
+            );
+        }
+    }
+}

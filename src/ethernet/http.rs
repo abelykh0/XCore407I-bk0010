@@ -533,7 +533,15 @@ impl<'a> super::EthernetNetwork<'a> {
             let tail = &mut upload_body[http_upload.rx_len..HTTP_RX_BUFFER_SIZE];
             match socket.recv(|data| {
                 let count = data.len().min(tail.len());
-                tail[..count].copy_from_slice(&data[..count]);
+                // smoltcp's ring-buffer slice may have arbitrary alignment.
+                // Use word copies only for the aligned middle of this span.
+                unsafe {
+                    crate::copy_words::copy_bytes(
+                        data.as_ptr(),
+                        tail.as_mut_ptr(),
+                        count,
+                    );
+                }
                 (count, count)
             }) {
                 Ok(count) if count != 0 => {
