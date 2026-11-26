@@ -30,21 +30,30 @@ pub(super) fn handle(
             write_status(b"\r\nDHARA GC: storage is not mounted.\r\n> ");
             return true;
         }
-        // Reclaim up to four journal blocks before a large sequential write.
-        // Each map_gc call relocates live pages and reclaims at most one block.
+        // A map_gc() call processes one journal-tail entry, not one block.
+        // Continue until two physical blocks are erased, the journal stops
+        // advancing, or the safety limit is reached.
         let mut completed = 0u32;
         let mut erased_blocks = 0u32;
         let mut programmed_pages = 0u32;
         let mut error = 0u32;
-        for _ in 0..4 {
-            let (ok, gc_error, erased, copied) = crate::dhara_fs::map_gc();
+        let mut stalled = false;
+        for _ in 0..256 {
+            let (ok, progress, gc_error, erased, programmed) = crate::dhara_fs::map_gc();
             erased_blocks = erased_blocks.saturating_add(erased);
-            programmed_pages = programmed_pages.saturating_add(copied);
+            programmed_pages = programmed_pages.saturating_add(programmed);
             if !ok {
                 error = gc_error;
                 break;
             }
             completed += 1;
+            if erased_blocks >= 2 {
+                break;
+            }
+            if !progress {
+                stalled = true;
+                break;
+            }
         }
         write_status(b"\r\nDHARA GC: passes=");
         write_decimal(completed as usize);
@@ -55,6 +64,9 @@ pub(super) fn handle(
         if error != 0 {
             write_status(b" error=0x");
             write_hex_u32(error);
+        }
+        if stalled {
+            write_status(b"\r\nGC stopped: journal made no further progress.");
         }
         write_status(b"\r\n> ");
     } else if command_is(line, b"ZCRC HW") {
