@@ -34,12 +34,12 @@ pub(super) fn handle(
         // Each map_gc call relocates live pages and reclaims at most one block.
         let mut completed = 0u32;
         let mut erased_blocks = 0u32;
-        let mut copied_pages = 0u32;
+        let mut programmed_pages = 0u32;
         let mut error = 0u32;
         for _ in 0..4 {
             let (ok, gc_error, erased, copied) = crate::dhara_fs::map_gc();
             erased_blocks = erased_blocks.saturating_add(erased);
-            copied_pages = copied_pages.saturating_add(copied);
+            programmed_pages = programmed_pages.saturating_add(copied);
             if !ok {
                 error = gc_error;
                 break;
@@ -50,8 +50,8 @@ pub(super) fn handle(
         write_decimal(completed as usize);
         write_status(b" erased_blocks=");
         write_decimal(erased_blocks as usize);
-        write_status(b" copied_pages=");
-        write_decimal(copied_pages as usize);
+        write_status(b" programmed_pages=");
+        write_decimal(programmed_pages as usize);
         if error != 0 {
             write_status(b" error=0x");
             write_hex_u32(error);
