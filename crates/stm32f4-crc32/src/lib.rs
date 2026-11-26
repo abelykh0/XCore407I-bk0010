@@ -7,27 +7,7 @@
 //! Reverse each input byte's bits and reverse the result to obtain the
 //! reflected CRC-32/ISO-HDLC convention used by littlefs and ZMODEM.
 
-use core::sync::atomic::{AtomicU32, Ordering};
-
 const INITIAL: u32 = 0xFFFF_FFFF;
-
-static HARDWARE_WORDS: AtomicU32 = AtomicU32::new(0);
-static HARDWARE_FALLBACK_BYTES: AtomicU32 = AtomicU32::new(0);
-
-/// Reset counters for actual CRC peripheral feeds and hardware-path fallbacks.
-pub fn reset_diagnostics() {
-    HARDWARE_WORDS.store(0, Ordering::Relaxed);
-    HARDWARE_FALLBACK_BYTES.store(0, Ordering::Relaxed);
-}
-
-/// Return (32-bit words written to CRC_DR, bytes processed by software
-/// because the hardware continuation state was unavailable or a tail remained).
-pub fn diagnostics() -> (u32, u32) {
-    (
-        HARDWARE_WORDS.load(Ordering::Relaxed),
-        HARDWARE_FALLBACK_BYTES.load(Ordering::Relaxed),
-    )
-}
 
 // Same 16-entry (64-byte) nibble table used by littlefs. This replaces a
 // 256-entry (1 KiB) byte table while remaining substantially faster than
@@ -54,6 +34,13 @@ fn software_update(mut crc: u32, data: &[u8]) -> u32 {
 /// peripheral is used when it can continue from the supplied state; otherwise
 /// the compact littlefs-compatible software implementation is used.
 pub fn update(seed: u32, data: &[u8]) -> u32 {
+    update_with_stats(seed, data).0
+}
+
+/// Update a CRC state and report the work performed by this call as
+/// (hardware_words, software_fallback_bytes). On non-ARM targets the whole
+/// input is reported as software fallback.
+pub fn update_with_stats(seed: u32, data: &[u8]) -> (u32, u32, u32) {
     #[cfg(target_arch = "arm")]
     {
         hardware_update(seed, data)
@@ -61,12 +48,12 @@ pub fn update(seed: u32, data: &[u8]) -> u32 {
 
     #[cfg(not(target_arch = "arm"))]
     {
-        software_update(seed, data)
+        (software_update(seed, data), 0, data.len() as u32)
     }
 }
 
 #[cfg(target_arch = "arm")]
-fn hardware_update(seed: u32, data: &[u8]) -> u32 {
+fn hardware_update(seed: u32, data: &[u8]) -> (u32, u32, u32) {
     use core::ptr::{read_volatile, write_volatile};
 
     const RCC_AHB1ENR: *mut u32 = 0x4002_3830 as *mut u32;
@@ -89,8 +76,7 @@ fn hardware_update(seed: u32, data: &[u8]) -> u32 {
             LAST_STATE = INITIAL;
             LAST_VALID = true;
         } else if !LAST_VALID || LAST_STATE != seed {
-            HARDWARE_FALLBACK_BYTES.fetch_add(data.len() as u32, Ordering::Relaxed);
-            return software_update(seed, data);
+            return (software_update(seed, data), 0, data.len() as u32);
         }
 
         let full_len = data.len() & !3;
@@ -103,20 +89,17 @@ fn hardware_update(seed: u32, data: &[u8]) -> u32 {
                 | bytes[3].reverse_bits() as u32;
             write_volatile(CRC_DR, word);
         }
-        HARDWARE_WORDS.fetch_add((full_len / 4) as u32, Ordering::Relaxed);
-
         let mut result = read_volatile(CRC_DR).reverse_bits();
         if full_len != data.len() {
             // CRC_DR only supports word accesses. Finish a 1–3 byte tail in
             // software and invalidate the peripheral continuation state.
-            HARDWARE_FALLBACK_BYTES.fetch_add((data.len() - full_len) as u32, Ordering::Relaxed);
             result = software_update(result, &data[full_len..]);
             LAST_VALID = false;
         } else {
             LAST_STATE = result;
             LAST_VALID = true;
         }
-        result
+        (result, (full_len / 4) as u32, (data.len() - full_len) as u32)
     })
 }
 
