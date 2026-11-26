@@ -8,19 +8,19 @@
 //! reflected CRC-32/ISO-HDLC convention used by littlefs and ZMODEM.
 
 const INITIAL: u32 = 0xFFFF_FFFF;
-const REFLECTED_POLY: u32 = 0xEDB8_8320;
 
 #[inline]
 fn software_update(mut crc: u32, data: &[u8]) -> u32 {
+    const TABLE: [u32; 16] = [
+        0x0000_0000, 0x1DB7_1064, 0x3B6E_20C8, 0x26D9_30AC,
+        0x76DC_4190, 0x6B6B_51F4, 0x4DB2_6158, 0x5005_713C,
+        0xEDB8_8320, 0xF00F_9344, 0xD6D6_A3E8, 0xCB61_B38C,
+        0x9B64_C2B0, 0x86D3_D2D4, 0xA00A_E278, 0xBDBD_F21C,
+    ];
+
     for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ REFLECTED_POLY
-            } else {
-                crc >> 1
-            };
-        }
+        crc = (crc >> 4) ^ TABLE[((crc ^ byte as u32) & 0x0F) as usize];
+        crc = (crc >> 4) ^ TABLE[((crc ^ (byte as u32 >> 4)) & 0x0F) as usize];
     }
     crc
 }
