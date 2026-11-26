@@ -1346,6 +1346,8 @@ pub fn initialize_nand_volume() -> Result<(), InitError> {
 
 /// CDC variant: invoke progress after each physical block, allowing the
 /// caller to service USB/video between NAND erase operations.
+#[cold]
+#[inline(never)]
 pub fn initialize_nand_volume_with_progress(
     progress: impl FnMut(u32, u32),
  ) -> Result<FormatReport, InitError> {
@@ -1372,6 +1374,8 @@ pub fn initialize_nand_volume_with_progress(
 /// Format only the LittleFS logical volume on an already-valid Dhara journal.
 /// DharaStorage::new() verifies NAND identity, resumes Dhara, checks the
 /// volume marker, and validates capacity before any LittleFS erase is issued.
+#[cold]
+#[inline(never)]
 pub fn format_existing_littlefs() -> Result<(), InitError> {
     let mut storage = ActiveStorage::new()?;
     Filesystem::<ActiveStorage>::format(&mut storage)
