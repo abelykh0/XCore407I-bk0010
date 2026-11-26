@@ -51,6 +51,7 @@ fn build_bk(target: &str) {
     bk.target(target)
         .include("csrc/bk")
         .flag("-std=gnu11")
+        .flag("-fno-strict-aliasing").flag("-fno-omit-frame-pointer") // required when using debug = 0
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
         .files([
@@ -73,6 +74,7 @@ fn build_dhara(target: &str) {
     dhara
         .target(target)
         .flag("-std=gnu11")
+        .flag("-fno-strict-aliasing").flag("-fno-omit-frame-pointer") // required when using debug = 0
         .flag("-w") // Suppress all compiler warnings from Dhara and its adapter only.
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
@@ -102,6 +104,7 @@ fn build_tinyusb(
     tinyusb
         .target(target)
         .flag("-std=gnu11")
+        .flag("-fno-strict-aliasing").flag("-fno-omit-frame-pointer") // required when using debug = 0
         .flag("-w") // Suppress all compiler warnings from TinyUSB only.
         .flag("-ffunction-sections")
         .flag("-fdata-sections")
