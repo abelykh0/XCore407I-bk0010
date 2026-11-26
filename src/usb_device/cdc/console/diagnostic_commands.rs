@@ -14,20 +14,20 @@ pub(super) fn handle(
 ) -> bool {
     if command_is(line, b"DHARA STATUS") {
         if fs.is_none() {
-            write_status(b"\\r\\nDHARA STATUS: storage is not mounted.\\r\\n> ");
+            write_status(b"\r\nDHARA STATUS: storage is not mounted.\r\n> ");
             return true;
         }
         let (allocated, capacity) = crate::dhara_fs::map_status();
-        write_status(b"\\r\\nDHARA map: allocated sectors=");
+        write_status(b"\r\nDHARA map: allocated sectors=");
         write_decimal(allocated as usize);
         write_status(b" capacity=");
         write_decimal(capacity as usize);
         write_status(b" logical free sectors=");
         write_decimal(capacity.saturating_sub(allocated) as usize);
-        write_status(b"\\r\\nPhysical free pages are managed internally by Dhara.\\r\\n> ");
+        write_status(b"\r\nPhysical free pages are managed internally by Dhara.\r\n> ");
     } else if command_is(line, b"DHARA GC") {
         if fs.is_none() {
-            write_status(b"\\r\\nDHARA GC: storage is not mounted.\\r\\n> ");
+            write_status(b"\r\nDHARA GC: storage is not mounted.\r\n> ");
             return true;
         }
         // Reclaim up to four journal blocks before a large sequential write.
@@ -46,7 +46,7 @@ pub(super) fn handle(
             }
             completed += 1;
         }
-        write_status(b"\\r\\nDHARA GC: passes=");
+        write_status(b"\r\nDHARA GC: passes=");
         write_decimal(completed as usize);
         write_status(b" erased_blocks=");
         write_decimal(erased_blocks as usize);
@@ -56,7 +56,7 @@ pub(super) fn handle(
             write_status(b" error=0x");
             write_hex_u32(error);
         }
-        write_status(b"\\r\\n> ");
+        write_status(b"\r\n> ");
     } else if command_is(line, b"ZCRC HW") {
         zmodem2::set_rx_crc32_hardware(true);
         zmodem2::reset_rx_crc32_diagnostics();
