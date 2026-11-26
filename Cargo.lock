@@ -752,6 +752,7 @@ dependencies = [
  "panic-halt",
  "smoltcp",
  "stm32f4",
+ "stm32f4-crc32",
  "stm32f4xx-hal",
  "zmodem2",
 ]
