@@ -12,6 +12,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use littlefs2::{
     consts::{U2048, U32},
     driver::Storage,
+    fs::Filesystem,
     io::{Error as LfsError, Result as LfsResult},
 };
 
@@ -39,6 +40,7 @@ unsafe extern "C" {
     fn xcore_dhara_map_resume(error: *mut i32) -> c_int;
     fn xcore_dhara_map_provision(sector: u32, data: *const u8, error: *mut i32, phase: *mut i32) -> c_int;
     fn xcore_dhara_map_capacity() -> u32;
+    fn xcore_dhara_map_size() -> u32;
     fn xcore_dhara_map_read(sector: u32, data: *mut u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_trim(sector: u32, error: *mut i32) -> c_int;
@@ -57,6 +59,91 @@ pub(crate) fn map_sync_diagnostic() -> (u32, u32, u32, u32) {
     (stage, page, error, steps)
 }
 
+pub(crate) fn map_usage() -> (u32, u32, u32, u32) {
+    unsafe {
+        (
+            xcore_dhara_map_size(),
+            xcore_dhara_map_capacity(),
+            NAND_ERASE_COUNT.load(Ordering::Relaxed),
+            NAND_PROGRAM_COUNT.load(Ordering::Relaxed),
+        )
+    }
+}
+
+pub(crate) struct ReclaimStats {
+    pub used_blocks: usize,
+    pub trimmed_blocks: usize,
+    pub trimmed_sectors: usize,
+    pub allocated_before: u32,
+    pub allocated_after: u32,
+    pub erased_blocks: u32,
+    pub programmed_pages: u32,
+    pub sync_steps: u32,
+}
+
+/// Reclaim every LittleFS logical block which is not referenced by the
+/// mounted filesystem. LittleFS traversal determines liveness; all trims,
+/// journal synchronization, and resulting physical erases remain owned by
+/// Dhara. The private volume-marker sector is outside the LittleFS range.
+pub(crate) fn reclaim_unused_blocks(
+    fs: &Filesystem<'_, crate::nand_fs::ActiveStorage>,
+    service: &mut dyn FnMut(),
+) -> Result<ReclaimStats, (u32, i32)> {
+    // Compact/repair LittleFS metadata before using its live-block traversal.
+    fs.gc().map_err(|error| (1, error.code()))?;
+
+    let mut used = [0u8; (LITTLEFS_BLOCK_COUNT + 7) / 8];
+    let used_blocks = fs
+        .traverse_blocks(&mut used)
+        .map_err(|error| (2, error.code()))?;
+
+    let (allocated_before, _, erase_before, program_before) = map_usage();
+    let mut trimmed_blocks = 0usize;
+    let mut trimmed_sectors = 0usize;
+    let mut error = 0i32;
+
+    for block in 0..LITTLEFS_BLOCK_COUNT {
+        let is_used = (used[block / 8] & (1 << (block % 8))) != 0;
+        if is_used {
+            continue;
+        }
+
+        let first_sector = block * SECTORS_PER_LITTLEFS_BLOCK;
+        for sector in first_sector..(first_sector + SECTORS_PER_LITTLEFS_BLOCK) {
+            let result = unsafe { xcore_dhara_map_trim(sector as u32, &mut error) };
+            if result != 0 {
+                return Err((3, if error != 0 { error } else { result }));
+            }
+            trimmed_sectors += 1;
+        }
+        trimmed_blocks += 1;
+
+        // Keep foreground USB/video servicing responsive during a full scan.
+        if block % 8 == 7 {
+            service();
+        }
+    }
+
+    let sync_result = unsafe { xcore_dhara_map_sync(&mut error) };
+    if sync_result != 0 {
+        return Err((4, if error != 0 { error } else { sync_result }));
+    }
+
+    let (_, _, _, sync_steps) = map_sync_diagnostic();
+    let (allocated_after, _, erase_after, program_after) = map_usage();
+
+    Ok(ReclaimStats {
+        used_blocks,
+        trimmed_blocks,
+        trimmed_sectors,
+        allocated_before,
+        allocated_after,
+        erased_blocks: erase_after.wrapping_sub(erase_before),
+        programmed_pages: program_after.wrapping_sub(program_before),
+        sync_steps,
+    })
+}
+
 #[repr(C, align(4))]
 struct AlignedNandPageScratch([u8; PAGE_SIZE + SPARE_SIZE]);
 
@@ -68,6 +155,11 @@ static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
 static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_ERROR: AtomicU32 = AtomicU32::new(0);
+
+// Physical NAND operations performed through Dhara since boot. These
+// counters make before/after maintenance comparisons possible.
+static NAND_ERASE_COUNT: AtomicU32 = AtomicU32::new(0);
+static NAND_PROGRAM_COUNT: AtomicU32 = AtomicU32::new(0);
 
 // Preserve the exact stage and underlying return values when destructive
 // provisioning fails. These survive the subsequent console error report.
@@ -257,6 +349,7 @@ pub extern "C" fn dhara_nand_erase(
         return -1;
     }
     if nand_fs::erase_physical_block(block as u16) {
+        NAND_ERASE_COUNT.fetch_add(1, Ordering::Relaxed);
         unsafe { set_error(error, 0); }
         0
     } else {
@@ -281,6 +374,7 @@ pub extern "C" fn dhara_nand_prog(
     }
     let input = unsafe { slice::from_raw_parts(data, PAGE_SIZE) };
     if nand_fs::program_physical_page(page, input) {
+        NAND_PROGRAM_COUNT.fetch_add(1, Ordering::Relaxed);
         unsafe { set_error(error, 0); }
         0
     } else {
@@ -364,6 +458,7 @@ pub extern "C" fn dhara_nand_copy(
         unsafe { set_error(error, DHARA_E_BAD_BLOCK); }
         return -1;
     }
+    NAND_PROGRAM_COUNT.fetch_add(1, Ordering::Relaxed);
     unsafe { set_error(error, 0); }
     0
 }

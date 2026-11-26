@@ -105,3 +105,11 @@ int xcore_dhara_map_sync(int32_t *error)
 		*error = (int32_t)err;
 	return ret;
 }
+
+
+/* Maintenance/status accessors. Keep all physical NAND operations inside
+ * Dhara; callers must never erase blocks directly. */
+uint32_t xcore_dhara_map_size(void)
+{
+	return xcore_initialized ? dhara_map_size(&xcore_map) : 0;
+}

@@ -12,7 +12,83 @@ pub(super) fn handle(
     zmodem: &mut cdc_zmodem::State,
     _service_background: &mut dyn FnMut(),
 ) -> bool {
-    if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
+    if command_is(line, b"DHARA STATUS") {
+        if let Some(fs) = fs {
+            let mut used = [0u8; (crate::dhara_fs::LITTLEFS_BLOCK_COUNT + 7) / 8];
+            match fs.traverse_blocks(&mut used) {
+                Ok(used_blocks) => {
+                    let (allocated, capacity, erases, programs) = crate::dhara_fs::map_usage();
+                    write_status(b"\r\nDHARA STATUS (read-only)\r\nLittleFS: used blocks=");
+                    write_decimal(used_blocks);
+                    write_status(b" free blocks=");
+                    write_decimal(crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks));
+                    write_status(b" total blocks=");
+                    write_decimal(crate::dhara_fs::LITTLEFS_BLOCK_COUNT);
+                    write_status(b"\r\nDhara: allocated sectors=");
+                    write_decimal(allocated as usize);
+                    write_status(b" capacity=");
+                    write_decimal(capacity as usize);
+                    write_status(b" logical free sectors=");
+                    write_decimal(capacity.saturating_sub(allocated) as usize);
+                    write_status(b"\r\nNAND since boot: erased blocks=");
+                    write_decimal(erases as usize);
+                    write_status(b" programmed pages=");
+                    write_decimal(programs as usize);
+                    write_status(b"\r\n");
+                }
+                Err(error) => {
+                    write_status(b"DHARA STATUS: LittleFS traversal failed, error 0x");
+                    write_hex_u32(error.code() as u32);
+                    write_status(b"\r\n");
+                }
+            }
+        } else {
+            write_status(b"Storage unavailable.\r\n");
+        }
+        write_status(b"> ");
+    } else if command_is(line, b"DHARA RECLAIM") {
+        if let Some(fs) = fs {
+            write_status(b"\r\nDHARA RECLAIM: compacting LittleFS, trimming unreferenced logical blocks, then syncing Dhara...\r\n");
+            match crate::dhara_fs::reclaim_unused_blocks(fs, _service_background) {
+                Ok(stats) => {
+                    write_status(b"DHARA RECLAIM complete: LittleFS used blocks=");
+                    write_decimal(stats.used_blocks);
+                    write_status(b" trimmed blocks=");
+                    write_decimal(stats.trimmed_blocks);
+                    write_status(b" trimmed sectors=");
+                    write_decimal(stats.trimmed_sectors);
+                    write_status(b"\r\nDhara allocated sectors: ");
+                    write_decimal(stats.allocated_before as usize);
+                    write_status(b" -> ");
+                    write_decimal(stats.allocated_after as usize);
+                    write_status(b"\r\nPhysical NAND operations: erased blocks=");
+                    write_decimal(stats.erased_blocks as usize);
+                    write_status(b" programmed pages=");
+                    write_decimal(stats.programmed_pages as usize);
+                    write_status(b" sync steps=");
+                    write_decimal(stats.sync_steps as usize);
+                    write_status(b"\r\nRun DHARA STATUS and repeat the same RECEIVE benchmark to compare.\r\n");
+                }
+                Err((stage, error)) => {
+                    let stage_name: &[u8] = match stage {
+                        1 => b"LittleFS GC",
+                        2 => b"LittleFS traversal",
+                        3 => b"Dhara trim",
+                        4 => b"Dhara sync",
+                        _ => b"unknown",
+                    };
+                    write_status(b"DHARA RECLAIM FAILED at ");
+                    write_status(stage_name);
+                    write_status(b", error 0x");
+                    write_hex_u32(error as u32);
+                    write_status(b". Filesystem contents were not intentionally modified.\r\n");
+                }
+            }
+        } else {
+            write_status(b"Storage unavailable.\r\n");
+        }
+        write_status(b"> ");
+    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
         write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
     } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ OFF") {
