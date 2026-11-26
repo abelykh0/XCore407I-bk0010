@@ -21,9 +21,11 @@ stm32f4 = { version = "0.16.0", default-features = false, features = ["stm32f407
 stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f407"] }
 panic-halt = "1.0.0"
 libm = "0.2"
+smoltcp = { version = "0.14.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-tcp"] }
+
+stm32f4-crc32 = { path = "crates/stm32f4-crc32" }
 littlefs2 = { path = "vendor/littlefs2", default-features = false, features = ["c-stubs"] }
 zmodem2 = { path = "vendor/zmodem2", default-features = false }
-smoltcp = { version = "0.14.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-tcp"] }
 
 [profile.release]
 codegen-units = 1

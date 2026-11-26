@@ -40,6 +40,9 @@ name = "integration"
 path = "tests/integration.rs"
 harness = true
 
+[dependencies.stm32f4-crc32]
+path = "../../crates/stm32f4-crc32"
+
 [dependencies.bitflags]
 version = "2.4"
 

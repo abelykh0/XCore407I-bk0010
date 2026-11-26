@@ -21,6 +21,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let mut builder = cc::Build::new();
+    if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("arm") {
+        builder.define("HARDWARE_CRC32", None);
+    }
     builder
         .flag("-std=c99")
         .flag("-DLFS_NO_DEBUG")

@@ -29,6 +29,21 @@ pub const SYSTEM_CORE_CLOCK_HZ: u32 = 168_000_000;
 pub const AUDIO_KHZ: u32 = 24;
 pub const AUDIO_SAMPLE_RATE_HZ: u32 = AUDIO_KHZ * 1_000;
 
+/// Incremental littlefs CRC hook backed by the shared STM32F4 CRC unit.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xcore_lfs_crc32_update(
+    crc: u32,
+    buffer: *const core::ffi::c_void,
+    size: usize,
+) -> u32 {
+    if size == 0 {
+        return stm32f4_crc32::update(crc, &[]);
+    }
+    // SAFETY: littlefs passes a readable buffer containing size bytes.
+    let data = unsafe { core::slice::from_raw_parts(buffer.cast::<u8>(), size) };
+    stm32f4_crc32::update(crc, data)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_audio_sample_rate_hz() -> u32 {
     AUDIO_SAMPLE_RATE_HZ
