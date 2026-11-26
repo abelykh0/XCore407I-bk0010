@@ -16,6 +16,7 @@ nand-diagnostics = []
 
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+stm32f4-crc32 = { path = "vendor/stm32f4-crc32" }
 cortex-m-rt = "0.7"
 stm32f4 = { version = "0.16.0", default-features = false, features = ["stm32f407", "rt"] }
 stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f407"] }
