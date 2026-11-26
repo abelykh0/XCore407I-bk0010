@@ -600,8 +600,9 @@ mod tests {
         assert_eq!(software.calc32.finalize(), expected);
         let software_stats = rx_crc32_diagnostics();
         assert_eq!(software_stats.1, data.len() as u32);
-        assert_eq!(software_stats.2, data.len() as u32);
-        assert_eq!(software_stats.3, 0);
+        assert_eq!(software_stats.2, 0);
+        assert_eq!(software_stats.3, data.len() as u32);
+        assert_eq!(software_stats.4, 0);
 
         set_rx_crc32_hardware(true);
         reset_rx_crc32_diagnostics();
@@ -614,12 +615,13 @@ mod tests {
         let hardware_stats = rx_crc32_diagnostics();
         assert_eq!(hardware_stats.1, data.len() as u32);
         assert_eq!(hardware_stats.2, 0);
-        assert_eq!(hardware_stats.3, data.len() as u32);
-        assert!(hardware_stats.4 >= 1);
+        assert_eq!(hardware_stats.3, 0);
+        assert_eq!(hardware_stats.4, data.len() as u32);
+        assert!(hardware_stats.5 >= 1);
         #[cfg(target_arch = "arm")]
-        assert_eq!(hardware_stats.7, (data.len() / 4) as u32);
+        assert_eq!(hardware_stats.8, (data.len() / 4) as u32);
         #[cfg(not(target_arch = "arm"))]
-        assert_eq!(hardware_stats.8, data.len() as u32);
+        assert_eq!(hardware_stats.9, data.len() as u32);
 
         // Do not leak the runtime selection into unrelated tests.
         set_rx_crc32_hardware(false);
