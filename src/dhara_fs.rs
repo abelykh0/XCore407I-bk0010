@@ -69,7 +69,7 @@ static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
 
 static GC_ACTIVE: AtomicBool = AtomicBool::new(false);
 static GC_ERASE_BLOCKS: AtomicU32 = AtomicU32::new(0);
-static GC_COPIED_PAGES: AtomicU32 = AtomicU32::new(0);
+static GC_PROGRAMMED_PAGES: AtomicU32 = AtomicU32::new(0);
 
 static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
@@ -291,7 +291,7 @@ pub extern "C" fn dhara_nand_prog(
     let input = unsafe { slice::from_raw_parts(data, PAGE_SIZE) };
     if nand_fs::program_physical_page(page, input) {
         if GC_ACTIVE.load(Ordering::Relaxed) {
-            GC_COPIED_PAGES.fetch_add(1, Ordering::Relaxed);
+            GC_PROGRAMMED_PAGES.fetch_add(1, Ordering::Relaxed);
         }
         unsafe { set_error(error, 0); }
         0
@@ -377,7 +377,7 @@ pub extern "C" fn dhara_nand_copy(
         return -1;
     }
     if GC_ACTIVE.load(Ordering::Relaxed) {
-        GC_COPIED_PAGES.fetch_add(1, Ordering::Relaxed);
+        GC_PROGRAMMED_PAGES.fetch_add(1, Ordering::Relaxed);
     }
     unsafe { set_error(error, 0); }
     0
@@ -390,7 +390,7 @@ pub(crate) fn map_status() -> (u32, u32) {
 /// Reclaim one Dhara journal block, preserving all currently mapped sectors.
 pub(crate) fn map_gc() -> (bool, u32, u32, u32) {
     GC_ERASE_BLOCKS.store(0, Ordering::Relaxed);
-    GC_COPIED_PAGES.store(0, Ordering::Relaxed);
+    GC_PROGRAMMED_PAGES.store(0, Ordering::Relaxed);
     GC_ACTIVE.store(true, Ordering::Release);
     let mut error = 0i32;
     let result = unsafe { xcore_dhara_map_gc(&mut error) };
@@ -399,7 +399,7 @@ pub(crate) fn map_gc() -> (bool, u32, u32, u32) {
         result == 0,
         error as u32,
         GC_ERASE_BLOCKS.load(Ordering::Acquire),
-        GC_COPIED_PAGES.load(Ordering::Acquire),
+        GC_PROGRAMMED_PAGES.load(Ordering::Acquire),
     )
 }
 
