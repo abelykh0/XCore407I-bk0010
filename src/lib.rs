@@ -2,6 +2,7 @@
 #![allow(suspicious_runtime_symbol_definitions)]
 
 pub mod camera;
+pub mod crc32;
 pub mod emulator;
 pub mod format;
 pub mod nand_fs;
