@@ -397,6 +397,42 @@ impl RxCrc {
         }
         Ok(Some(()))
     }
+
+    #[test]
+    fn receive_crc32_software_and_batched_modes_match() {
+        let data: [u8; 257] = core::array::from_fn(|i| (i as u8).wrapping_mul(37));
+        let expected = crc::crc32_iso_hdlc(&data);
+
+        set_rx_crc32_hardware(false);
+        reset_rx_crc32_diagnostics();
+        let mut software = RxCrc::new();
+        for &byte in &data {
+            software.update(byte, Encoding::ZBIN32);
+        }
+        assert_eq!(software.calc32.finalize(), expected);
+        let software_stats = rx_crc32_diagnostics();
+        assert_eq!(software_stats.1, data.len() as u32);
+        assert_eq!(software_stats.2, data.len() as u32);
+        assert_eq!(software_stats.3, 0);
+
+        set_rx_crc32_hardware(true);
+        reset_rx_crc32_diagnostics();
+        let mut hardware = RxCrc::new();
+        for &byte in &data {
+            hardware.update(byte, Encoding::ZBIN32);
+        }
+        hardware.flush_crc32_batch();
+        assert_eq!(hardware.calc32.finalize(), expected);
+        let hardware_stats = rx_crc32_diagnostics();
+        assert_eq!(hardware_stats.1, data.len() as u32);
+        assert_eq!(hardware_stats.2, 0);
+        assert_eq!(hardware_stats.3, data.len() as u32);
+        assert!(hardware_stats.4 >= 1);
+
+        // Do not leak the runtime selection into unrelated tests.
+        set_rx_crc32_hardware(false);
+        reset_rx_crc32_diagnostics();
+    }
 }
 
 pub(crate) fn read_byte_unescaped_stateful<P>(
