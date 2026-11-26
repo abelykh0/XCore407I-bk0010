@@ -11,15 +11,33 @@
 #ifndef LFS_CONFIG
 
 
-// The application supplies the STM32F4 hardware-backed implementation.
-// It preserves littlefs's incremental, unfinalized CRC state convention.
+// Use the STM32F4 CRC peripheral when requested. Keep littlefs's
+// original nibble-table implementation as the portable fallback.
 #ifndef LFS_CRC
+#ifdef HARDWARE_CRC32
 extern uint32_t xcore_lfs_crc32_update(
         uint32_t crc, const void *buffer, size_t size);
 
 uint32_t lfs_crc(uint32_t crc, const void *buffer, size_t size) {
     return xcore_lfs_crc32_update(crc, buffer, size);
 }
+#else
+uint32_t lfs_crc(uint32_t crc, const void *buffer, size_t size) {
+    const uint8_t *data = (const uint8_t *)buffer;
+    static const uint32_t rtable[16] = {
+        0x00000000, 0x1db71064, 0x3b6e20c8, 0x26d930ac,
+        0x76dc4190, 0x6b6b51f4, 0x4db26158, 0x5005713c,
+        0xedb88320, 0xf00f9344, 0xd6d6a3e8, 0xcb61b38c,
+        0x9b64c2b0, 0x86d3d2d4, 0xa00ae278, 0xbdbdf21c,
+    };
+
+    for (size_t i = 0; i < size; i++) {
+        crc = (crc >> 4) ^ rtable[(crc ^ data[i]) & 0xf];
+        crc = (crc >> 4) ^ rtable[(crc ^ (data[i] >> 4)) & 0xf];
+    }
+    return crc;
+}
+#endif
 #endif
 
 
