@@ -30,6 +30,7 @@
 mod api;
 mod buffer;
 mod crc;
+pub use crc::crc32_iso_hdlc;
 mod error;
 mod file;
 mod header;
