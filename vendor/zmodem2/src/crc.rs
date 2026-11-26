@@ -15,14 +15,8 @@ pub const fn crc16_xmodem(data: &[u8]) -> u16 {
 
 /// Computes the CRC-32-ISO-HDLC checksum.
 #[must_use]
-pub const fn crc32_iso_hdlc(data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFF_FFFF;
-    let mut i = 0;
-    while i < data.len() {
-        crc = crc32_update(crc, data[i]);
-        i += 1;
-    }
-    !crc
+pub fn crc32_iso_hdlc(data: &[u8]) -> u32 {
+    stm32f4_crc32::checksum(data)
 }
 
 /// A stateful, iterative CRC-16-XMODEM calculator.
@@ -39,9 +33,7 @@ impl Crc16 {
 
     /// Updates the CRC state with a slice of bytes.
     pub fn update(&mut self, data: &[u8]) {
-        for &byte in data {
-            self.update_byte(byte);
-        }
+        self.crc = stm32f4_crc32::update(self.crc, data);
     }
 
     /// Updates the CRC state with a single byte.
