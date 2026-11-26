@@ -26,7 +26,8 @@ pub(super) fn handle(
     } else if command_is(line, b"ZCRC STATUS") {
         let (
             hardware,
-            bytes,
+            crc32_bytes,
+            crc16_bytes,
             software_bytes,
             hardware_bytes,
             batches,
@@ -37,8 +38,10 @@ pub(super) fn handle(
         ) = zmodem2::rx_crc32_diagnostics();
         write_status(b"\r\nZMODEM receive CRC32: mode=");
         write_status(if hardware { b"hardware\r\n" } else { b"software\r\n" });
-        write_status(b"  crc_input_bytes=");
-        write_decimal(bytes as usize);
+        write_status(b"  crc32_input_bytes=");
+        write_decimal(crc32_bytes as usize);
+        write_status(b" crc16_input_bytes=");
+        write_decimal(crc16_bytes as usize);
         write_status(b" software_bytes=");
         write_decimal(software_bytes as usize);
         write_status(b" batched_bytes=");
