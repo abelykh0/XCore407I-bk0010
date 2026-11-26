@@ -36,7 +36,6 @@ pub(crate) const SAVE_RAM_START: usize = 0x0200;
 pub(crate) const SAVE_RAM_NORMAL_LENGTH: usize = 0x3E00; // 0x0200..0x3FFF
 pub(crate) const SAVE_RAM_EXTENDED_LENGTH: usize = 0x6E00; // 0x0200..0x6FFF
 pub(crate) const MAX_BROWSER_FILENAME: usize = 30; // includes the .bin extension
-pub(crate) const SAVE_NAME_CAPACITY: usize = MAX_BROWSER_FILENAME - 4;
 pub(crate) const MAX_BROWSER_FILES: usize = 30;
 pub(crate) const MAX_BROWSER_PATH: usize = MAX_BROWSER_FILENAME + 2; // '/' + name + NUL
 
@@ -83,8 +82,65 @@ pub(crate) static SAVE_DIALOG_DIRTY: AtomicBool = AtomicBool::new(false);
 pub(crate) static SAVE_DIALOG_RESULT: AtomicU8 = AtomicU8::new(0);
 pub(crate) static SAVE_ERROR: AtomicI32 = AtomicI32::new(0);
 pub(crate) static SAVE_OVERWRITE: AtomicBool = AtomicBool::new(false);
-pub(crate) static mut SAVE_FILENAME: [u8; SAVE_NAME_CAPACITY] = [0; SAVE_NAME_CAPACITY];
-pub(crate) static mut SAVE_FILENAME_LEN: usize = 0;
+static mut SAVE_FILE: BrowserFile = BrowserFile::EMPTY;
+
+fn reset_save_file() {
+    cortex_m::interrupt::free(|_| unsafe {
+        core::ptr::addr_of_mut!(SAVE_FILE).write(BrowserFile::EMPTY);
+    });
+}
+
+pub(crate) fn begin_save_filename() {
+    cortex_m::interrupt::free(|_| unsafe {
+        let file = &mut *core::ptr::addr_of_mut!(SAVE_FILE);
+        file.path[0] = b'/';
+        file.path[1..5].copy_from_slice(b".bin");
+        file.path[5] = 0;
+        file.len = 6;
+    });
+}
+
+pub(crate) fn save_filename_is_empty() -> bool {
+    cortex_m::interrupt::free(|_| unsafe {
+        (*core::ptr::addr_of!(SAVE_FILE)).len == 6
+    })
+}
+
+pub(crate) fn save_filename_append(ch: u8) -> bool {
+    cortex_m::interrupt::free(|_| unsafe {
+        let file = &mut *core::ptr::addr_of_mut!(SAVE_FILE);
+        let len = file.len as usize;
+        if len < 6 || len >= MAX_BROWSER_PATH {
+            return false;
+        }
+        let extension_start = len - 5;
+        file.path.copy_within(extension_start..len, extension_start + 1);
+        file.path[extension_start] = ch;
+        file.len += 1;
+        true
+    })
+}
+
+pub(crate) fn save_filename_backspace() -> bool {
+    cortex_m::interrupt::free(|_| unsafe {
+        let file = &mut *core::ptr::addr_of_mut!(SAVE_FILE);
+        let len = file.len as usize;
+        if len <= 6 || len > MAX_BROWSER_PATH {
+            return false;
+        }
+        let extension_start = len - 5;
+        file.path.copy_within(extension_start..len, extension_start - 1);
+        file.path[len - 1] = 0;
+        file.len -= 1;
+        true
+    })
+}
+
+fn save_file_snapshot() -> BrowserFile {
+    cortex_m::interrupt::free(|_| unsafe {
+        core::ptr::addr_of!(SAVE_FILE).read()
+    })
+}
 
 /// Cancel every host-side modal operation associated with the BK emulator.
 /// This deliberately leaves the NAND filesystem and USB transports intact.
@@ -96,10 +152,7 @@ pub(crate) fn reset_emulator_ui() {
     SAVE_DIALOG_RESULT.store(0, Ordering::Release);
     SAVE_ERROR.store(0, Ordering::Release);
     SAVE_OVERWRITE.store(false, Ordering::Release);
-    unsafe {
-        core::ptr::addr_of_mut!(SAVE_FILENAME).cast::<u8>().write_bytes(0, SAVE_NAME_CAPACITY);
-        SAVE_FILENAME_LEN = 0;
-    }
+    reset_save_file();
     FORMAT_STATE.store(FORMAT_IDLE, Ordering::Release);
     FORMAT_ERROR.store(0, Ordering::Release);
     INIT_STATE.store(INIT_IDLE, Ordering::Release);
@@ -204,27 +257,17 @@ pub(crate) fn draw_file_browser(
     show_file_browser_line(31, b"\x18/\x19 MOVE  ENTER LOAD  ESC CANCEL", false);
 }
 
-/// Build a root-level filename from the name entered in the F3 save dialog.
-pub(crate) unsafe fn build_save_path(path: &mut [u8; MAX_BROWSER_PATH]) -> usize {
-    let name_len = unsafe { SAVE_FILENAME_LEN };
-    if name_len == 0 || name_len > SAVE_NAME_CAPACITY {
+/// Copy the complete root-level save path from a stable filename snapshot.
+pub(crate) fn build_save_path(
+    file: &BrowserFile,
+    path: &mut [u8; MAX_BROWSER_PATH],
+) -> usize {
+    let len = file.len as usize;
+    if len <= 6 || len > path.len() || file.path[0] != b'/' || file.path[len - 1] != 0 {
         return 0;
     }
-    let total = 1 + name_len + 4 + 1;
-    if total > path.len() {
-        return 0;
-    }
-    path[0] = b'/';
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
-            path.as_mut_ptr().add(1),
-            name_len,
-        );
-    }
-    path[1 + name_len..1 + name_len + 4].copy_from_slice(b".bin");
-    path[total - 1] = 0;
-    total
+    path[..len].copy_from_slice(&file.path[..len]);
+    len
 }
 
 pub(crate) fn save_file_exists(path_bytes: &[u8]) -> bool {
@@ -326,37 +369,21 @@ pub(crate) fn save_ram_to_path(
 }
 
 /// Draw the F3 filename entry or overwrite confirmation screen.
-pub(crate) unsafe fn draw_save_dialog(state: u8) {
+pub(crate) fn draw_save_dialog(state: u8, file: &BrowserFile) {
     clear_demo_canvas(0);
     show_file_browser_line(0, b"SAVE RAM IMAGE", false);
+    let len = (file.len as usize).saturating_sub(2).min(MAX_BROWSER_FILENAME);
+    let filename = &file.path[1..1 + len];
+    let mut line = [b' '; 64];
+    line[..6].copy_from_slice(b"FILE: ");
+    line[6..6 + len].copy_from_slice(filename);
+
     if state == SAVE_DIALOG_CONFIRM {
-        let mut line = [b' '; 64];
-        line[..6].copy_from_slice(b"FILE: ");
-        let len = unsafe { SAVE_FILENAME_LEN }.min(SAVE_NAME_CAPACITY);
-        let filename = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
-                len,
-            )
-        };
-        line[6..6 + len].copy_from_slice(filename);
-        line[6 + len..10 + len].copy_from_slice(b".bin");
         show_file_browser_line(2, &line, false);
         show_file_browser_line(4, b"FILE EXISTS - OVERWRITE? Y/N", true);
         show_file_browser_line(27, b"Y OVERWRITE  N/ESC CANCEL", false);
     } else {
         show_file_browser_line(2, b"ENTER FILE NAME (NO EXTENSION)", false);
-        let mut line = [b' '; 64];
-        line[..6].copy_from_slice(b"FILE: ");
-        let len = unsafe { SAVE_FILENAME_LEN }.min(SAVE_NAME_CAPACITY);
-        let filename = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(SAVE_FILENAME).cast::<u8>(),
-                len,
-            )
-        };
-        line[6..6 + len].copy_from_slice(filename);
-        line[6 + len..10 + len].copy_from_slice(b".bin");
         show_file_browser_line(4, &line, true);
         show_file_browser_line(27, b"ENTER SAVE  BACKSPACE EDIT  ESC CANCEL", false);
     }
@@ -519,7 +546,8 @@ pub(crate) fn process_save_dialog() {
 if save_state == SAVE_DIALOG_CHECK {
     show_file_browser_line(27, b"F3: BUILDING SAVE PATH", false);
     let mut path = [0u8; MAX_BROWSER_PATH];
-    let path_len = unsafe { build_save_path(&mut path) };
+    let save_file = save_file_snapshot();
+    let path_len = build_save_path(&save_file, &mut path);
     if path_len == 0 {
         show_file_browser_line(27, b"F3: INVALID SAVE PATH", false);
         SAVE_DIALOG_STATE.store(SAVE_DIALOG_IDLE, Ordering::Release);
@@ -541,7 +569,8 @@ if save_state == SAVE_DIALOG_CHECK {
 if SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_WRITE {
     show_file_browser_line(27, b"F3: PREPARING NAND WRITE", false);
     let mut path = [0u8; MAX_BROWSER_PATH];
-    let path_len = unsafe { build_save_path(&mut path) };
+    let save_file = save_file_snapshot();
+    let path_len = build_save_path(&save_file, &mut path);
     let overwrite = SAVE_OVERWRITE.load(Ordering::Acquire);
     show_file_browser_line(27, b"F3: WRITING RAM TO NAND", false);
     let result = if path_len == 0 {
@@ -583,7 +612,8 @@ if SAVE_DIALOG_STATE.load(Ordering::Acquire) == SAVE_DIALOG_WRITE {
 if SAVE_DIALOG_DIRTY.swap(false, Ordering::AcqRel) {
     let state = SAVE_DIALOG_STATE.load(Ordering::Acquire);
     if state == SAVE_DIALOG_INPUT || state == SAVE_DIALOG_CONFIRM {
-        unsafe { draw_save_dialog(state); }
+        let save_file = save_file_snapshot();
+        draw_save_dialog(state, &save_file);
     }
 }
 

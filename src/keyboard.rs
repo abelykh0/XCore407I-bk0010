@@ -4,9 +4,9 @@ use crate::file_browser::{
     FILE_BROWSER_ACTIVE, FILE_BROWSER_ACTION, FILE_BROWSER_OPEN, FILE_BROWSER_UP,
     FILE_BROWSER_DOWN, FILE_BROWSER_ENTER, FILE_BROWSER_ESCAPE,
     SAVE_DIALOG_IDLE, SAVE_DIALOG_INPUT, SAVE_DIALOG_CHECK, SAVE_DIALOG_CONFIRM,
-    SAVE_DIALOG_WRITE, SAVE_RESULT_CANCELLED, SAVE_NAME_CAPACITY,
-    SAVE_FILENAME, SAVE_FILENAME_LEN, SAVE_DIALOG_RESULT, SAVE_DIALOG_STATE,
-    SAVE_DIALOG_DIRTY, SAVE_OVERWRITE,
+    SAVE_DIALOG_WRITE, SAVE_RESULT_CANCELLED, SAVE_DIALOG_RESULT, SAVE_DIALOG_STATE,
+    SAVE_DIALOG_DIRTY, SAVE_OVERWRITE, begin_save_filename, save_filename_is_empty,
+    save_filename_append, save_filename_backspace,
     FORMAT_STATE, FORMAT_CONFIRM, FORMAT_CONFIRM_FINAL, FORMAT_REQUEST,
     FORMAT_CANCELLED,
     INIT_STATE, INIT_CONFIRM, INIT_CONFIRM_FINAL, INIT_REQUEST, INIT_CANCELLED,
@@ -403,7 +403,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
         if save_state == SAVE_DIALOG_INPUT {
             match key {
                 0x28 => {
-                    if unsafe { SAVE_FILENAME_LEN } != 0 {
+                    if !save_filename_is_empty() {
                         SAVE_DIALOG_STATE.store(SAVE_DIALOG_CHECK, Ordering::Release);
                     }
                 }
@@ -416,15 +416,8 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
                         KEY_REPEAT_KEY.store(key, Ordering::Release);
                         KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INITIAL_DELAY_MS), Ordering::Release);
                     }
-                    unsafe {
-                    if SAVE_FILENAME_LEN != 0 {
-                        SAVE_FILENAME_LEN -= 1;
-                        core::ptr::addr_of_mut!(SAVE_FILENAME)
-                            .cast::<u8>()
-                            .add(SAVE_FILENAME_LEN)
-                            .write(0);
+                    if save_filename_backspace() {
                         SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
-                    }
                     }
                 },
                 _ => {
@@ -434,15 +427,8 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
                                 KEY_REPEAT_KEY.store(key, Ordering::Release);
                                 KEY_REPEAT_DEADLINE.store(now.wrapping_add(KEY_REPEAT_INITIAL_DELAY_MS), Ordering::Release);
                             }
-                            unsafe {
-                                if SAVE_FILENAME_LEN < SAVE_NAME_CAPACITY {
-                                    core::ptr::addr_of_mut!(SAVE_FILENAME)
-                                        .cast::<u8>()
-                                        .add(SAVE_FILENAME_LEN)
-                                        .write(ch);
-                                    SAVE_FILENAME_LEN += 1;
-                                    SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
-                                }
+                            if save_filename_append(ch) {
+                                SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
                             }
                         }
                     }
@@ -560,14 +546,7 @@ fn process_boot_keyboard_report(dev_addr: u8, instance: u8, report: &[u8], allow
         // F3 starts a RAM save; the extension is appended automatically.
         if key == 0x3c {
             keyboard_queue_discard();
-            unsafe {
-                core::ptr::write_bytes(
-                    core::ptr::addr_of_mut!(SAVE_FILENAME).cast::<u8>(),
-                    0,
-                    SAVE_NAME_CAPACITY,
-                );
-                SAVE_FILENAME_LEN = 0;
-            }
+            begin_save_filename();
             SAVE_DIALOG_RESULT.store(0, Ordering::Release);
             SAVE_DIALOG_STATE.store(SAVE_DIALOG_INPUT, Ordering::Release);
             SAVE_DIALOG_DIRTY.store(true, Ordering::Release);
