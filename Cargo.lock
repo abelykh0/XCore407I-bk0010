@@ -404,6 +404,7 @@ version = "0.4.0"
 dependencies = [
  "bindgen 0.70.1",
  "cc",
+ "stm32f4-crc32",
 ]
 
 [[package]]
@@ -606,6 +607,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "stm32f4-crc32"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+]
+
+[[package]]
 name = "stm32f4"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -754,4 +762,5 @@ version = "0.7.3"
 dependencies = [
  "bitflags 2.13.2",
  "hex",
+ "stm32f4-crc32",
 ]
