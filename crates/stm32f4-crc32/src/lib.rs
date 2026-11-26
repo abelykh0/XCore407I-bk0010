@@ -9,18 +9,21 @@
 
 const INITIAL: u32 = 0xFFFF_FFFF;
 
+// Same 16-entry (64-byte) nibble table used by littlefs. This replaces a
+// 256-entry (1 KiB) byte table while remaining substantially faster than
+// the previous bit-at-a-time fallback.
+const CRC32_NIBBLE_TABLE: [u32; 16] = [
+    0x0000_0000, 0x1db7_1064, 0x3b6e_20c8, 0x26d9_30ac,
+    0x76dc_4190, 0x6b6b_51f4, 0x4db2_6158, 0x5005_713c,
+    0xedb8_8320, 0xf00f_9344, 0xd6d6_a3e8, 0xcb61_b38c,
+    0x9b64_c2b0, 0x86d3_d2d4, 0xa00a_e278, 0xbdbd_f21c,
+];
+
 #[inline]
 fn software_update(mut crc: u32, data: &[u8]) -> u32 {
-    // Bitwise fallback avoids a lookup table in flash (.crctable.1).
     for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xEDB8_8320
-            } else {
-                crc >> 1
-            };
-        }
+        crc = (crc >> 4) ^ CRC32_NIBBLE_TABLE[((crc ^ byte as u32) & 0x0f) as usize];
+        crc = (crc >> 4) ^ CRC32_NIBBLE_TABLE[((crc ^ (byte as u32 >> 4)) & 0x0f) as usize];
     }
     crc
 }
@@ -29,7 +32,7 @@ fn software_update(mut crc: u32, data: &[u8]) -> u32 {
 ///
 /// The returned state can be passed to a later call as the seed. The hardware
 /// peripheral is used when it can continue from the supplied state; otherwise
-/// the exact software implementation is used.
+/// the compact littlefs-compatible software implementation is used.
 pub fn update(seed: u32, data: &[u8]) -> u32 {
     #[cfg(target_arch = "arm")]
     {
