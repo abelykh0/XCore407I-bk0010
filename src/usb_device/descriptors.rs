@@ -128,7 +128,10 @@ const fn push_uvc_descriptors<const N: usize>(
     push_u8(descriptor, offset, 1);
 }
 
-const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPTOR_LEN] {
+const fn build_cdc_configuration_descriptor(
+    frame_bit_rate: u32,
+    frame_interval_100ns: u32,
+) -> [u8; CDC_CONFIGURATION_DESCRIPTOR_LEN] {
     let mut descriptor = [0u8; CDC_CONFIGURATION_DESCRIPTOR_LEN];
     let mut offset = 0usize;
 
@@ -140,8 +143,8 @@ const fn build_cdc_configuration_descriptor() -> [u8; CDC_CONFIGURATION_DESCRIPT
     push_uvc_descriptors(
         &mut descriptor,
         &mut offset,
-        FRAME_BYTES * 8,
-        10_000_000,
+        frame_bit_rate,
+        frame_interval_100ns,
     );
 
     // CDC ACM Interface Association Descriptor (IAD).
@@ -312,8 +315,11 @@ static DEVICE_QUALIFIER_DESCRIPTOR: UsbAligned<[u8; 10]> = UsbAligned([
     10, 0x06, 0x10, 0x02, 0xef, 0x02, 0x01, 64, 1, 0,
 ]);
 
-static mut CDC_CONFIGURATION_DESCRIPTOR: UsbAligned<[u8; CDC_CONFIGURATION_DESCRIPTOR_LEN]> =
-    UsbAligned(build_cdc_configuration_descriptor());
+static CDC_CONFIGURATION_DESCRIPTOR_1FPS: UsbAligned<[u8; CDC_CONFIGURATION_DESCRIPTOR_LEN]> =
+    UsbAligned(build_cdc_configuration_descriptor(FRAME_BYTES * 8, 10_000_000));
+
+static CDC_CONFIGURATION_DESCRIPTOR_25FPS: UsbAligned<[u8; CDC_CONFIGURATION_DESCRIPTOR_LEN]> =
+    UsbAligned(build_cdc_configuration_descriptor(FRAME_BYTES * 8 * 25, 400_000));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_cb() -> *const u8 {
@@ -332,30 +338,12 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
         return NORMAL_CONFIGURATION_DESCRIPTOR.0.as_ptr();
     }
 
-    // Update only the CDC-mode UVC frame interval and bitrate before enumeration.
-    let interval = active_frame_interval_100ns();
-    let bitrate = FRAME_BYTES * 8 * active_frame_rate_fps();
-    let descriptor = unsafe {
-        core::ptr::addr_of_mut!(CDC_CONFIGURATION_DESCRIPTOR.0).cast::<u8>()
-    };
-    unsafe {
-        // Uncompressed frame descriptor starts at byte 106:
-        // dwMinBitRate=115, dwMaxBitRate=119,
-        // dwDefaultFrameInterval=127, dwFrameInterval[0]=132.
-        for (offset, value) in [
-            (115usize, bitrate),
-            (119, bitrate),
-            (127, interval),
-            (132, interval),
-        ] {
-            core::ptr::copy_nonoverlapping(
-                value.to_le_bytes().as_ptr(),
-                descriptor.add(offset),
-                4,
-            );
-        }
+    // Select the immutable CDC descriptor matching the active frame rate.
+    if active_frame_rate_fps() >= 25 {
+        CDC_CONFIGURATION_DESCRIPTOR_25FPS.0.as_ptr()
+    } else {
+        CDC_CONFIGURATION_DESCRIPTOR_1FPS.0.as_ptr()
     }
-    descriptor
 }
 
 #[unsafe(no_mangle)]
