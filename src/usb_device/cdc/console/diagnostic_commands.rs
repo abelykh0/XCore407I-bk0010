@@ -87,6 +87,7 @@ pub(super) fn handle(
 ) -> bool {
     if command_is(line, b"CRC32TEST") {
         run_crc32_test();
+        return true;
     } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
         write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
