@@ -7,7 +7,7 @@
 
 use core::ffi::c_int;
 use core::slice;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use littlefs2::{
     consts::{U2048, U32},
@@ -42,7 +42,7 @@ unsafe extern "C" {
     fn xcore_dhara_map_read(sector: u32, data: *mut u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_trim(sector: u32, error: *mut i32) -> c_int;
-    fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
+    fn xcore_dhara_map_sync(error: *mut i32) -> c_int;\n    fn xcore_dhara_map_gc(error: *mut i32) -> c_int;\n    fn xcore_dhara_map_size() -> u32;
     fn xcore_dhara_map_sync_diagnostic(stage: *mut u32, page: *mut u32, error: *mut u32, steps: *mut u32);
 }
 
@@ -65,7 +65,7 @@ static mut NAND_PAGE_SCRATCH: AlignedNandPageScratch =
 #[unsafe(link_section = ".ccmram.nand")]
 static mut VOLUME_MARKER_BUFFER: [u8; PAGE_SIZE] = [0xFF; PAGE_SIZE];
 
-static STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
+static GC_ACTIVE: AtomicBool = AtomicBool::new(false);\nstatic GC_ERASE_BLOCKS: AtomicU32 = AtomicU32::new(0);\nstatic GC_COPIED_PAGES: AtomicU32 = AtomicU32::new(0);\n\nstatic STORAGE_IO_OPERATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_LOCATION: AtomicU32 = AtomicU32::new(0);
 static STORAGE_IO_ERROR: AtomicU32 = AtomicU32::new(0);
 
@@ -256,7 +256,7 @@ pub extern "C" fn dhara_nand_erase(
         unsafe { set_error(error, DHARA_E_BAD_BLOCK); }
         return -1;
     }
-    if nand_fs::erase_physical_block(block as u16) {
+    if nand_fs::erase_physical_block(block as u16) {\n        if GC_ACTIVE.load(Ordering::Relaxed) {\n            GC_ERASE_BLOCKS.fetch_add(1, Ordering::Relaxed);\n        }
         unsafe { set_error(error, 0); }
         0
     } else {
@@ -280,7 +280,7 @@ pub extern "C" fn dhara_nand_prog(
         return -1;
     }
     let input = unsafe { slice::from_raw_parts(data, PAGE_SIZE) };
-    if nand_fs::program_physical_page(page, input) {
+    if nand_fs::program_physical_page(page, input) {\n        if GC_ACTIVE.load(Ordering::Relaxed) {\n            GC_COPIED_PAGES.fetch_add(1, Ordering::Relaxed);\n        }
         unsafe { set_error(error, 0); }
         0
     } else {
