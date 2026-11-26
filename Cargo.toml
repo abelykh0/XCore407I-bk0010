@@ -27,11 +27,10 @@ smoltcp = { version = "0.14.0", default-features = false, features = ["medium-et
 
 [profile.release]
 codegen-units = 1
-debug = 0
+debug = 1
 lto = true
 opt-level = 3
 panic = "abort"
-strip = true
 
 [profile.dev]
 debug = 2
