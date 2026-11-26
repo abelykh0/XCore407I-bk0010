@@ -5,7 +5,7 @@
 
 use crate::camera::{HEIGHT, WIDTH};
 use crate::usb_device::uvc::{
-    active_frame_interval_100ns, active_frame_rate_fps, FRAME_BIT_RATE, FRAME_BYTES,
+    active_frame_rate_fps, FRAME_BIT_RATE, FRAME_BYTES,
     ENDPOINT_IN, FRAME_INTERVAL_100NS, ISO_PACKETS_PER_MICROFRAME, MAX_PACKET_SIZE, NV12_GUID,
 };
 
