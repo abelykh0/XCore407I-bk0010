@@ -11,6 +11,11 @@ use crate::usb_device::uvc::{
 
 const CDC_CONFIGURATION_DESCRIPTOR_LEN: usize = 224;
 
+// USB descriptor pointers are also consumed by the DWC2 DMA path. Do not rely
+// on incidental linker placement or debug-build layout for their alignment.
+#[repr(align(4))]
+struct UsbAligned<T>(T);
+
 const fn push_u8<const N: usize>(
     descriptor: &mut [u8; N],
     offset: &mut usize,
@@ -276,43 +281,43 @@ const fn build_normal_configuration_descriptor() -> [u8; NORMAL_CONFIGURATION_DE
     descriptor
 }
 
-static NORMAL_CONFIGURATION_DESCRIPTOR: [u8; NORMAL_CONFIGURATION_DESCRIPTOR_LEN] =
-    build_normal_configuration_descriptor();
+static NORMAL_CONFIGURATION_DESCRIPTOR: UsbAligned<[u8; NORMAL_CONFIGURATION_DESCRIPTOR_LEN]> =
+    UsbAligned(build_normal_configuration_descriptor());
 
-static DEVICE_DESCRIPTOR: [u8; 18] = [
+static DEVICE_DESCRIPTOR: UsbAligned<[u8; 18]> = UsbAligned([
     18, 0x01, 0x10, 0x02, 0xef, 0x02, 0x01, 64,
     0x09, 0x12, 0x71, 0x40, 0x10, 0x00, 0, 0, 0, 1,
-];
+]);
 
 // usb-device emitted an empty language list because no device-level strings
 // were configured. Preserve that exact two-byte string descriptor.
-static EMPTY_LANGUAGE_DESCRIPTOR: [u16; 1] = [0x0302];
-static CAMERA_INTERFACE_STRING: [u16; 22] = [
+static EMPTY_LANGUAGE_DESCRIPTOR: UsbAligned<[u16; 1]> = UsbAligned([0x0302]);
+static CAMERA_INTERFACE_STRING: UsbAligned<[u16; 22]> = UsbAligned([
     0x032c,
     b'X' as u16, b'C' as u16, b'o' as u16, b'r' as u16, b'e' as u16,
     b'4' as u16, b'0' as u16, b'7' as u16, b'I' as u16, b' ' as u16,
     b'N' as u16, b'V' as u16, b'1' as u16, b'2' as u16, b' ' as u16,
     b'c' as u16, b'a' as u16, b'm' as u16, b'e' as u16, b'r' as u16, b'a' as u16,
-];
+]);
 
 // usb-device's BosWriter emits a BOS header plus a USB 2.0 Extension
 // capability with bmAttributes = 0.
-static BOS_DESCRIPTOR: [u8; 12] = [
+static BOS_DESCRIPTOR: UsbAligned<[u8; 12]> = UsbAligned([
     5, 0x0f, 12, 0, 1,
     7, 0x10, 2, 0, 0, 0, 0,
-];
+]);
 
 // Match usb-device's Device Qualifier for the high-speed composite device.
-static DEVICE_QUALIFIER_DESCRIPTOR: [u8; 10] = [
+static DEVICE_QUALIFIER_DESCRIPTOR: UsbAligned<[u8; 10]> = UsbAligned([
     10, 0x06, 0x10, 0x02, 0xef, 0x02, 0x01, 64, 1, 0,
-];
+]);
 
-static mut CDC_CONFIGURATION_DESCRIPTOR: [u8; CDC_CONFIGURATION_DESCRIPTOR_LEN] =
-    build_cdc_configuration_descriptor();
+static mut CDC_CONFIGURATION_DESCRIPTOR: UsbAligned<[u8; CDC_CONFIGURATION_DESCRIPTOR_LEN]> =
+    UsbAligned(build_cdc_configuration_descriptor());
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_cb() -> *const u8 {
-    DEVICE_DESCRIPTOR.as_ptr()
+    DEVICE_DESCRIPTOR.0.as_ptr()
 }
 
 #[unsafe(no_mangle)]
@@ -324,13 +329,15 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
     // Preserve the original UVC+UAC2 descriptor byte-for-byte in normal mode.
     // CDC mode uses its separate UVC+CDC configuration.
     if !crate::usb_device::uvc::cdc_mode_enabled() {
-        return NORMAL_CONFIGURATION_DESCRIPTOR.as_ptr();
+        return NORMAL_CONFIGURATION_DESCRIPTOR.0.as_ptr();
     }
 
     // Update only the CDC-mode UVC frame interval and bitrate before enumeration.
     let interval = active_frame_interval_100ns();
     let bitrate = FRAME_BYTES * 8 * active_frame_rate_fps();
-    let descriptor = core::ptr::addr_of_mut!(CDC_CONFIGURATION_DESCRIPTOR).cast::<u8>();
+    let descriptor = unsafe {
+        core::ptr::addr_of_mut!(CDC_CONFIGURATION_DESCRIPTOR.0).cast::<u8>()
+    };
     unsafe {
         // Uncompressed frame descriptor starts at byte 106:
         // dwMinBitRate=115, dwMaxBitRate=119,
@@ -353,19 +360,19 @@ pub extern "C" fn tud_descriptor_configuration_cb(index: u8) -> *const u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_device_qualifier_cb() -> *const u8 {
-    DEVICE_QUALIFIER_DESCRIPTOR.as_ptr()
+    DEVICE_QUALIFIER_DESCRIPTOR.0.as_ptr()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_bos_cb() -> *const u8 {
-    BOS_DESCRIPTOR.as_ptr()
+    BOS_DESCRIPTOR.0.as_ptr()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn tud_descriptor_string_cb(index: u8, _lang_id: u16) -> *const u16 {
     match index {
-        0 => EMPTY_LANGUAGE_DESCRIPTOR.as_ptr(),
-        4 => CAMERA_INTERFACE_STRING.as_ptr(),
+        0 => EMPTY_LANGUAGE_DESCRIPTOR.0.as_ptr(),
+        4 => CAMERA_INTERFACE_STRING.0.as_ptr(),
         _ => core::ptr::null(),
     }
 }

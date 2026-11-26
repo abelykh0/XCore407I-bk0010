@@ -32,11 +32,16 @@ struct ParsedUvcFunction {
 static UVC_STATE_READY: AtomicBool = AtomicBool::new(false);
 static UVC_ENDPOINT_ALLOCATED: AtomicBool = AtomicBool::new(false);
 static mut UVC_STATE: MaybeUninit<UvcClass> = MaybeUninit::uninit();
-static mut UVC_ENDPOINT_DESCRIPTOR: [u8; 7] = [0; 7];
+// This descriptor is returned to TinyUSB and must remain DMA-safe even in
+// non-debug builds; the alignment is a type-level layout guarantee.
+#[repr(align(4))]
+struct UsbAligned<T>(T);
+
+static mut UVC_ENDPOINT_DESCRIPTOR: UsbAligned<[u8; 7]> = UsbAligned([0; 7]);
 // TinyUSB retains the EP0 response pointer until the control transfer completes.
 // Keep it separate from UVC_STATE, which is mutable by other USB callbacks.
-static mut UVC_CONTROL_RESPONSE: [u8; super::uvc::PROBE_LENGTH] =
-    [0; super::uvc::PROBE_LENGTH];
+static mut UVC_CONTROL_RESPONSE: UsbAligned<[u8; super::uvc::PROBE_LENGTH]> =
+    UsbAligned([0; super::uvc::PROBE_LENGTH]);
 
 unsafe extern "C" {
     fn xcore_usbd_edpt_iso_alloc(rhport: u8, ep_addr: u8, packet_size: u16) -> bool;
@@ -393,7 +398,7 @@ pub extern "C" fn xcore_tud_uvc_open(
     unsafe {
         core::ptr::copy_nonoverlapping(
             endpoint_desc,
-            core::ptr::addr_of_mut!(UVC_ENDPOINT_DESCRIPTOR).cast::<u8>(),
+            core::ptr::addr_of_mut!(UVC_ENDPOINT_DESCRIPTOR.0).cast::<u8>(),
             7,
         );
     }
@@ -453,7 +458,11 @@ fn submit_uvc_batch_isr(rhport: u8, batch: (&'static [u8], u8)) -> bool {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn xcore_tud_uvc_endpoint_descriptor() -> *const c_void {
-    core::ptr::addr_of!(UVC_ENDPOINT_DESCRIPTOR).cast::<u8>().cast::<c_void>()
+    unsafe {
+        core::ptr::addr_of!(UVC_ENDPOINT_DESCRIPTOR.0)
+            .cast::<u8>()
+            .cast::<c_void>()
+    }
 }
 
 /// C class-driver helpers: request decoding and EP0 stages live in TinyUSB's C layer.
@@ -513,7 +522,7 @@ pub extern "C" fn xcore_tud_uvc_class_control_in(
             Ok(ControlResponse::Data(data)) => {
                 let len = data.len();
                 unsafe {
-                    core::ptr::addr_of_mut!(UVC_CONTROL_RESPONSE)
+                    core::ptr::addr_of_mut!(UVC_CONTROL_RESPONSE.0)
                         .cast::<u8>()
                         .copy_from_nonoverlapping(data.as_ptr(), len);
                 }
@@ -526,7 +535,7 @@ pub extern "C" fn xcore_tud_uvc_class_control_in(
         return false;
     };
     unsafe {
-        data_out.write(core::ptr::addr_of!(UVC_CONTROL_RESPONSE).cast::<u8>());
+        data_out.write(core::ptr::addr_of!(UVC_CONTROL_RESPONSE.0).cast::<u8>());
         length_out.write(response_len as u16);
     }
     true
