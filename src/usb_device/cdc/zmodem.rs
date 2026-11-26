@@ -15,7 +15,7 @@ use zmodem2::{
     Action, Error as ZmodemError, Event, FileInfo, Position, Receiver, Sender, SUBPACKET_MAX_SIZE,
 };
 
-use crate::{camera, nand_fs::ActiveStorage, tusb};
+use crate::{nand_fs::ActiveStorage, tusb};
 
 const NAME_CAPACITY: usize = 64;
 const WIRE_CAPACITY: usize = 64;
@@ -39,6 +39,7 @@ pub struct State {
     send_size: u32,
     send_started_rtc_ms: u32,
     send_buffer: Option<NonNull<u8>>,
+    zmodem_storage: Option<crate::memory::CdcZmodemStorage>,
     send_wire: [u8; WIRE_CAPACITY],
     send_wire_len: usize,
     send_wire_pos: usize,
@@ -99,6 +100,7 @@ impl State {
             send_size: 0,
             send_started_rtc_ms: 0,
             send_buffer: None,
+            zmodem_storage: None,
             send_wire: [0; WIRE_CAPACITY],
             send_wire_len: 0,
             send_wire_pos: 0,
@@ -154,6 +156,7 @@ impl State {
         self.receiver.is_some()
             || self.sender.is_some()
             || self.send_buffer.is_some()
+            || self.zmodem_storage.is_some()
             || self.session_complete_pending
             || self.file_allocation.is_open()
     }
@@ -262,11 +265,9 @@ pub fn cancel(state: &mut State, fs: Option<&Filesystem<'_, ActiveStorage>>) {
     if let Some(fs) = fs {
         remove_partial_file(fs, state);
     }
-    let receiver_storage_claimed = state.receiver.take().is_some();
-    let send_storage_claimed = state.send_buffer.take().is_some();
-    if receiver_storage_claimed || send_storage_claimed {
-        camera::release_cdc_zmodem_storage();
-    }
+    state.receiver = None;
+    state.send_buffer = None;
+    state.zmodem_storage = None;
     state.sender = None;
     state.session_complete_pending = false;
     state.send_path_len = 0;
@@ -521,18 +522,19 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     if !storage_available || state.active() {
         return Err(());
     }
-    let (storage, storage_len) = camera::claim_cdc_zmodem_storage().ok_or(())?;
-    if storage_len < core::mem::size_of::<Receiver>()
-        || (storage as usize) % core::mem::align_of::<Receiver>() != 0
+    let mut storage_lease = crate::memory::claim_cdc_zmodem_storage().ok_or(())?;
+    let storage_ptr = storage_lease.as_mut_ptr();
+    if storage_lease.len() < core::mem::size_of::<Receiver>()
+        || (storage_ptr as usize) % core::mem::align_of::<Receiver>() != 0
     {
-        camera::release_cdc_zmodem_storage();
+        drop(storage_lease);
         return Err(());
     }
-    let storage = unsafe { &mut *storage.cast::<MaybeUninit<Receiver>>() };
+    let storage = unsafe { &mut *storage_ptr.cast::<MaybeUninit<Receiver>>() };
     let receiver = match Receiver::new_in_place(storage) {
         Ok(receiver) => receiver,
         Err(_) => {
-            camera::release_cdc_zmodem_storage();
+            drop(storage_lease);
             return Err(());
         }
     };
@@ -574,6 +576,7 @@ pub fn start(state: &mut State, storage_available: bool, now_ms: u32) -> Result<
     state.append_nand_calculated_ecc = 0;
     state.commit_stage = 0;
     state.commit_lfs_error = 0;
+    state.zmodem_storage = Some(storage_lease);
     state.receiver = Some(receiver);
     Ok(())
 }
@@ -600,13 +603,13 @@ pub fn start_send(
 
     // Reuse the receiver's canvas allocation as send staging storage. The
     // active-transfer check above guarantees the receiver is not using it.
-    let (send_buffer, send_buffer_len) = camera::claim_cdc_zmodem_storage().ok_or(5)?;
-    if send_buffer_len < FILE_BUFFER_CAPACITY {
-        camera::release_cdc_zmodem_storage();
+    let mut storage_lease = crate::memory::claim_cdc_zmodem_storage().ok_or(5)?;
+    if storage_lease.len() < FILE_BUFFER_CAPACITY {
+        drop(storage_lease);
         return Err(5);
     }
-    let Some(send_buffer) = NonNull::new(send_buffer) else {
-        camera::release_cdc_zmodem_storage();
+    let Some(send_buffer) = NonNull::new(storage_lease.as_mut_ptr()) else {
+        drop(storage_lease);
         return Err(5);
     };
 
@@ -616,10 +619,11 @@ pub fn start_send(
         state.file_allocation
             .open_with_options(fs, |options| options.read(true), path)
     }.is_err() {
-        camera::release_cdc_zmodem_storage();
+        drop(storage_lease);
         return Err(3);
     }
     state.send_buffer = Some(send_buffer);
+    state.zmodem_storage = Some(storage_lease);
 
     state.send_path = path_bytes;
     state.send_path_len = path_len;
@@ -840,9 +844,8 @@ fn service_sender(
             }
         }
         state.sender = None;
-        if state.send_buffer.take().is_some() {
-            camera::release_cdc_zmodem_storage();
-        }
+        state.send_buffer = None;
+        state.zmodem_storage = None;
         // SessionCompleted is finalized on the next service pass, which still
         // needs the filename for the completion message. Preserve it until then.
         if !state.session_complete_pending {
@@ -1268,6 +1271,6 @@ pub fn service(
             // reply. Keep it out of the console even when it arrives late.
             state.discard_input_until_ms = now_ms.wrapping_add(1_000);
         }
-        camera::release_cdc_zmodem_storage();
+        state.zmodem_storage = None;
     }
 }

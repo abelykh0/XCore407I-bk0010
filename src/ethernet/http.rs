@@ -4,8 +4,8 @@ use core::ptr::addr_of_mut;
 use super::http_storage_ptr;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
-pub(super) const HTTP_RX_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_RX_BYTES;
-pub(super) const HTTP_BODY_BUFFER_SIZE: usize = crate::camera::CDC_HTTP_BODY_BYTES;
+pub(super) const HTTP_RX_BUFFER_SIZE: usize = crate::memory::CDC_HTTP_RX_BYTES;
+pub(super) const HTTP_BODY_BUFFER_SIZE: usize = crate::memory::CDC_HTTP_BODY_BYTES;
 static HTTP_UPLOAD_DIAG_STAGE: AtomicU8 = AtomicU8::new(0);
 static HTTP_UPLOAD_DIAG_OFFSET: AtomicU32 = AtomicU32::new(0);
 static HTTP_UPLOAD_DIAG_TOTAL: AtomicU32 = AtomicU32::new(0);

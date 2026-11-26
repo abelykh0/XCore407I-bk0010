@@ -138,105 +138,18 @@ const TEXT_FOREGROUND_WHITE: u8 = 0b0011_1111;
 const TEXT_BACKGROUND_BLACK: u8 = 0;
 const TEXT_BACKGROUND_BLUE: u8 = 0b0001_0000;
 pub const CANVAS_BYTES: usize = WIDTH * CANVAS_HEIGHT;
-pub const CANVAS_TAIL_BYTES: usize = 46_848;
-pub const CANVAS_MAIN_BYTES: usize = CANVAS_BYTES - CANVAS_TAIL_BYTES;
-
-#[derive(Clone, Copy)]
-#[repr(C, align(4))]
-struct AlignedCanvas<const N: usize>([u8; N]);
-#[repr(C, align(8))]
-struct DmaAlignedCanvas<const N: usize>([u8; N]);
-
-static mut DEMO_CANVAS: DmaAlignedCanvas<CANVAS_MAIN_BYTES> = DmaAlignedCanvas([0; CANVAS_MAIN_BYTES]);
-#[repr(C, align(8))]
-union CanvasTailStorage {
-    canvas: AlignedCanvas<CANVAS_TAIL_BYTES>,
-    cpu: [u8; CANVAS_TAIL_BYTES],
-}
-
-// DEMO_CANVAS and DEMO_CANVAS_TAIL are two physical segments of one logical
-// 128 KiB BK canvas. In CDC mode, the main segment is reused for ZMODEM
-// receiver/send staging, Ethernet DMA and HTTP RX/body storage plus the alternate stack; the CCM
-// tail holds CPU-only smoltcp socket metadata and the TCP transmit buffer.
-#[unsafe(link_section = ".ccmram.canvas")]
-static mut DEMO_CANVAS_TAIL: CanvasTailStorage =
-    CanvasTailStorage { canvas: AlignedCanvas([0; CANVAS_TAIL_BYTES]) };
-
-pub(crate) const CDC_ZMODEM_STORAGE_BYTES: usize = 4096;
-pub(crate) const CDC_ETHERNET_DMA_STORAGE_BYTES: usize = 2 * 16 + 2 * 1536 + 16 + 1536;
-pub(crate) const CDC_HTTP_RX_BYTES: usize = 4096;
-pub(crate) const CDC_HTTP_BODY_BYTES: usize = 62_416;
-pub(crate) const CDC_HTTP_STORAGE_BYTES: usize =
-    CDC_HTTP_RX_BYTES + CDC_HTTP_BODY_BYTES;
-const CDC_ALT_STACK_BYTES: usize = 8 * 1024 + 768;
-const CDC_ALT_STACK_BOTTOM: usize = CANVAS_MAIN_BYTES - CDC_ALT_STACK_BYTES;
-
-// ZMODEM storage, DMA ring and HTTP buffers occupy the low end; the enlarged
-// filesystem alternate stack grows down from the high end.
-const _: () = assert!(
-    CDC_ZMODEM_STORAGE_BYTES
-        + CDC_ETHERNET_DMA_STORAGE_BYTES
-        + CDC_HTTP_STORAGE_BYTES
-        <= CDC_ALT_STACK_BOTTOM
-);
-const _: () = assert!(
-    CDC_ZMODEM_STORAGE_BYTES
-        + CDC_ETHERNET_DMA_STORAGE_BYTES
-        + CDC_HTTP_STORAGE_BYTES
-        == CDC_ALT_STACK_BOTTOM
-);
-
-pub(crate) fn cdc_alternate_stack_top() -> *mut u8 {
-    unsafe {
-        core::ptr::addr_of_mut!(DEMO_CANVAS.0)
-            .cast::<u8>()
-            .add(CANVAS_MAIN_BYTES)
-    }
-}
-
-pub(crate) fn cdc_ethernet_dma_storage_ptr() -> *mut u8 {
-    unsafe {
-        core::ptr::addr_of_mut!(DEMO_CANVAS.0)
-            .cast::<u8>()
-            .add(CDC_ZMODEM_STORAGE_BYTES)
-    }
-}
-
-pub(crate) fn cdc_ethernet_http_storage_ptr() -> *mut u8 {
-    unsafe {
-        core::ptr::addr_of_mut!(DEMO_CANVAS.0)
-            .cast::<u8>()
-            .add(CDC_ZMODEM_STORAGE_BYTES + CDC_ETHERNET_DMA_STORAGE_BYTES)
-    }
-}
-
-pub(crate) fn cdc_ethernet_socket_storage_ptr() -> *mut u8 {
-    unsafe {
-        core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.cpu).cast::<u8>()
-    }
-}
+const _: () = assert!(CANVAS_BYTES == CANVAS_MAIN_BYTES + CANVAS_TAIL_BYTES);
 
 #[repr(C, align(4))]
 struct RowBuffer([u8; WIDTH]);
+
 // CPU-only luma conversion scratch; keep it in SRAM to conserve CCM.
 static mut ROW_BUFFER: RowBuffer = RowBuffer([0; WIDTH]);
+
+use crate::memory::{CANVAS_MAIN_BYTES, CANVAS_TAIL_BYTES};
+
+// The canvas backing allocation and its CDC-mode reuse are owned by memory.rs.
 static CAMERA_IN_USE: AtomicBool = AtomicBool::new(false);
-// CDC mode uses the PC CONNECT renderer and does not consume the demo canvas.
-// Its main-SRAM range holds shared ZMODEM receiver/send storage, the
-// Ethernet DMA ring, HTTP buffers and alternate stack. The CCM tail holds smoltcp socket storage.
-static CDC_ZMODEM_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn claim_cdc_zmodem_storage() -> Option<(*mut u8, usize)> {
-    CDC_ZMODEM_STORAGE_IN_USE
-        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-        .ok()?;
-    let ptr = unsafe { core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>() };
-    Some((ptr, CDC_ZMODEM_STORAGE_BYTES))
-}
-
-pub(crate) fn release_cdc_zmodem_storage() {
-    CDC_ZMODEM_STORAGE_IN_USE.store(false, Ordering::Release);
-}
 
 static CLOCK_VERSION: AtomicU32 = AtomicU32::new(0);
 
@@ -244,13 +157,13 @@ fn canvas_read_chunk(offset: usize) -> (*const u8, usize) {
     unsafe {
         if offset < CANVAS_MAIN_BYTES {
             (
-                core::ptr::addr_of!(DEMO_CANVAS.0).cast::<u8>().add(offset),
+                crate::memory::canvas_main_const_ptr().cast::<u8>().add(offset),
                 CANVAS_MAIN_BYTES - offset,
             )
         } else {
             let tail_offset = offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0)
+                crate::memory::canvas_tail_const_ptr()
                     .cast::<u8>()
                     .add(tail_offset),
                 CANVAS_TAIL_BYTES - tail_offset,
@@ -264,13 +177,13 @@ fn canvas_write_chunk(offset: usize) -> (*mut u8, usize) {
     unsafe {
         if offset < CANVAS_MAIN_BYTES {
             (
-                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset),
+                crate::memory::canvas_main_ptr().cast::<u8>().add(offset),
                 CANVAS_MAIN_BYTES - offset,
             )
         } else {
             let tail_offset = offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(tail_offset),
+                crate::memory::canvas_tail_ptr().cast::<u8>().add(tail_offset),
                 CANVAS_TAIL_BYTES - tail_offset,
             )
         }
@@ -351,7 +264,7 @@ pub fn clear_demo_canvas(color: u8) {
         // are live BK program RAM in extended mode.
         let visible_bytes = visible_canvas_rows() * WIDTH;
         unsafe {
-            let main = core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>();
+            let main = crate::memory::canvas_main_ptr().cast::<u8>();
             if mode == CameraMode::Monochrome {
                 main.write_bytes(GRAYSCALE[value as usize], visible_bytes);
             } else {
@@ -368,16 +281,16 @@ pub fn clear_demo_canvas(color: u8) {
     if mode == CameraMode::Monochrome {
         let luma = GRAYSCALE[value as usize];
         unsafe {
-            core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().write_bytes(luma, CANVAS_MAIN_BYTES);
-            core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().write_bytes(luma, CANVAS_TAIL_BYTES);
+            crate::memory::canvas_main_ptr().cast::<u8>().write_bytes(luma, CANVAS_MAIN_BYTES);
+            crate::memory::canvas_tail_ptr().cast::<u8>().write_bytes(luma, CANVAS_TAIL_BYTES);
         }
     } else {
         let [u, v] = UV_PALETTE[value as usize];
         let main_pixels = CANVAS_MAIN_BYTES / 2;
         let tail_pixels = CANVAS_TAIL_BYTES / 2;
         unsafe {
-            let main = core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>();
-            let tail = core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>();
+            let main = crate::memory::canvas_main_ptr().cast::<u8>();
+            let tail = crate::memory::canvas_tail_ptr().cast::<u8>();
             for i in 0..main_pixels { main.add(i * 2).write(u); main.add(i * 2 + 1).write(v); }
             for i in 0..tail_pixels { tail.add(i * 2).write(u); tail.add(i * 2 + 1).write(v); }
         }
@@ -400,18 +313,18 @@ pub fn set_pixel(x: usize, y: usize, color: u8) {
             let offset = y * WIDTH + x;
             let value = GRAYSCALE[palette_index];
             if offset < CANVAS_MAIN_BYTES {
-                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset).write(value);
+                crate::memory::canvas_main_ptr().cast::<u8>().add(offset).write(value);
             } else {
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0)
+                crate::memory::canvas_tail_ptr()
                     .cast::<u8>().add(offset - CANVAS_MAIN_BYTES).write(value);
             }
         } else {
             let offset = (y * (WIDTH / 2) + x) * 2;
             let [u, v] = UV_PALETTE[palette_index];
             let destination = if offset < CANVAS_MAIN_BYTES {
-                core::ptr::addr_of_mut!(DEMO_CANVAS.0).cast::<u8>().add(offset)
+                crate::memory::canvas_main_ptr().cast::<u8>().add(offset)
             } else {
-                core::ptr::addr_of_mut!(DEMO_CANVAS_TAIL.canvas.0)
+                crate::memory::canvas_tail_ptr()
                     .cast::<u8>().add(offset - CANVAS_MAIN_BYTES)
             };
             destination.write(u);
@@ -920,13 +833,13 @@ unsafe fn copy_canvas_range(mut offset: usize, mut destination: *mut u8, mut byt
     while bytes != 0 {
         let (source, available) = if offset < CANVAS_MAIN_BYTES {
             (
-                core::ptr::addr_of!(DEMO_CANVAS.0).cast::<u8>().add(offset),
+                crate::memory::canvas_main_const_ptr().cast::<u8>().add(offset),
                 CANVAS_MAIN_BYTES - offset,
             )
         } else {
             let tail_offset = offset - CANVAS_MAIN_BYTES;
             (
-                core::ptr::addr_of!(DEMO_CANVAS_TAIL.canvas.0).cast::<u8>().add(tail_offset),
+                crate::memory::canvas_tail_const_ptr().cast::<u8>().add(tail_offset),
                 CANVAS_TAIL_BYTES - tail_offset,
             )
         };

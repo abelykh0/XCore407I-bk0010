@@ -141,7 +141,7 @@ where
         function: Some(function),
         result: MaybeUninit::uninit(),
     };
-    let stack_top = crate::camera::cdc_alternate_stack_top();
+    let stack_top = crate::memory::cdc_alternate_stack_top();
     // The canvas stack top is 8-byte aligned; its reserved range is disjoint
     // from the CDC receiver and Ethernet DMA allocations.
     unsafe {

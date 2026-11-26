@@ -64,10 +64,10 @@ struct EthernetDmaStorage {
     tx_buffer: FrameBuffer,
 }
 
-const _: () = assert!(core::mem::size_of::<EthernetDmaStorage>() <= crate::camera::CDC_ETHERNET_DMA_STORAGE_BYTES);
+const _: () = assert!(core::mem::size_of::<EthernetDmaStorage>() <= crate::memory::CDC_ETHERNET_DMA_STORAGE_BYTES);
 
 fn dma_storage_ptr() -> *mut EthernetDmaStorage {
-    crate::camera::cdc_ethernet_dma_storage_ptr().cast()
+    crate::memory::ethernet_dma_storage_ptr().cast()
 }
 
 #[derive(Clone, Copy)]

@@ -8,6 +8,7 @@ pub mod nand_fs;
 pub mod dhara_fs;
 pub mod ethernet;
 pub mod libc_shims;
+mod memory;
 pub mod rtc;
 pub mod tusb;
 pub mod usb_device;

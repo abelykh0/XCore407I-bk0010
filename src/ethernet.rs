@@ -30,18 +30,18 @@ struct EthernetSocketStorage {
 }
 
 const HTTP_TX_BUFFER_SIZE: usize =
-    crate::camera::CANVAS_TAIL_BYTES - core::mem::size_of::<EthernetSocketStorage>();
+    crate::memory::CANVAS_TAIL_BYTES - core::mem::size_of::<EthernetSocketStorage>();
 
-const _: () = assert!(core::mem::size_of::<EthernetHttpStorage>() == crate::camera::CDC_HTTP_STORAGE_BYTES);
-const _: () = assert!(core::mem::size_of::<EthernetSocketStorage>() + HTTP_TX_BUFFER_SIZE <= crate::camera::CANVAS_TAIL_BYTES);
+const _: () = assert!(core::mem::size_of::<EthernetHttpStorage>() == crate::memory::CDC_HTTP_STORAGE_BYTES);
+const _: () = assert!(core::mem::size_of::<EthernetSocketStorage>() + HTTP_TX_BUFFER_SIZE <= crate::memory::CANVAS_TAIL_BYTES);
 #[inline]
 fn http_storage_ptr() -> *mut EthernetHttpStorage {
-    crate::camera::cdc_ethernet_http_storage_ptr().cast()
+    crate::memory::ethernet_http_storage_ptr().cast()
 }
 
 #[inline]
 fn socket_storage_ptr() -> *mut EthernetSocketStorage {
-    crate::camera::cdc_ethernet_socket_storage_ptr().cast()
+    crate::memory::ethernet_socket_storage_ptr().cast()
 }
 
 #[inline]
