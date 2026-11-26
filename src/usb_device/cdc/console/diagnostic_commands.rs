@@ -5,6 +5,79 @@ use super::*;
 use crate::nand_fs::ActiveStorage;
 use littlefs2::fs::Filesystem;
 
+unsafe extern "C" {
+    fn lfs_crc(crc: u32, buffer: *const core::ffi::c_void, size: usize) -> u32;
+}
+
+/// Compare the independent ZMODEM, LittleFS C, and STM32F4 hardware CRC32
+/// implementations. Inputs cover empty, short, word-boundary, and longer data.
+fn run_crc32_test() {
+    const LENGTHS: &[usize] = &[
+        0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 95,
+    ];
+
+    let mut data = [0u8; 96];
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+
+    write_status(b"\r\nCRC32TEST: ZMODEM vs LittleFS vs STM32F4 hardware\r\n");
+    write_status(b"Each pattern is tested at lengths around 4-byte boundaries.\r\n");
+
+    for pattern in 0..4u8 {
+        for &len in LENGTHS {
+            for (index, byte) in data[..len].iter_mut().enumerate() {
+                *byte = match pattern {
+                    0 => 0x00,
+                    1 => 0xff,
+                    2 => index as u8,
+                    _ => (index.wrapping_mul(37).wrapping_add(len.wrapping_mul(11))
+                        ^ (index >> 1)) as u8,
+                };
+            }
+
+            let input = &data[..len];
+            let zmodem = zmodem2::crc32_iso_hdlc(input);
+            // LittleFS returns the unfinalized reflected CRC state.
+            let littlefs = !unsafe {
+                lfs_crc(
+                    0xffff_ffff,
+                    input.as_ptr().cast::<core::ffi::c_void>(),
+                    input.len(),
+                )
+            };
+            let hardware = crate::crc32::hardware_checksum(input);
+            let matches = zmodem == littlefs && zmodem == hardware;
+            if matches {
+                passed += 1;
+            } else {
+                failed += 1;
+            }
+
+            write_status(b"P");
+            write_decimal(pattern as usize);
+            write_status(b" N=");
+            write_decimal(len);
+            write_status(b" Z=");
+            write_hex_u32(zmodem);
+            write_status(b" L=");
+            write_hex_u32(littlefs);
+            write_status(b" H=");
+            write_hex_u32(hardware);
+            write_status(if matches { b" PASS\r\n" } else { b" FAIL\r\n" });
+        }
+    }
+
+    write_status(b"CRC32TEST SUMMARY: ");
+    write_decimal(passed as usize);
+    write_status(b" passed, ");
+    write_decimal(failed as usize);
+    write_status(if failed == 0 {
+        b" failed. ALL CRC32 IMPLEMENTATIONS MATCH.\r\n> "
+    } else {
+        b" failed. CRC32 MISMATCH DETECTED.\r\n> "
+    });
+}
+
 /// Handle console commands that expose low-level NAND/ECC diagnostics.
 pub(super) fn handle(
     line: &[u8],
@@ -12,7 +85,7 @@ pub(super) fn handle(
     zmodem: &mut cdc_zmodem::State,
     _service_background: &mut dyn FnMut(),
 ) -> bool {
-    if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
+    if command_is(line, b"CRC32TEST") {\n        run_crc32_test();\n    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
         write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
     } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ OFF") {
