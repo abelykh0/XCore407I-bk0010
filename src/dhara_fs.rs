@@ -72,8 +72,8 @@ pub(crate) fn map_usage() -> (u32, u32, u32, u32) {
 
 pub(crate) struct ReclaimStats {
     pub used_blocks: usize,
-    pub trimmed_blocks: usize,
-    pub trimmed_sectors: usize,
+    pub unused_blocks_scanned: usize,
+    pub trim_requests: usize,
     pub allocated_before: u32,
     pub allocated_after: u32,
     pub erased_blocks: u32,
@@ -99,8 +99,8 @@ pub(crate) fn reclaim_unused_blocks(
         .traverse_blocks(&mut used)
         .map_err(|error| (2, error.code()))?;
 
-    let mut trimmed_blocks = 0usize;
-    let mut trimmed_sectors = 0usize;
+    let mut unused_blocks_scanned = 0usize;
+    let mut trim_requests = 0usize;
     let mut error = 0i32;
 
     for block in 0..LITTLEFS_BLOCK_COUNT {
@@ -115,9 +115,9 @@ pub(crate) fn reclaim_unused_blocks(
             if result != 0 {
                 return Err((3, if error != 0 { error } else { result }));
             }
-            trimmed_sectors += 1;
+            trim_requests += 1;
         }
-        trimmed_blocks += 1;
+        unused_blocks_scanned += 1;
 
         // Keep foreground USB/video servicing responsive during a full scan.
         if block % 8 == 7 {
@@ -135,8 +135,8 @@ pub(crate) fn reclaim_unused_blocks(
 
     Ok(ReclaimStats {
         used_blocks,
-        trimmed_blocks,
-        trimmed_sectors,
+        unused_blocks_scanned,
+        trim_requests,
         allocated_before,
         allocated_after,
         erased_blocks: erase_after.wrapping_sub(erase_before),

@@ -53,10 +53,10 @@ pub(super) fn handle(
                 Ok(stats) => {
                     write_status(b"DHARA RECLAIM complete: LittleFS used blocks=");
                     write_decimal(stats.used_blocks);
-                    write_status(b" trimmed blocks=");
-                    write_decimal(stats.trimmed_blocks);
-                    write_status(b" trimmed sectors=");
-                    write_decimal(stats.trimmed_sectors);
+                    write_status(b" unreferenced LittleFS blocks scanned=");
+                    write_decimal(stats.unused_blocks_scanned);
+                    write_status(b" Dhara trim requests=");
+                    write_decimal(stats.trim_requests);
                     write_status(b"\r\nDhara allocated sectors: ");
                     write_decimal(stats.allocated_before as usize);
                     write_status(b" -> ");
