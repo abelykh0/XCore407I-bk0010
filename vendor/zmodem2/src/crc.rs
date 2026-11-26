@@ -33,7 +33,9 @@ impl Crc16 {
 
     /// Updates the CRC state with a slice of bytes.
     pub fn update(&mut self, data: &[u8]) {
-        self.crc = stm32f4_crc32::update(self.crc, data);
+        for &byte in data {
+            self.update_byte(byte);
+        }
     }
 
     /// Updates the CRC state with a single byte.
@@ -62,9 +64,7 @@ impl Crc32 {
 
     /// Updates the CRC state with a slice of bytes.
     pub fn update(&mut self, data: &[u8]) {
-        for &byte in data {
-            self.update_byte(byte);
-        }
+        self.crc = stm32f4_crc32::update(self.crc, data);
     }
 
     /// Updates the CRC state with a single byte.
