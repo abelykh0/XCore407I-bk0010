@@ -15,7 +15,6 @@ pub(super) fn handle(
     if command_is(line, b"ZCRC HW") {
         zmodem2::set_rx_crc32_hardware(true);
         zmodem2::reset_rx_crc32_diagnostics();
-        stm32f4_crc32::reset_diagnostics();
         write_status(b"\r\nZMODEM receive CRC32: batched hardware mode selected; counters reset.\r\n> ");
     } else if command_is(line, b"ZCRC SW") {
         zmodem2::set_rx_crc32_hardware(false);
@@ -27,9 +26,17 @@ pub(super) fn handle(
         stm32f4_crc32::reset_diagnostics();
         write_status(b"\r\nZMODEM receive CRC32 counters reset.\r\n> ");
     } else if command_is(line, b"ZCRC STATUS") {
-        let (hardware, bytes, software_bytes, hardware_bytes, batches, passed, failed) =
-            zmodem2::rx_crc32_diagnostics();
-        let (hardware_words, hardware_fallback_bytes) = stm32f4_crc32::diagnostics();
+        let (
+            hardware,
+            bytes,
+            software_bytes,
+            hardware_bytes,
+            batches,
+            passed,
+            failed,
+            hardware_words,
+            hardware_fallback_bytes,
+        ) = zmodem2::rx_crc32_diagnostics();
         write_status(b"\r\nZMODEM receive CRC32: mode=");
         write_status(if hardware { b"hardware\r\n" } else { b"software\r\n" });
         write_status(b"  data_bytes=");
