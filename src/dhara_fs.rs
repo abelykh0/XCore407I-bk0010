@@ -43,7 +43,7 @@ unsafe extern "C" {
     fn xcore_dhara_map_write(sector: u32, data: *const u8, error: *mut i32) -> c_int;
     fn xcore_dhara_map_trim(sector: u32, error: *mut i32) -> c_int;
     fn xcore_dhara_map_sync(error: *mut i32) -> c_int;
-    fn xcore_dhara_map_gc(error: *mut i32) -> c_int;
+    fn xcore_dhara_map_gc(error: *mut i32, progress: *mut i32) -> c_int;
     fn xcore_dhara_map_size() -> u32;
     fn xcore_dhara_map_sync_diagnostic(stage: *mut u32, page: *mut u32, error: *mut u32, steps: *mut u32);
 }
@@ -388,15 +388,17 @@ pub(crate) fn map_status() -> (u32, u32) {
 }
 
 /// Reclaim one Dhara journal block, preserving all currently mapped sectors.
-pub(crate) fn map_gc() -> (bool, u32, u32, u32) {
+pub(crate) fn map_gc() -> (bool, bool, u32, u32, u32) {
     GC_ERASE_BLOCKS.store(0, Ordering::Relaxed);
     GC_PROGRAMMED_PAGES.store(0, Ordering::Relaxed);
     GC_ACTIVE.store(true, Ordering::Release);
     let mut error = 0i32;
-    let result = unsafe { xcore_dhara_map_gc(&mut error) };
+    let mut progress = 0i32;
+    let result = unsafe { xcore_dhara_map_gc(&mut error, &mut progress) };
     GC_ACTIVE.store(false, Ordering::Release);
     (
         result == 0,
+        progress != 0,
         error as u32,
         GC_ERASE_BLOCKS.load(Ordering::Acquire),
         GC_PROGRAMMED_PAGES.load(Ordering::Acquire),
