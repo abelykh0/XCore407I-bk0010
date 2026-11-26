@@ -1341,19 +1341,30 @@ pub struct FormatReport {
 /// This erases every non-bad physical block, creates a new Dhara journal,
 /// formats LittleFS, and verifies that the new filesystem can be mounted.
 pub fn initialize_nand_volume() -> Result<(), InitError> {
-    initialize_nand_volume_with_progress(|_, _| {}).map(|_| ())
+    initialize_nand_volume_inner(None).map(|_| ())
 }
 
 /// CDC variant: invoke progress after each physical block, allowing the
 /// caller to service USB/video between NAND erase operations.
+///
+/// The generic wrapper is intentionally tiny; the provisioning body uses a
+/// trait-object callback so callers with different closure types share it.
 #[cold]
 #[inline(never)]
 pub fn initialize_nand_volume_with_progress(
-    progress: impl FnMut(u32, u32),
- ) -> Result<FormatReport, InitError> {
+    mut progress: impl FnMut(u32, u32),
+) -> Result<FormatReport, InitError> {
+    initialize_nand_volume_inner(Some(&mut progress))
+}
+
+#[cold]
+#[inline(never)]
+fn initialize_nand_volume_inner(
+    progress: Option<&mut dyn FnMut(u32, u32)>,
+) -> Result<FormatReport, InitError> {
     crate::dhara_fs::clear_storage_io_diagnostic();
     clear_nand_read_diagnostic();
-    let mut storage = ActiveStorage::initialize_new_volume_with_progress(progress)?;
+    let mut storage = ActiveStorage::initialize_new_volume_with_callback(progress)?;
     Filesystem::<ActiveStorage>::format(&mut storage)
         .map_err(|_| InitError::MountFailed)?;
     mount_with_shared_allocation(&mut storage, |_| Ok(()))
