@@ -6,7 +6,7 @@ license = "BSD-3-Clause"
 build = "build.rs"
 
 [dependencies]
-stm32f4-crc32 = { path = "../stm32f4-crc32" }
+stm32f4-crc32 = { path = "../../crates/stm32f4-crc32" }
 tinyrlibc = { version = "0.5", default-features = false, features = ["strchr", "strlen", "strcspn", "strspn"], optional = true }
 
 [build-dependencies]
