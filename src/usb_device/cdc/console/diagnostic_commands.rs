@@ -586,5 +586,8 @@ pub(super) fn handle(
         #[cfg(not(feature = "nand-diagnostics"))]
         write_status(b"ECCSCAN requires nand-diagnostics.\r\n> ");
     }
-    false
+    command_is(line, b"ZCRC HW")
+        || command_is(line, b"ZCRC SW")
+        || command_is(line, b"ZCRC STATUS")
+        || command_is(line, b"ZCRC RESET")
 }
