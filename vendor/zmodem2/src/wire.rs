@@ -270,6 +270,8 @@ static RX_CRC32_BYTES: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_SOFTWARE_BYTES: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_HARDWARE_BYTES: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_BATCHES: AtomicU32 = AtomicU32::new(0);
+static RX_CRC32_HARDWARE_WORDS: AtomicU32 = AtomicU32::new(0);
+static RX_CRC32_FALLBACK_BYTES: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_PASSED: AtomicU32 = AtomicU32::new(0);
 static RX_CRC32_FAILED: AtomicU32 = AtomicU32::new(0);
 
@@ -290,13 +292,16 @@ pub fn reset_rx_crc32_diagnostics() {
     RX_CRC32_SOFTWARE_BYTES.store(0, Ordering::Relaxed);
     RX_CRC32_HARDWARE_BYTES.store(0, Ordering::Relaxed);
     RX_CRC32_BATCHES.store(0, Ordering::Relaxed);
+    RX_CRC32_HARDWARE_WORDS.store(0, Ordering::Relaxed);
+    RX_CRC32_FALLBACK_BYTES.store(0, Ordering::Relaxed);
     RX_CRC32_PASSED.store(0, Ordering::Relaxed);
     RX_CRC32_FAILED.store(0, Ordering::Relaxed);
 }
 
 /// (mode_is_hardware, crc_bytes, software_bytes, hardware_bytes,
-/// hardware_batches, crc_passes, crc_failures).
-pub fn rx_crc32_diagnostics() -> (bool, u32, u32, u32, u32, u32, u32) {
+/// hardware_batches, crc_passes, crc_failures, hardware_words,
+/// hardware_fallback_bytes).
+pub fn rx_crc32_diagnostics() -> (bool, u32, u32, u32, u32, u32, u32, u32, u32) {
     (
         rx_crc32_hardware_enabled(),
         RX_CRC32_BYTES.load(Ordering::Relaxed),
@@ -305,6 +310,8 @@ pub fn rx_crc32_diagnostics() -> (bool, u32, u32, u32, u32, u32, u32) {
         RX_CRC32_BATCHES.load(Ordering::Relaxed),
         RX_CRC32_PASSED.load(Ordering::Relaxed),
         RX_CRC32_FAILED.load(Ordering::Relaxed),
+        RX_CRC32_HARDWARE_WORDS.load(Ordering::Relaxed),
+        RX_CRC32_FALLBACK_BYTES.load(Ordering::Relaxed),
     )
 }
 
@@ -341,7 +348,10 @@ impl RxCrc {
 
     fn flush_crc32_batch(&mut self) {
         if self.crc32_batch_len != 0 {
-            self.calc32.update(&self.crc32_batch[..self.crc32_batch_len]);
+            let (words, fallback_bytes) =
+                self.calc32.update_with_stats(&self.crc32_batch[..self.crc32_batch_len]);
+            RX_CRC32_HARDWARE_WORDS.fetch_add(words, Ordering::Relaxed);
+            RX_CRC32_FALLBACK_BYTES.fetch_add(fallback_bytes, Ordering::Relaxed);
             RX_CRC32_HARDWARE_BYTES.fetch_add(self.crc32_batch_len as u32, Ordering::Relaxed);
             RX_CRC32_BATCHES.fetch_add(1, Ordering::Relaxed);
             self.crc32_batch_len = 0;
@@ -602,6 +612,10 @@ mod tests {
         assert_eq!(hardware_stats.2, 0);
         assert_eq!(hardware_stats.3, data.len() as u32);
         assert!(hardware_stats.4 >= 1);
+        #[cfg(target_arch = "arm")]
+        assert_eq!(hardware_stats.7, (data.len() / 4) as u32);
+        #[cfg(not(target_arch = "arm"))]
+        assert_eq!(hardware_stats.8, data.len() as u32);
 
         // Do not leak the runtime selection into unrelated tests.
         set_rx_crc32_hardware(false);
