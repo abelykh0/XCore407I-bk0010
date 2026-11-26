@@ -84,7 +84,6 @@ pub(super) fn handle(
                     write_decimal_grouped(stats.programmed_pages as usize);
                     write_status(b" sync steps=");
                     write_decimal_grouped(stats.sync_steps as usize);
-                    write_status(b"\r\nRun DHARA STATUS and repeat the same RECEIVE benchmark to compare.\r\n");
                 }
                 Err((stage, error)) => {
                     let stage_name: &[u8] = match stage {
