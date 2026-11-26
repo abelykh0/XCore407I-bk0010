@@ -94,7 +94,7 @@ pub(crate) fn enable_emulator_input() {
 static mut KEYBOARD_LED_REPORT: u8 = 0;
 const KEYBOARD_QUEUE_CAPACITY: u16 = 128;
 const KEYBOARD_QUEUE_MASK: u16 = KEYBOARD_QUEUE_CAPACITY - 1;
-static mut KEYBOARD_QUEUE: [u8; KEYBOARD_QUEUE_CAPACITY as usize] = [0; KEYBOARD_QUEUE_CAPACITY as usize];
+static KEYBOARD_QUEUE: [AtomicU8; KEYBOARD_QUEUE_CAPACITY as usize] = [const { AtomicU8::new(0) }; KEYBOARD_QUEUE_CAPACITY as usize];
 static KEYBOARD_QUEUE_HEAD: AtomicU16 = AtomicU16::new(0);
 static KEYBOARD_QUEUE_TAIL: AtomicU16 = AtomicU16::new(0);
 const PDP_CYCLES_PER_FRAME: u32 = 60_000;
@@ -112,16 +112,14 @@ fn keyboard_queue_push(bytes: &[u8]) {
         let head = KEYBOARD_QUEUE_HEAD.load(Ordering::Relaxed);
         let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Acquire);
         if head.wrapping_sub(tail) >= KEYBOARD_QUEUE_CAPACITY { break; }
-        unsafe { core::ptr::addr_of_mut!(KEYBOARD_QUEUE).cast::<u8>()
-            .add((head & KEYBOARD_QUEUE_MASK) as usize).write(byte); }
+        KEYBOARD_QUEUE[(head & KEYBOARD_QUEUE_MASK) as usize].store(byte, Ordering::Relaxed);
         KEYBOARD_QUEUE_HEAD.store(head.wrapping_add(1), Ordering::Release);
     }
 }
 fn keyboard_queue_peek() -> Option<u8> {
     let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
     if tail == KEYBOARD_QUEUE_HEAD.load(Ordering::Acquire) { return None; }
-    Some(unsafe { core::ptr::addr_of!(KEYBOARD_QUEUE).cast::<u8>()
-        .add((tail & KEYBOARD_QUEUE_MASK) as usize).read() })
+    Some(KEYBOARD_QUEUE[(tail & KEYBOARD_QUEUE_MASK) as usize].load(Ordering::Relaxed))
 }
 fn keyboard_queue_pop() {
     let tail = KEYBOARD_QUEUE_TAIL.load(Ordering::Relaxed);
