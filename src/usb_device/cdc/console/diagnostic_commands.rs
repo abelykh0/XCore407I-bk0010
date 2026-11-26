@@ -19,11 +19,9 @@ pub(super) fn handle(
     } else if command_is(line, b"ZCRC SW") {
         zmodem2::set_rx_crc32_hardware(false);
         zmodem2::reset_rx_crc32_diagnostics();
-        stm32f4_crc32::reset_diagnostics();
         write_status(b"\r\nZMODEM receive CRC32: original byte-at-a-time software mode selected; counters reset.\r\n> ");
     } else if command_is(line, b"ZCRC RESET") {
         zmodem2::reset_rx_crc32_diagnostics();
-        stm32f4_crc32::reset_diagnostics();
         write_status(b"\r\nZMODEM receive CRC32 counters reset.\r\n> ");
     } else if command_is(line, b"ZCRC STATUS") {
         let (
