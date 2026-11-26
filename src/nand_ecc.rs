@@ -8,8 +8,6 @@
 //! are enabled by the `nand-diagnostics` feature. They are not used to
 //! generate ECC during normal filesystem operations.
 //! The NAND controller generates and stores ECC during normal page writes.
-//! This module is used only by explicit diagnostics and optional ECC checking;
-//! it is not part of the normal filesystem read/write path.
 
 const ECC_CHUNK_SIZE: usize = 512;
 

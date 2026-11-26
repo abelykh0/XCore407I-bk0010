@@ -1,14 +1,15 @@
 use super::super::zmodem as cdc_zmodem;
 use super::diagnostic_commands;
 use super::diagnostics::write_cdc_diagnostics;
-#[cfg(feature = "list-profile")]
-use super::diagnostics::write_write_profile;
 use super::listing::list_files;
 use super::output::{write_decimal, write_hex_u32, write_status};
 use super::*;
 use crate::{nand_fs::ActiveStorage, tusb};
 use core::ffi::c_void;
 use littlefs2::{fs::Filesystem, path::Path};
+
+#[cfg(feature = "list-profile")]
+use super::diagnostics::write_write_profile;
 
 fn delete_file(fs: &Filesystem<'_, ActiveStorage>, name: &[u8]) {
     // DELETE accepts one root-level filename only. Keep the same conservative

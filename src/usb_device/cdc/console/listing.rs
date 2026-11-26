@@ -1,8 +1,9 @@
-#[cfg(feature = "list-profile")]
-use super::output::write_decimal;
 use super::output::{write_decimal_grouped, write_hex_u32, write_status};
 use crate::nand_fs::ActiveStorage;
 use littlefs2::fs::Filesystem;
+
+#[cfg(feature = "list-profile")]
+use super::output::write_decimal;
 
 struct ListOutput {
     buffer: [u8; 1024],

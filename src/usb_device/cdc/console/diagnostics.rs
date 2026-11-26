@@ -1,7 +1,8 @@
-#[cfg(feature = "list-profile")]
-use super::super::zmodem as cdc_zmodem;
 use super::output::{write_decimal, write_hex_u32, write_status};
 use super::*;
+
+#[cfg(feature = "list-profile")]
+use super::super::zmodem as cdc_zmodem;
 
 /// Append a snapshot of CDC connection and transmit-path diagnostics to STATUS.
 pub(super) fn write_cdc_diagnostics() {
@@ -53,95 +54,6 @@ pub(super) fn write_cdc_diagnostics() {
         write_decimal(banner_rx as usize);
     }
     write_status(b"\r\n");
-}
-
-#[cfg(feature = "list-profile")]
-pub(super) fn write_write_profile(zmodem: &cdc_zmodem::State) {
-    let p = crate::usb_device::cdc::console::write_diag::snapshot();
-    let (error, detail, wire_received, wire_consumed) = zmodem.protocol_diagnostics();
-    let dhara_residual = p
-        .dhara_write_us
-        .saturating_sub(p.nand_program_us)
-        .saturating_sub(p.nand_erase_us);
-    write_status(b"\r\nWRITE PROFILE (last completed receive)\r\n");
-    write_status(b"Transfer: ");
-    write_decimal((p.transfer_us / 1_000) as usize);
-    write_status(b" ms  ZMODEM wire RX/consumed: ");
-    write_decimal(wire_received as usize);
-    write_status(b"/");
-    write_decimal(wire_consumed as usize);
-    write_status(b" bytes\r\n");
-    write_status(b"ZMODEM poll: ");
-    write_decimal(p.zmodem_poll_calls as usize);
-    write_status(b" calls, ");
-    write_decimal(p.zmodem_poll_us as usize);
-    write_status(b" us; submit: ");
-    write_decimal(p.zmodem_submit_calls as usize);
-    write_status(b" calls, ");
-    write_decimal(p.zmodem_submit_us as usize);
-    write_status(b" us\r\n");
-    write_status(b"LittleFS create: ");
-    write_decimal(p.lfs_create_us as usize);
-    write_status(b" us; append writes: ");
-    write_decimal(p.lfs_append_calls as usize);
-    write_status(b" calls / ");
-    write_decimal(p.lfs_append_us as usize);
-    write_status(b" us total\r\n");
-    write_status(b"  append open: ");
-    write_decimal(p.lfs_open_us as usize);
-    write_status(b" us; write callback: ");
-    write_decimal(p.lfs_callback_us as usize);
-    write_status(b" us; close: ");
-    write_decimal(p.lfs_close_us as usize);
-    write_status(b" us; commit/rename: ");
-    write_decimal(p.lfs_commit_us as usize);
-    write_status(b" us\r\n");
-    write_status(b"LittleFS write: ");
-    write_decimal(p.lfs_write_calls as usize);
-    write_status(b" calls / ");
-    write_decimal(p.lfs_write_bytes as usize);
-    write_status(b" bytes / ");
-    write_decimal(p.lfs_write_us as usize);
-    write_status(b" us\r\n");
-    write_status(b"Dhara map_write: ");
-    write_decimal(p.dhara_write_calls as usize);
-    write_status(b" calls / ");
-    write_decimal(p.dhara_write_pages as usize);
-    write_status(b" pages / ");
-    write_decimal(p.dhara_write_us as usize);
-    write_status(b" us\r\n");
-    write_status(b"NAND page program: ");
-    write_decimal(p.nand_program_calls as usize);
-    write_status(b" calls / ");
-    write_decimal(p.nand_program_us as usize);
-    write_status(b" us; FSMC FIFO waits: ");
-    write_decimal(p.nand_fifo_wait_us as usize);
-    write_status(b" us; NAND busy: ");
-    write_decimal(p.nand_busy_wait_us as usize);
-    write_status(b" us\r\n");
-    let ecc_fsmc_us = p
-        .nand_program_us
-        .saturating_sub(p.nand_fifo_wait_us)
-        .saturating_sub(p.nand_busy_wait_us);
-    write_status(b"  ECC/FSMC data feed + setup (derived): ");
-    write_decimal(ecc_fsmc_us as usize);
-    write_status(b" us\r\n");
-    write_status(b"NAND erase: ");
-    write_decimal(p.nand_erase_calls as usize);
-    write_status(b" calls / ");
-    write_decimal(p.nand_erase_us as usize);
-    write_status(b" us\r\n");
-    write_status(b"Dhara residual (map time minus program/erase): ");
-    write_decimal(dhara_residual as usize);
-    write_status(b" us (approx.)\r\n");
-    if error != 0 {
-        write_status(b"Last protocol error: ");
-        write_decimal(error as usize);
-        write_status(b" detail=");
-        write_decimal(detail as usize);
-        write_status(b"\r\n");
-    }
-    write_status(b"Times are accumulated per operation; LittleFS/Dhara/NAND rows overlap and must not be added.\r\n> ");
 }
 
 /// Print the exact non-destructive storage initialization or mount failure.
@@ -345,4 +257,93 @@ pub fn report_format_complete(report: crate::nand_fs::FormatReport) {
     write_decimal(report.littlefs_capacity_bytes as usize);
     write_status(b" bytes.\r\n");
     write_status(b"Storage remounting...\r\n");
+}
+
+#[cfg(feature = "list-profile")]
+pub(super) fn write_write_profile(zmodem: &cdc_zmodem::State) {
+    let p = crate::usb_device::cdc::console::write_diag::snapshot();
+    let (error, detail, wire_received, wire_consumed) = zmodem.protocol_diagnostics();
+    let dhara_residual = p
+        .dhara_write_us
+        .saturating_sub(p.nand_program_us)
+        .saturating_sub(p.nand_erase_us);
+    write_status(b"\r\nWRITE PROFILE (last completed receive)\r\n");
+    write_status(b"Transfer: ");
+    write_decimal((p.transfer_us / 1_000) as usize);
+    write_status(b" ms  ZMODEM wire RX/consumed: ");
+    write_decimal(wire_received as usize);
+    write_status(b"/");
+    write_decimal(wire_consumed as usize);
+    write_status(b" bytes\r\n");
+    write_status(b"ZMODEM poll: ");
+    write_decimal(p.zmodem_poll_calls as usize);
+    write_status(b" calls, ");
+    write_decimal(p.zmodem_poll_us as usize);
+    write_status(b" us; submit: ");
+    write_decimal(p.zmodem_submit_calls as usize);
+    write_status(b" calls, ");
+    write_decimal(p.zmodem_submit_us as usize);
+    write_status(b" us\r\n");
+    write_status(b"LittleFS create: ");
+    write_decimal(p.lfs_create_us as usize);
+    write_status(b" us; append writes: ");
+    write_decimal(p.lfs_append_calls as usize);
+    write_status(b" calls / ");
+    write_decimal(p.lfs_append_us as usize);
+    write_status(b" us total\r\n");
+    write_status(b"  append open: ");
+    write_decimal(p.lfs_open_us as usize);
+    write_status(b" us; write callback: ");
+    write_decimal(p.lfs_callback_us as usize);
+    write_status(b" us; close: ");
+    write_decimal(p.lfs_close_us as usize);
+    write_status(b" us; commit/rename: ");
+    write_decimal(p.lfs_commit_us as usize);
+    write_status(b" us\r\n");
+    write_status(b"LittleFS write: ");
+    write_decimal(p.lfs_write_calls as usize);
+    write_status(b" calls / ");
+    write_decimal(p.lfs_write_bytes as usize);
+    write_status(b" bytes / ");
+    write_decimal(p.lfs_write_us as usize);
+    write_status(b" us\r\n");
+    write_status(b"Dhara map_write: ");
+    write_decimal(p.dhara_write_calls as usize);
+    write_status(b" calls / ");
+    write_decimal(p.dhara_write_pages as usize);
+    write_status(b" pages / ");
+    write_decimal(p.dhara_write_us as usize);
+    write_status(b" us\r\n");
+    write_status(b"NAND page program: ");
+    write_decimal(p.nand_program_calls as usize);
+    write_status(b" calls / ");
+    write_decimal(p.nand_program_us as usize);
+    write_status(b" us; FSMC FIFO waits: ");
+    write_decimal(p.nand_fifo_wait_us as usize);
+    write_status(b" us; NAND busy: ");
+    write_decimal(p.nand_busy_wait_us as usize);
+    write_status(b" us\r\n");
+    let ecc_fsmc_us = p
+        .nand_program_us
+        .saturating_sub(p.nand_fifo_wait_us)
+        .saturating_sub(p.nand_busy_wait_us);
+    write_status(b"  ECC/FSMC data feed + setup (derived): ");
+    write_decimal(ecc_fsmc_us as usize);
+    write_status(b" us\r\n");
+    write_status(b"NAND erase: ");
+    write_decimal(p.nand_erase_calls as usize);
+    write_status(b" calls / ");
+    write_decimal(p.nand_erase_us as usize);
+    write_status(b" us\r\n");
+    write_status(b"Dhara residual (map time minus program/erase): ");
+    write_decimal(dhara_residual as usize);
+    write_status(b" us (approx.)\r\n");
+    if error != 0 {
+        write_status(b"Last protocol error: ");
+        write_decimal(error as usize);
+        write_status(b" detail=");
+        write_decimal(detail as usize);
+        write_status(b"\r\n");
+    }
+    write_status(b"Times are accumulated per operation; LittleFS/Dhara/NAND rows overlap and must not be added.\r\n> ");
 }

@@ -7,10 +7,11 @@ use crate::tusb;
 mod commands;
 mod diagnostic_commands;
 mod diagnostics;
-#[cfg(feature = "list-profile")]
-pub(crate) mod list_diag;
 mod listing;
 mod output;
+
+#[cfg(feature = "list-profile")]
+pub(crate) mod list_diag;
 #[cfg(feature = "list-profile")]
 pub(crate) mod write_diag;
 
