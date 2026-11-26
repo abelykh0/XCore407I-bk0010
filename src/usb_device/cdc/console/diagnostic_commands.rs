@@ -636,5 +636,20 @@ pub(super) fn handle(
         #[cfg(not(feature = "nand-diagnostics"))]
         write_status(b"ECCSCAN requires nand-diagnostics.\r\n> ");
     }
-    false
+    command_is(line, b"DHARA STATUS")
+        || command_is(line, b"DHARA RECLAIM")
+        || command_is(line, b"ECCSCAN")
+        || (cfg!(feature = "nand-diagnostics")
+            && (command_is(line, b"ECCSEQ ON")
+                || command_is(line, b"ECCSEQ OFF")
+                || command_is(line, b"ECCSEQSTATUS")
+                || command_is(line, b"ECCWRITE ON")
+                || command_is(line, b"ECCWRITE OFF")
+                || command_is(line, b"ECCWRITESTATUS")
+                || command_is(line, b"NANDPAGEPROBE")
+                || command_is(line, b"NANDRESETTEST")
+                || command_is(line, b"NANDPROBE")
+                || command_is(line, b"ECCFILETEST")
+                || (line.len() > 8 && line[..8].eq_ignore_ascii_case(b"ECCPAGE "))
+                || (line.len() > 10 && line[..10].eq_ignore_ascii_case(b"ECCPAGEHW "))))
 }
