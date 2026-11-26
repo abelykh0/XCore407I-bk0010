@@ -12,7 +12,36 @@ pub(super) fn handle(
     zmodem: &mut cdc_zmodem::State,
     _service_background: &mut dyn FnMut(),
 ) -> bool {
-    if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
+    if command_is(line, b"ZCRC HW") {
+        zmodem2::set_rx_crc32_hardware(true);
+        zmodem2::reset_rx_crc32_diagnostics();
+        write_status(b"\r\nZMODEM receive CRC32: batched hardware mode selected; counters reset.\r\n> ");
+    } else if command_is(line, b"ZCRC SW") {
+        zmodem2::set_rx_crc32_hardware(false);
+        zmodem2::reset_rx_crc32_diagnostics();
+        write_status(b"\r\nZMODEM receive CRC32: original byte-at-a-time software mode selected; counters reset.\r\n> ");
+    } else if command_is(line, b"ZCRC RESET") {
+        zmodem2::reset_rx_crc32_diagnostics();
+        write_status(b"\r\nZMODEM receive CRC32 counters reset.\r\n> ");
+    } else if command_is(line, b"ZCRC STATUS") {
+        let (hardware, bytes, software_bytes, hardware_bytes, batches, passed, failed) =
+            zmodem2::rx_crc32_diagnostics();
+        write_status(b"\r\nZMODEM receive CRC32: mode=");
+        write_status(if hardware { b"hardware\r\n" } else { b"software\r\n" });
+        write_status(b"  data_bytes=");
+        write_decimal(bytes as usize);
+        write_status(b" software_bytes=");
+        write_decimal(software_bytes as usize);
+        write_status(b" hardware_bytes=");
+        write_decimal(hardware_bytes as usize);
+        write_status(b" batches=");
+        write_decimal(batches as usize);
+        write_status(b" crc_ok=");
+        write_decimal(passed as usize);
+        write_status(b" crc_errors=");
+        write_decimal(failed as usize);
+        write_status(b"\r\n> ");
+    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
         write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
     } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ OFF") {
