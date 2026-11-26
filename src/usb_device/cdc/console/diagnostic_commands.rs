@@ -10,7 +10,7 @@ pub(super) fn handle(
     line: &[u8],
     fs: Option<&Filesystem<'_, ActiveStorage>>,
     zmodem: &mut cdc_zmodem::State,
-    _service_background: &mut impl FnMut(),
+    _service_background: &mut dyn FnMut(),
 ) -> bool {
     if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
