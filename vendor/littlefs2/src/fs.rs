@@ -207,6 +207,31 @@ pub struct Filesystem<'a, Storage: driver::Storage> {
     storage: &'a mut Storage,
 }
 
+struct TraverseBitmap {
+    bytes: *mut u8,
+    byte_len: usize,
+    count: usize,
+}
+
+unsafe extern "C" fn mark_traverse_block(
+    context: *mut c_void,
+    block: u32,
+) -> c_int {
+    let state = unsafe { &mut *(context as *mut TraverseBitmap) };
+    let block = block as usize;
+    if block >= state.byte_len * 8 {
+        return -1;
+    }
+
+    let byte = unsafe { &mut *state.bytes.add(block / 8) };
+    let mask = 1u8 << (block % 8);
+    if (*byte & mask) == 0 {
+        *byte |= mask;
+        state.count += 1;
+    }
+    0
+}
+
 fn metadata(info: ll::lfs_info) -> Metadata {
     let file_type = match info.type_ as ll::lfs_type {
         ll::lfs_type_LFS_TYPE_DIR => FileType::Dir,
@@ -316,6 +341,35 @@ impl<Storage: driver::Storage> Filesystem<'_, Storage> {
         u32_result(return_code)
             .map(|blocks| usize::try_from(blocks).unwrap_or(usize::MAX))
             .map(|blocks| self.total_blocks().saturating_sub(blocks))
+    }
+
+    /// Mark every logical block currently referenced by the mounted filesystem.
+    /// The caller supplies a compact bitmap with at least ceil(block_count/8)
+    /// bytes. The return value is the number of distinct blocks marked.
+    pub fn traverse_blocks(&self, bitmap: &mut [u8]) -> Result<usize> {
+        let required = (self.total_blocks() + 7) / 8;
+        assert!(bitmap.len() >= required, "LittleFS traversal bitmap is too small");
+        bitmap.fill(0);
+
+        let mut context = TraverseBitmap {
+            bytes: bitmap.as_mut_ptr(),
+            byte_len: bitmap.len(),
+            count: 0,
+        };
+        let return_code = unsafe {
+            ll::lfs_fs_traverse(
+                &mut self.alloc.borrow_mut().state,
+                Some(mark_traverse_block),
+                (&mut context as *mut TraverseBitmap).cast::<c_void>(),
+            )
+        };
+        result_from(context.count, return_code)
+    }
+
+    /// Run LittleFS's consistency/metadata compaction pass.
+    pub fn gc(&self) -> Result<()> {
+        let return_code = unsafe { ll::lfs_fs_gc(&mut self.alloc.borrow_mut().state) };
+        result_from((), return_code)
     }
 
     /// Available number of unused bytes in the filesystem

@@ -1,6 +1,6 @@
 use super::super::zmodem as cdc_zmodem;
 use super::commands::{command_is, parse_hex_u32};
-use super::output::{write_decimal, write_hex_u32, write_status};
+use super::output::{write_decimal, write_decimal_grouped, write_hex_u32, write_status};
 use super::*;
 use crate::nand_fs::ActiveStorage;
 use littlefs2::fs::Filesystem;
@@ -12,7 +12,99 @@ pub(super) fn handle(
     zmodem: &mut cdc_zmodem::State,
     _service_background: &mut dyn FnMut(),
 ) -> bool {
-    if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
+    if command_is(line, b"DHARA STATUS") {
+        if let Some(fs) = fs {
+            let mut used = [0u8; (crate::dhara_fs::LITTLEFS_BLOCK_COUNT + 7) / 8];
+            match fs.traverse_blocks(&mut used) {
+                Ok(used_blocks) => {
+                    let (allocated, capacity, erases, programs) = crate::dhara_fs::map_usage();
+                    write_status(b"\r\nDHARA STATUS (read-only)\r\nLittleFS: used blocks=");
+                    write_decimal_grouped(used_blocks);
+                    write_status(b" free blocks=");
+                    write_decimal_grouped(crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks));
+                    write_status(b" total blocks=");
+                    write_decimal_grouped(crate::dhara_fs::LITTLEFS_BLOCK_COUNT);
+                    write_status(b"\r\nDhara: allocated sectors=");
+                    write_decimal_grouped(allocated as usize);
+                    write_status(b" capacity=");
+                    write_decimal_grouped(capacity as usize);
+                    write_status(b" logical free sectors=");
+                    write_decimal_grouped(capacity.saturating_sub(allocated) as usize);
+                    write_status(b"\r\nDhara NAND callbacks since boot: erased blocks=");
+                    write_decimal_grouped(erases as usize);
+                    write_status(b" programmed pages=");
+                    write_decimal_grouped(programs as usize);
+                    write_status(b"\r\n");
+                }
+                Err(error) => {
+                    write_status(b"DHARA STATUS: LittleFS traversal failed, error 0x");
+                    write_hex_u32(error.code() as u32);
+                    write_status(b"\r\n");
+                }
+            }
+        } else {
+            write_status(b"Storage unavailable.\r\n");
+        }
+        write_status(b"> ");
+    } else if command_is(line, b"DHARA RECLAIM") {
+        if let Some(fs) = fs {
+            write_status(b"\r\nDHARA RECLAIM: scanning LittleFS, trimming unreferenced logical sectors, then syncing Dhara...\r\n");
+            let mut report_progress = |used_blocks: usize, scanned: usize, trims: usize| {
+                let total = crate::dhara_fs::LITTLEFS_BLOCK_COUNT.saturating_sub(used_blocks);
+                let percent = if total == 0 { 100 } else { scanned * 100 / total };
+                write_status(b"DHARA RECLAIM progress: ");
+                write_decimal_grouped(scanned);
+                write_status(b"/");
+                write_decimal_grouped(total);
+                write_status(b" blocks (");
+                write_decimal(percent);
+                write_status(b"%) trims=");
+                write_decimal_grouped(trims);
+                write_status(b"\r\n");
+            };
+            match crate::dhara_fs::reclaim_unused_blocks(
+                fs,
+                _service_background,
+                &mut report_progress,
+            ) {
+                Ok(stats) => {
+                    write_status(b"DHARA RECLAIM complete: LittleFS used blocks=");
+                    write_decimal_grouped(stats.used_blocks);
+                    write_status(b" unreferenced LittleFS blocks scanned=");
+                    write_decimal_grouped(stats.unused_blocks_scanned);
+                    write_status(b" Dhara trim requests=");
+                    write_decimal_grouped(stats.trim_requests);
+                    write_status(b"\r\nDhara allocated sectors: ");
+                    write_decimal_grouped(stats.allocated_before as usize);
+                    write_status(b" -> ");
+                    write_decimal_grouped(stats.allocated_after as usize);
+                    write_status(b"\r\nPhysical NAND operations: erased blocks=");
+                    write_decimal_grouped(stats.erased_blocks as usize);
+                    write_status(b" programmed pages=");
+                    write_decimal_grouped(stats.programmed_pages as usize);
+                    write_status(b" sync steps=");
+                    write_decimal_grouped(stats.sync_steps as usize);
+                    write_status(b"\r\n");
+                }
+                Err((stage, error)) => {
+                    let stage_name: &[u8] = match stage {
+                        1 => b"LittleFS traversal",
+                        2 => b"Dhara trim",
+                        3 => b"Dhara sync",
+                        _ => b"unknown",
+                    };
+                    write_status(b"DHARA RECLAIM FAILED at ");
+                    write_status(stage_name);
+                    write_status(b", error 0x");
+                    write_hex_u32(error as u32);
+                    write_status(b". Maintenance stopped; run DHARA STATUS before retrying.\r\n");
+                }
+            }
+        } else {
+            write_status(b"Storage unavailable.\r\n");
+        }
+        write_status(b"> ");
+    } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ ON") {
         crate::nand_fs::set_ecc_sequence_trace_enabled(true);
         write_status(b"\r\nECCSEQ: armed for the next successful page program; no readback will be performed.\r\n> ");
     } else if cfg!(feature = "nand-diagnostics") && command_is(line, b"ECCSEQ OFF") {
@@ -544,5 +636,20 @@ pub(super) fn handle(
         #[cfg(not(feature = "nand-diagnostics"))]
         write_status(b"ECCSCAN requires nand-diagnostics.\r\n> ");
     }
-    false
+    command_is(line, b"DHARA STATUS")
+        || command_is(line, b"DHARA RECLAIM")
+        || command_is(line, b"ECCSCAN")
+        || (cfg!(feature = "nand-diagnostics")
+            && (command_is(line, b"ECCSEQ ON")
+                || command_is(line, b"ECCSEQ OFF")
+                || command_is(line, b"ECCSEQSTATUS")
+                || command_is(line, b"ECCWRITE ON")
+                || command_is(line, b"ECCWRITE OFF")
+                || command_is(line, b"ECCWRITESTATUS")
+                || command_is(line, b"NANDPAGEPROBE")
+                || command_is(line, b"NANDRESETTEST")
+                || command_is(line, b"NANDPROBE")
+                || command_is(line, b"ECCFILETEST")
+                || (line.len() > 8 && line[..8].eq_ignore_ascii_case(b"ECCPAGE "))
+                || (line.len() > 10 && line[..10].eq_ignore_ascii_case(b"ECCPAGEHW "))))
 }
