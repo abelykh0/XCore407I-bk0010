@@ -13,6 +13,7 @@ use crate::header::{
 use crate::io::{Read, Write};
 use crate::zdle;
 use crate::{ZDLE, ZPAD};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Maximum unescaped data subpacket payload supported by this implementation.
 pub const SUBPACKET_MAX_SIZE: usize = 1024;
@@ -263,9 +264,55 @@ impl<const N: usize> Write for BufferWriter<'_, N> {
     }
 }
 
+const RX_CRC32_BATCH_SIZE: usize = 64;
+static RX_CRC32_HARDWARE: AtomicBool = AtomicBool::new(false);
+static RX_CRC32_BYTES: AtomicU32 = AtomicU32::new(0);
+static RX_CRC32_SOFTWARE_BYTES: AtomicU32 = AtomicU32::new(0);
+static RX_CRC32_HARDWARE_BYTES: AtomicU32 = AtomicU32::new(0);
+static RX_CRC32_BATCHES: AtomicU32 = AtomicU32::new(0);
+static RX_CRC32_PASSED: AtomicU32 = AtomicU32::new(0);
+static RX_CRC32_FAILED: AtomicU32 = AtomicU32::new(0);
+
+/// Select the ZMODEM receive CRC-32 implementation. Changes should be made
+/// between transfers, not while a subpacket is being decoded.
+pub fn set_rx_crc32_hardware(enabled: bool) {
+    RX_CRC32_HARDWARE.store(enabled, Ordering::Release);
+}
+
+/// Whether batched hardware CRC-32 is selected for ZMODEM receive.
+pub fn rx_crc32_hardware_enabled() -> bool {
+    RX_CRC32_HARDWARE.load(Ordering::Acquire)
+}
+
+/// Reset receive CRC-32 diagnostics without changing the selected mode.
+pub fn reset_rx_crc32_diagnostics() {
+    RX_CRC32_BYTES.store(0, Ordering::Relaxed);
+    RX_CRC32_SOFTWARE_BYTES.store(0, Ordering::Relaxed);
+    RX_CRC32_HARDWARE_BYTES.store(0, Ordering::Relaxed);
+    RX_CRC32_BATCHES.store(0, Ordering::Relaxed);
+    RX_CRC32_PASSED.store(0, Ordering::Relaxed);
+    RX_CRC32_FAILED.store(0, Ordering::Relaxed);
+}
+
+/// (mode_is_hardware, crc_bytes, software_bytes, hardware_bytes,
+/// hardware_batches, crc_passes, crc_failures).
+pub fn rx_crc32_diagnostics() -> (bool, u32, u32, u32, u32, u32, u32) {
+    (
+        rx_crc32_hardware_enabled(),
+        RX_CRC32_BYTES.load(Ordering::Relaxed),
+        RX_CRC32_SOFTWARE_BYTES.load(Ordering::Relaxed),
+        RX_CRC32_HARDWARE_BYTES.load(Ordering::Relaxed),
+        RX_CRC32_BATCHES.load(Ordering::Relaxed),
+        RX_CRC32_PASSED.load(Ordering::Relaxed),
+        RX_CRC32_FAILED.load(Ordering::Relaxed),
+    )
+}
+
 pub(crate) struct RxCrc {
     calc16: crc::Crc16,
     calc32: crc::Crc32,
+    crc32_batch: [u8; RX_CRC32_BATCH_SIZE],
+    crc32_batch_len: usize,
     buf: [u8; 4],
     bytes_read: u8,
     escape_pending: bool,
@@ -276,6 +323,8 @@ impl RxCrc {
         Self {
             calc16: crc::Crc16::new(),
             calc32: crc::Crc32::new(),
+            crc32_batch: [0; RX_CRC32_BATCH_SIZE],
+            crc32_batch_len: 0,
             buf: [0; 4],
             bytes_read: 0,
             escape_pending: false,
@@ -285,13 +334,34 @@ impl RxCrc {
     pub(crate) fn reset(&mut self) {
         self.calc16 = crc::Crc16::new();
         self.calc32 = crc::Crc32::new();
+        self.crc32_batch_len = 0;
         self.bytes_read = 0;
         self.escape_pending = false;
     }
 
+    fn flush_crc32_batch(&mut self) {
+        if self.crc32_batch_len != 0 {
+            self.calc32.update(&self.crc32_batch[..self.crc32_batch_len]);
+            RX_CRC32_HARDWARE_BYTES.fetch_add(self.crc32_batch_len as u32, Ordering::Relaxed);
+            RX_CRC32_BATCHES.fetch_add(1, Ordering::Relaxed);
+            self.crc32_batch_len = 0;
+        }
+    }
+
     pub(crate) fn update(&mut self, byte: u8, encoding: Encoding) {
         if encoding == Encoding::ZBIN32 {
-            self.calc32.update_byte(byte);
+            RX_CRC32_BYTES.fetch_add(1, Ordering::Relaxed);
+            if rx_crc32_hardware_enabled() {
+                self.crc32_batch[self.crc32_batch_len] = byte;
+                self.crc32_batch_len += 1;
+                if self.crc32_batch_len == RX_CRC32_BATCH_SIZE {
+                    self.flush_crc32_batch();
+                }
+            } else {
+                self.flush_crc32_batch();
+                self.calc32.update_byte(byte);
+                RX_CRC32_SOFTWARE_BYTES.fetch_add(1, Ordering::Relaxed);
+            }
         } else {
             self.calc16.update_byte(byte);
         }
@@ -312,10 +382,13 @@ impl RxCrc {
         }
 
         if encoding == Encoding::ZBIN32 {
+            self.flush_crc32_batch();
             let expected = self.calc32.finalize().to_le_bytes();
             if expected != self.buf {
+                RX_CRC32_FAILED.fetch_add(1, Ordering::Relaxed);
                 return Err(Error::UnexpectedCrc32);
             }
+            RX_CRC32_PASSED.fetch_add(1, Ordering::Relaxed);
         } else {
             let expected = self.calc16.finalize().to_be_bytes();
             if expected != [self.buf[0], self.buf[1]] {
