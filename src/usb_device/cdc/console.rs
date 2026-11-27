@@ -55,7 +55,41 @@ static CDC_BANNER_COMPLETE_RX_COUNT: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut STORAGE_ERROR_REPORTED: bool = false;
 
 const BANNER: &[u8] = b"\r\nXCore407I CDC console\r\nType HELP for commands.\r\n> ";
-const HELP: &[u8] = b"\r\nCommands:\r\n  HELP       Show this help\r\n  STATUS     Show USB/storage status\r\n  IPCONFIG   Show Ethernet link and IP configuration\r\n  LIST       List files with sizes (including hidden files)\r\n  LIST SHORT List files without sizes (faster comparison)\r\n  LIST PROFILE Profile LittleFS, Dhara, NAND, and CDC time\r\n  LIST PROFILE SHORT Profile listing without file sizes\r\n  DELETE name Delete a file from the LittleFS root\r\n  SEND name   Send a LittleFS file to the terminal via ZMODEM\r\n  DHARA STATUS Show LittleFS/Dhara allocation and NAND operation counters\r\n  DHARA RECLAIM Trim unused LittleFS blocks and synchronize Dhara\r\n  ECCSCAN    Scan all physical NAND blocks for ECC mismatches (read-only)\r\n  VERSION    Show firmware target\r\n  FORMAT       Show NAND format warning\r\n  FORMAT YES   Erase and reinitialize NAND (destructive)\r\n  FORMAT LFS YES  Reformat LittleFS only; preserve Dhara journal\r\n> ";
+const HELP: &[u8] = br#"
+Commands:
+  HELP                Show this help
+  STATUS              Show USB/storage status
+  IPCONFIG            Show Ethernet link and IP configuration
+  LIST                List files with sizes (including hidden files)
+  LIST SHORT          List files without sizes (faster comparison)
+  LIST PROFILE        Profile LittleFS, Dhara, NAND, and CDC time
+  LIST PROFILE SHORT  Profile listing without file sizes
+  DELETE name         Delete a file from the LittleFS root
+  SEND name           Send a LittleFS file to the terminal via ZMODEM
+  DHARA STATUS        Show LittleFS/Dhara allocation and NAND operation counters
+  DHARA RECLAIM       Trim unused LittleFS blocks and synchronize Dhara
+  ECCSCAN             Scan all physical NAND blocks for ECC mismatches (read-only)
+  VERSION             Show firmware target
+  FORMAT              Show NAND format warning
+  FORMAT YES          Erase and reinitialize NAND (destructive)
+  FORMAT LFS YES      Reformat LittleFS only; preserve Dhara journal
+> "#;
+fn write_help() {
+    let mut start = 0;
+    for (index, byte) in HELP.iter().enumerate() {
+        if *byte == b'\n' {
+            if index > start {
+                write_status(&HELP[start..index]);
+            }
+            write_status(b"\r\n");
+            start = index + 1;
+        }
+    }
+    if start < HELP.len() {
+        write_status(&HELP[start..]);
+    }
+}
+
 #[cfg(feature = "list-profile")]
 const HELP_WRITE_PROFILE: &[u8] = b"  WRITE PROFILE Show last ZMODEM receive timing breakdown\r\n";
 #[cfg(feature = "nand-diagnostics")]

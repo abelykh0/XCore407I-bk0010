@@ -254,7 +254,7 @@ pub fn service(
                         LINE_LEN,
                     );
                     if command_is(line, b"HELP") {
-                        write_status(HELP);
+                        write_help();
                         #[cfg(feature = "nand-diagnostics")]
                         write_status(HELP_NAND_DIAGNOSTICS);
                         #[cfg(feature = "list-profile")]
