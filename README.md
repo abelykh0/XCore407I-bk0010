@@ -97,18 +97,56 @@ read. The value wraps every 49.7 days. RTC resolution is approximately 3.9 ms.
 
 ## Third-party libraries
 
-- **TinyUSB 0.21.0** — USB device and host stack, including UVC transport and
-  UAC2 audio.
-- **Dhara** — raw-NAND flash translation layer.
-- **LittleFS 2** (through `littlefs2` / `littlefs2-sys`) — filesystem.
-- **STM32F4 PAC and HAL** (`stm32f4`, `stm32f4xx-hal`) — STM32F407 register
-  access and hardware abstraction.
-- **Cortex-M support** (`cortex-m`, `cortex-m-rt`) — Cortex-M runtime and
-  interrupt support.
-- **CMSIS Core and STM32F4 device headers** — processor and device definitions
-  used when compiling TinyUSB.
-- **Build dependencies:** `cc`, `bindgen`, and `glob` — compile C sources,
-  generate Rust bindings, and enumerate TinyUSB sources.
+The firmware uses the following third-party libraries and support packages.
+Vendored sources are kept in the repository; Rust crate versions are pinned
+by `Cargo.lock`.
+
+### Firmware libraries
+
+- **[cortex-m](https://github.com/rust-embedded/cortex-m)** and
+  **[cortex-m-rt](https://github.com/rust-embedded/cortex-m-rt)** —
+  Cortex-M core support, critical sections, and runtime/startup.
+- **[stm32f4](https://github.com/stm32-rs/stm32-rs)** — STM32F4
+  peripheral access crate (PAC).
+- **[stm32f4xx-hal](https://github.com/stm32-rs/stm32f4xx-hal)** —
+  STM32F4 hardware abstraction layer.
+- **[libm 0.2](https://github.com/rust-lang/libm)** — portable math routines
+  for `no_std`.
+- **[panic-halt](https://github.com/korken89/panic-halt)** — panic
+  handler that halts the target.
+- **[TinyUSB](https://github.com/hathach/tinyusb)** — USB device and
+  host stack; used for UVC video, UAC2 audio, CDC serial, and USB host input.
+  Its C sources are compiled directly from `vendor/tinyusb`.
+- **[smoltcp](https://github.com/smoltcp-rs/smoltcp)** — allocation-free
+  TCP/IP network stack used by the Ethernet interface, DHCP client, and TCP
+  sockets for the HTTP file server.
+- **CMSIS Core and STM32F4 device headers** — ARM core and ST device
+  definitions used to compile TinyUSB for the STM32F407.
+
+- **[Dhara](https://github.com/dlbeer/dhara)** — NAND flash translation layer
+  for raw NAND management, including bad-block handling, garbage collection,
+  and wear levelling. Vendored under `vendor/dhara`.
+- **[littlefs](https://github.com/littlefs-project/littlefs)** —
+  embedded filesystem implementation. Accessed through the vendored
+  **littlefs2** Rust API and **littlefs2-sys** bindings under
+  `vendor/littlefs2` and `vendor/littlefs2-sys`; these copies include
+  project-specific integration and modifications.
+- **[zmodem2](https://codeberg.org/jarkko/zmodem2)** — ZMODEM file
+  transfer protocol implementation. Vendored under `vendor/zmodem2`.
+
+### Build dependencies
+
+- **[cc](https://github.com/rust-lang/cc-rs)** — compiles the BK CPU,
+  Dhara adapter, Dhara, and TinyUSB C sources for the target.
+- **[bindgen](https://github.com/rust-lang/rust-bindgen)** — generates
+  Rust FFI bindings for the TinyUSB API.
+- **[glob](https://github.com/rust-lang/glob)** — recursively discovers
+  TinyUSB C source files during the build.
+
+The project also contains the local `stm32f4-crc32` crate, which provides
+STM32F4 hardware CRC32 access for the firmware and ZMODEM integration. It is
+project code rather than an external dependency. Transitive Rust dependencies
+are recorded in `Cargo.lock`.
 
 ## Build and flash
 
